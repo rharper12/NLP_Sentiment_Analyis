@@ -23,7 +23,9 @@ logger = get_logger(__name__)
 class Settings(BaseSettings):
     """Typed view of the environment."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", frozen=True
+    )
 
     runtime: Literal["local", "lambda"] = "local"
     log_level: str = "INFO"
@@ -53,6 +55,8 @@ class Settings(BaseSettings):
     # Checkpoints: CSV snapshots written as soon as data exists (collected, processed, labelled)
     # so a crash after a paid step never loses what was paid for. Local folder is gitignored.
     checkpoint_dir: str = "data/checkpoints"
+    # Bundles kept in memory when running locally; oldest is evicted past this.
+    local_repository_size: int = Field(default=20, ge=1)
     checkpoint_prefix: str = "checkpoints"
 
     # AWS ML services. Any of these can be disabled to run without an AWS account.

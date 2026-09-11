@@ -1,7 +1,9 @@
 """Build the services the routes need from settings.
 
-Everything AWS-facing is created lazily so a local developer without credentials can still load
-a Hugging Face dataset and run preprocessing. Tests monkeypatch these functions to inject fakes.
+Clients are expensive to construct and safe to share, so HTTP and AWS clients are cached for the
+life of the process and injected into the objects that use them; nothing here builds a client per
+request. ``close_clients`` releases them on shutdown and is called from the app's lifespan handler.
+Tests monkeypatch these functions to inject fakes.
 """
 
 from __future__ import annotations
@@ -9,7 +11,9 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Literal
 
-from sentiment_prep.config import Settings, get_settings
+import httpx
+
+from sentiment_prep.config import get_settings
 from sentiment_prep.errors import ConfigurationError
 from sentiment_prep.history.services import DbLedger
 from sentiment_prep.logging_config import get_logger
@@ -29,11 +33,50 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Generous read timeout for paged fetches, short connect timeout so a dead host fails fast.
+HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 
-def _boto_client(service: str, settings: Settings, region: str | None = None) -> Any:
+
+_open_clients: list[httpx.Client] = []
+
+
+@lru_cache(maxsize=4)
+def _http_client(base_url: str, bearer_token: str | None = None) -> httpx.Client:
+    """One pooled client per base URL, reused for the life of the process.
+
+    Args:
+        base_url: Origin the client is bound to.
+        bearer_token: Sent as an ``Authorization`` header when given.
+
+    Returns:
+        A shared ``httpx.Client``. Callers must not close it; see ``close_clients``.
+    """
+    headers = {"Authorization": f"Bearer {bearer_token}"} if bearer_token else {}
+    client = httpx.Client(base_url=base_url, headers=headers, timeout=HTTP_TIMEOUT)
+    _open_clients.append(client)
+    return client
+
+
+@lru_cache(maxsize=8)
+def _boto_client(service: str, region: str) -> Any:
+    """Cached boto3 client. Clients are thread-safe and meant to be reused, not rebuilt.
+
+    ``Settings`` is deliberately not a parameter: it is unhashable and would defeat the cache.
+    """
     import boto3
 
-    return boto3.client(service, region_name=region or settings.aws_region)
+    logger.debug("boto_client_created", service=service, region=region)
+    return boto3.client(service, region_name=region)
+
+
+def close_clients() -> None:
+    """Close every pooled HTTP client and drop the caches. Called on application shutdown."""
+    for client in _open_clients:
+        client.close()
+    _open_clients.clear()
+    _http_client.cache_clear()
+    _boto_client.cache_clear()
+    logger.info("clients_closed")
 
 
 @lru_cache(maxsize=1)
@@ -43,9 +86,9 @@ def get_repository() -> BundleRepository:
     if settings.runtime == "lambda":
         if not settings.data_bucket:
             raise ConfigurationError("DATA_BUCKET is required when RUNTIME=lambda")
-        return S3Repository(settings.data_bucket, _boto_client("s3", settings))
-    logger.info("repository_in_memory")
-    return InMemoryRepository()
+        return S3Repository(settings.data_bucket, _boto_client("s3", settings.aws_region))
+    logger.info("repository_in_memory", max_datasets=settings.local_repository_size)
+    return InMemoryRepository(settings.local_repository_size)
 
 
 @lru_cache(maxsize=1)
@@ -54,7 +97,9 @@ def get_checkpoint_store() -> CheckpointStore:
     settings = get_settings()
     if settings.data_bucket:
         return S3CheckpointStore(
-            settings.data_bucket, settings.checkpoint_prefix, _boto_client("s3", settings)
+            settings.data_bucket,
+            settings.checkpoint_prefix,
+            _boto_client("s3", settings.aws_region),
         )
     logger.info("checkpoints_local", directory=settings.checkpoint_dir)
     return LocalCheckpointStore(settings.checkpoint_dir)
@@ -84,7 +129,7 @@ def get_x_source(query: str = "") -> XSearchSource:
         max_per_day=settings.x_max_reads_per_day,
         cost_per_read_usd=settings.x_cost_per_read_usd,
     )
-    return XSearchSource(bearer_token=token, guard=guard, base_url=settings.x_api_base_url)
+    return XSearchSource(guard=guard, client=_http_client(settings.x_api_base_url, token))
 
 
 def get_hf_source() -> HuggingFaceSource:
@@ -96,7 +141,7 @@ def get_hf_source() -> HuggingFaceSource:
         split=s.hf_split,
         text_column=s.hf_text_column,
         label_column=s.hf_label_column,
-        base_url=s.hf_api_base_url,
+        client=_http_client(s.hf_api_base_url),
     )
 
 
@@ -105,7 +150,9 @@ def get_s3_store() -> S3Store:
     settings = get_settings()
     if not settings.data_bucket:
         raise ConfigurationError("DATA_BUCKET is not configured; saving to S3 is unavailable")
-    return S3Store(settings.data_bucket, settings.dataset_prefix, _boto_client("s3", settings))
+    return S3Store(
+        settings.data_bucket, settings.dataset_prefix, _boto_client("s3", settings.aws_region)
+    )
 
 
 def get_comprehend_rate() -> PriceQuote | None:
@@ -119,7 +166,7 @@ def get_comprehend_rate() -> PriceQuote | None:
     client = None
     if settings.pricing_enabled:
         try:
-            client = _boto_client("pricing", settings, region=PRICING_ENDPOINT_REGION)
+            client = _boto_client("pricing", PRICING_ENDPOINT_REGION)
         except Exception as exc:  # noqa: BLE001 - no credentials is a normal local state
             logger.warning("pricing_client_unavailable", error=str(exc))
     return current_rate(client, settings.aws_region, settings.pricing_cache_hours)
@@ -128,10 +175,12 @@ def get_comprehend_rate() -> PriceQuote | None:
 def get_comprehend_client() -> Any | None:
     """``None`` disables the sentiment comparison and labelling rather than failing requests."""
     settings = get_settings()
-    return _boto_client("comprehend", settings) if settings.comprehend_enabled else None
+    return _boto_client("comprehend", settings.aws_region) if settings.comprehend_enabled else None
 
 
 def get_bedrock_client() -> Any | None:
     """Shared by the embedder and the explainer."""
     settings = get_settings()
-    return _boto_client("bedrock-runtime", settings) if settings.bedrock_enabled else None
+    return (
+        _boto_client("bedrock-runtime", settings.aws_region) if settings.bedrock_enabled else None
+    )

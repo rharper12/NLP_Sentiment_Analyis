@@ -54,6 +54,13 @@ and a `warnings` list that explains any `None`.
 History tables (`history/models.py`) store metadata only: `DatasetRun`, `PipelineRun`, `SpendEntry`.
 Record text never enters the database or the logs above DEBUG.
 
+## Process lifecycle
+
+Importing `api.app` has no side effects. The `lifespan` handler creates the history schema on
+startup and closes the pooled HTTP and AWS clients on shutdown; Mangum runs it with
+`lifespan="auto"`. HTTP clients (`httpx`) and boto3 clients are cached per process in
+`api/deps.py` and injected — nothing constructs a client per request.
+
 ## Request lifecycle
 
 1. Middleware clears the logging context, binds `request_id`, `method`, `path`.
@@ -73,7 +80,9 @@ to make history durable.
 
 ## Cost controls
 
-Comprehend labelling is priced before it runs (`labels/estimate`) from the live Price List rate, refused without an explicit
+Money is `Decimal` end to end on the server: the Price List price is parsed from AWS's string
+without passing through `float`, `cost_for_units` is the single place it is multiplied, and the
+value becomes a `float` only in the JSON response. Comprehend labelling is priced before it runs (`labels/estimate`) from the live Price List rate, refused without an explicit
 `confirm_cost`, done in resumable slices that skip already-labelled records, and checkpointed after
 every slice. The same `ComprehendScorer` serves the Analyze comparison, with a per-instance cache
 keyed on text hash.

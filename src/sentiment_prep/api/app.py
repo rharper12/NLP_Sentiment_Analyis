@@ -1,16 +1,20 @@
 """FastAPI application and Lambda entry point.
 
-Startup order matters: logging first (so the database setup log line is structured), then the
-history database (creates tables on first use), then routes. The request middleware binds
-``request_id`` into the logging context, so every line emitted while handling that request
-carries it without being passed around, and reports the duration when the response leaves.
+Startup work happens in the ``lifespan`` handler, not at import: importing this module must never
+touch the database, the network or the filesystem, so scripts, type checkers and tests can import
+it freely. The handler creates the schema on start and closes the pooled clients on shutdown.
+
+The request middleware binds ``request_id`` into the logging context, so every line emitted while
+handling that request carries it without being passed around, and reports the duration when the
+response leaves.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +22,7 @@ from fastapi.responses import JSONResponse
 from mangum import Mangum
 
 from sentiment_prep import __version__
+from sentiment_prep.api import deps
 from sentiment_prep.api.routes import router
 from sentiment_prep.api.schemas import ErrorResponse
 from sentiment_prep.config import get_settings
@@ -45,16 +50,25 @@ spend are available under the `account` tag.
 """
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Create the history schema on start; close pooled HTTP and AWS clients on shutdown."""
+    get_engine()
+    logger.info("app_ready", runtime=get_settings().runtime, version=__version__)
+    yield
+    deps.close_clients()
+
+
 def create_app() -> FastAPI:
     """Build the application. Kept as a factory so tests can construct isolated instances."""
     settings = get_settings()
     configure_logging(settings.log_level, json_output=settings.runtime == "lambda" or None)
-    get_engine()
 
     app = FastAPI(
         title="Sentiment Prep API",
         version=__version__,
         description=DESCRIPTION,
+        lifespan=lifespan,
         openapi_tags=[
             {"name": "dataset", "description": "Load and inspect raw data."},
             {
@@ -121,7 +135,6 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(router)
-    logger.info("app_ready", runtime=settings.runtime, version=__version__)
     return app
 
 
@@ -131,4 +144,6 @@ def _lambda_request_id(request: Request) -> str | None:
 
 
 app = create_app()
-handler = Mangum(app, lifespan="off")
+# "auto" runs the lifespan handler on cold start and at container shutdown, which is where the
+# schema is created and the pooled clients are closed.
+handler = Mangum(app, lifespan="auto")

@@ -30,7 +30,7 @@ def fake_hf() -> HuggingFaceSource:
         "s",
         "text",
         "label",
-        client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://hf.test"),
+        httpx.Client(transport=httpx.MockTransport(handler), base_url="https://hf.test"),
     )
 
 

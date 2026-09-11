@@ -35,6 +35,7 @@ const gridTheme = themeQuartz.withParams({
   spacing: 7,
 });
 
+/** Flat row shape for the grid. Fields are nullable because the schema marks them optional. */
 interface Row {
   id: string;
   original: string;
@@ -90,9 +91,9 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         id: p.original.id,
         original: p.original.text,
         processed: p.processed ? p.processed.text : null,
-        label: p.original.label,
-        labelSource: p.original.label_source,
-        confidence: p.original.label_confidence,
+        label: p.original.label ?? null,
+        labelSource: p.original.label_source ?? null,
+        confidence: p.original.label_confidence ?? null,
       })),
     [pairs],
   );

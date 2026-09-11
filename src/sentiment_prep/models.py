@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 SourceType = Literal["x", "huggingface", "csv"]
+CheckpointStage = Literal["collected", "processed", "labelled"]
 LabelSource = Literal["source", "comprehend", "manual"]
 SentimentLabel = Literal["positive", "negative", "neutral", "mixed"]
 SENTIMENT_LABELS: tuple[str, ...] = ("positive", "negative", "neutral", "mixed")
@@ -117,4 +118,4 @@ class DatasetBundle(BaseModel):
     applied_steps: list[str] = Field(default_factory=list)
     report: ImpactReport | None = None
     review_ids: list[str] = Field(default_factory=list)
-    checkpoints: dict[str, str] = Field(default_factory=dict)
+    checkpoints: dict[CheckpointStage, str] = Field(default_factory=dict)

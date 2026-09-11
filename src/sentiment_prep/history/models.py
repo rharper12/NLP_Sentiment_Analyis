@@ -83,7 +83,8 @@ class PriceQuoteRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     service: Mapped[str] = mapped_column(String(64), index=True)
     region: Mapped[str] = mapped_column(String(32), index=True)
-    price_per_unit_usd: Mapped[float] = mapped_column(Float)
+    # Numeric, not Float: this is money and it round-trips to the API as a Decimal.
+    price_per_unit_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
     unit: Mapped[str] = mapped_column(String(64), default="")
     sku: Mapped[str] = mapped_column(String(64), default="")
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))

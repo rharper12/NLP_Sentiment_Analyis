@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -28,10 +30,20 @@ PRICING_ENDPOINT_REGION = "us-east-1"
 PriceStatus = Literal["live", "cached", "stale", "unavailable"]
 
 
-class PriceQuote(BaseModel):
-    """One resolved rate. ``status`` says how fresh it is."""
+# Sentiment SKUs are named like "USE1-Sentiment-Units"; the anchored form avoids matching
+# "TargetedSentiment" or a future "SentimentBatch" by accident.
+SENTIMENT_USAGETYPE = re.compile(r"(^|-)sentiment(-|$)")
+EXCLUDED_TERMS = ("targeted", "custom", "async", "batch job")
 
-    price_per_unit_usd: float
+
+class PriceQuote(BaseModel):
+    """One resolved rate. ``status`` says how fresh it is.
+
+    ``price_per_unit`` is a ``Decimal`` so money arithmetic is exact; the API serialises it to a
+    float only in the response model.
+    """
+
+    price_per_unit: Decimal
     unit: str
     sku: str
     region: str
@@ -42,25 +54,35 @@ class PriceQuote(BaseModel):
 def _matches_sentiment(attributes: dict[str, Any]) -> bool:
     """True for the standard (not targeted, not custom) sentiment SKU.
 
-    Attribute names vary across services, so every attribute value is inspected rather than one
-    known field. Anything mentioning targeted sentiment, custom models or async jobs is skipped.
+    Prefers ``usagetype``, which is the field AWS uses to name the metered operation. Falls back
+    to scanning every attribute value because attribute names differ between services and the
+    Price List schema is not versioned. Either way the match is anchored and excludes targeted,
+    custom, async and batch SKUs, and a miss degrades to "estimate unavailable" rather than a
+    wrong number.
     """
+    usagetype = str(attributes.get("usagetype", "")).lower()
     blob = " ".join(str(v) for v in attributes.values()).lower()
-    if "sentiment" not in blob:
+    if any(word in blob for word in EXCLUDED_TERMS):
         return False
-    return not any(word in blob for word in ("targeted", "custom", "async", "batch job"))
+    if usagetype:
+        return bool(SENTIMENT_USAGETYPE.search(usagetype))
+    return "sentiment" in blob
 
 
-def _first_tier_price(product: dict[str, Any]) -> tuple[float, str] | None:
-    """USD price of the lowest usage tier among the OnDemand dimensions."""
-    best: tuple[float, str] | None = None
+def _first_tier_price(product: dict[str, Any]) -> tuple[Decimal, str] | None:
+    """USD price of the lowest usage tier among the OnDemand dimensions.
+
+    Parsed straight into ``Decimal`` from the string AWS returns, never via ``float``, so the
+    published price is preserved exactly.
+    """
+    best: tuple[Decimal, str] | None = None
     for term in product.get("terms", {}).get("OnDemand", {}).values():
         for dimension in term.get("priceDimensions", {}).values():
             price = dimension.get("pricePerUnit", {}).get("USD")
             begin = dimension.get("beginRange", "0")
             if price is None or begin not in ("0", "0.0"):
                 continue
-            value = float(price)
+            value = Decimal(str(price))
             if value > 0 and (best is None or value < best[0]):
                 best = (value, str(dimension.get("unit", "")))
     return best
@@ -84,14 +106,14 @@ def fetch_rate(client: Any, region: str) -> PriceQuote | None:
             if price is None:
                 continue
             quote = PriceQuote(
-                price_per_unit_usd=price[0],
+                price_per_unit=price[0],
                 unit=price[1],
                 sku=str(product.get("product", {}).get("sku", "")),
                 region=region,
                 fetched_at=dt.datetime.now(dt.UTC),
                 status="live",
             )
-            logger.info("comprehend_price_fetched", sku=quote.sku, price=quote.price_per_unit_usd)
+            logger.info("comprehend_price_fetched", sku=quote.sku, price=str(quote.price_per_unit))
             return quote
     logger.warning("comprehend_price_not_found", region=region)
     return None

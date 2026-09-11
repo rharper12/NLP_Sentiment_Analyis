@@ -59,7 +59,7 @@ export function CollectStep({ busy, error, dataset, xConfigured, onSearch, onLoa
         {source === "x" && (
           <div className="flex flex-col gap-2">
             <label htmlFor={ids.q} className="text-sm text-muted">Topic</label>
-            <input id={ids.q} className="field text-lg" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus
+            <input id={ids.q} className="field text-lg" value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder='e.g. "lindsay clancy" trial   or   #WWDC -has:links' autoComplete="off" />
             <p className="text-xs text-muted">Posts from the last 7 days. <code className="rounded bg-surface-2 px-1">lang:en -is:retweet</code> is added unless you set <code className="rounded bg-surface-2 px-1">lang:</code> yourself. Any X search operator works.</p>
             {!xConfigured && <p className="text-xs text-warn-ink">No X token is configured on the server, so this search will be refused. Use the sample dataset to explore.</p>}

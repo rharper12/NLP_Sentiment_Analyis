@@ -1,8 +1,9 @@
 import datetime as dt
+from decimal import Decimal
 
 import pytest
 
-from sentiment_prep.analysis.comprehend_scorer import billable_units, estimate_cost
+from sentiment_prep.analysis.comprehend_scorer import billable_units, cost_for_units, count_units
 from sentiment_prep.config import Settings
 from sentiment_prep.errors import ValidationError
 from sentiment_prep.export.parquet_export import csv_to_parquet
@@ -15,7 +16,7 @@ from tests.conftest import FakeComprehend, FakePricing, make_dataset
 
 SETTINGS = Settings(comprehend_unit_chars=100, comprehend_min_units=3)
 RATE = PriceQuote(
-    price_per_unit_usd=0.0001,
+    price_per_unit=Decimal("0.0001"),
     unit="Unit",
     sku="SENT",
     region="us-east-1",
@@ -24,8 +25,8 @@ RATE = PriceQuote(
 )
 
 
-def bundle(texts=None) -> DatasetBundle:
-    return DatasetBundle(dataset_id="lab1", original=make_dataset(texts))
+def bundle(texts=None, dataset_id="lab1") -> DatasetBundle:
+    return DatasetBundle(dataset_id=dataset_id, original=make_dataset(texts))
 
 
 def clear_price_cache() -> None:
@@ -39,8 +40,14 @@ def clear_price_cache() -> None:
 def test_billable_units_respects_minimum_and_rounding():
     assert billable_units("short", 100, 3) == 3
     assert billable_units("x" * 301, 100, 3) == 4
-    units, cost = estimate_cost(["short", "x" * 301], 0.0001, 100, 3)
-    assert (units, cost) == (7, 0.0007)
+    assert count_units(["short", "x" * 301], 100, 3) == 7
+    assert cost_for_units(7, Decimal("0.0001")) == Decimal("0.0007")
+
+
+def test_money_does_not_accumulate_float_error():
+    """Three slices at the same price must sum to the exact published total."""
+    slices = [cost_for_units(9, Decimal("0.0001")) for _ in range(3)]
+    assert sum(slices) == Decimal("0.0027")
 
 
 def test_estimate_counts_only_records_comprehend_has_not_seen():
@@ -63,7 +70,7 @@ def test_price_lookup_picks_standard_sentiment_sku_and_caches():
     clear_price_cache()
     fake = FakePricing(price=0.00012)
     quote = fetch_rate(fake, "us-east-1")
-    assert quote and quote.sku == "SENT" and quote.price_per_unit_usd == 0.00012
+    assert quote and quote.sku == "SENT" and quote.price_per_unit == Decimal("0.00012")
 
     live = current_rate(fake, "us-east-1", cache_hours=24)
     assert live and live.status == "live" and fake.calls == 2
@@ -71,7 +78,7 @@ def test_price_lookup_picks_standard_sentiment_sku_and_caches():
     assert cached and cached.status == "cached" and fake.calls == 2  # served from the database
 
     stale = current_rate(FakePricing(fail=True), "us-east-1", cache_hours=0)
-    assert stale and stale.status == "stale" and stale.price_per_unit_usd == 0.00012
+    assert stale and stale.status == "stale" and stale.price_per_unit == Decimal("0.00012")
 
     clear_price_cache()
     assert current_rate(FakePricing(fail=True), "us-east-1", cache_hours=24) is None
@@ -151,3 +158,16 @@ def test_s3_checkpoints_use_multipart_capable_upload(s3_bucket):
     assert store.read("lab1", "labelled", "csv") is not None
     listed = store.list("lab1")
     assert listed and listed[0].uri == f"s3://{bucket}/checkpoints/lab1/labelled.csv"
+
+
+def test_in_memory_repository_evicts_oldest_bundle():
+    """Bounded so a long-lived local process cannot hold every dataset ever loaded."""
+    from sentiment_prep.errors import NotFoundError
+    from sentiment_prep.storage.repository import InMemoryRepository
+
+    repo = InMemoryRepository(max_datasets=2)
+    for name in ("a", "b", "c"):
+        repo.save(bundle(["one two three"], dataset_id=name))
+    assert repo.get("c") and repo.get("b")
+    with pytest.raises(NotFoundError):
+        repo.get("a")

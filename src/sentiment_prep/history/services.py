@@ -140,7 +140,7 @@ def get_price_quote(service: str, region: str) -> PriceQuote | None:
         if fetched.tzinfo is None:  # SQLite drops tzinfo; values are always stored as UTC
             fetched = fetched.replace(tzinfo=dt.UTC)
         return PriceQuote(
-            price_per_unit_usd=row.price_per_unit_usd,
+            price_per_unit=row.price_per_unit_usd,
             unit=row.unit,
             sku=row.sku,
             region=row.region,
@@ -161,11 +161,11 @@ def put_price_quote(quote: PriceQuote) -> None:
         if row is None:
             row = PriceQuoteRow(service=SERVICE_CODE_COMPREHEND, region=quote.region)
             s.add(row)
-        row.price_per_unit_usd = quote.price_per_unit_usd
+        row.price_per_unit_usd = quote.price_per_unit
         row.unit = quote.unit
         row.sku = quote.sku
         row.fetched_at = quote.fetched_at
-    logger.debug("price_quote_cached", region=quote.region, price=quote.price_per_unit_usd)
+    logger.debug("price_quote_cached", region=quote.region, price=str(quote.price_per_unit))
 
 
 class DbLedger:

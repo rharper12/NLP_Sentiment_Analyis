@@ -5,7 +5,7 @@ CONFIG_ENV ?= default
 SAM := sam --template-file infrastructure/stack_request/template.yaml \
            --config-file infrastructure/stack_request/samconfig.toml --config-env $(CONFIG_ENV)
 
-.PHONY: help setup lint test local-api frontend build validate deploy deploy-site put-secret logs
+.PHONY: help setup lint test gen-api local-api frontend build validate deploy deploy-site put-secret logs
 
 help:
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -16,14 +16,18 @@ setup: ## Create .env, install Python deps, NLTK corpora, frontend packages
 	SSL_CERT_FILE=$$(python -m certifi) python -m nltk.downloader wordnet omw-1.4 averaged_perceptron_tagger_eng
 	cd frontend && npm install
 
-lint: ## ruff + mypy --strict + tsc
-	ruff check src tests
-	ruff format --check src tests
+lint: ## ruff + mypy --strict + eslint + tsc
+	ruff check src tests tools
+	ruff format --check src tests tools
 	mypy src
-	cd frontend && npm run typecheck
+	cd frontend && npm run typecheck && npm run lint
 
-test: ## Backend tests (no AWS credentials needed)
+test: ## Backend and frontend unit tests (no AWS credentials needed)
 	pytest -q
+	cd frontend && npm test
+
+gen-api: ## Regenerate frontend API types from the running backend's OpenAPI schema
+	cd frontend && npm run gen:api
 
 local-api: ## API on :8000 (Swagger at /docs)
 	uvicorn sentiment_prep.api.app:app --reload --port 8000 --app-dir src

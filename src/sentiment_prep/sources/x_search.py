@@ -39,19 +39,21 @@ class XSearchSource:
 
     def __init__(
         self,
-        bearer_token: str,
         guard: SpendGuard,
-        base_url: str = "https://api.x.com/2",
-        client: httpx.Client | None = None,
+        client: httpx.Client,
         allow_non_english: bool = False,
     ) -> None:
+        """Take a pooled client rather than building one.
+
+        Args:
+            guard: Enforces the per-fetch and per-day read caps.
+            client: Shared ``httpx.Client`` bound to the X API base URL and carrying the bearer
+                token. Owned by the caller; this class never closes it.
+            allow_non_english: Keep posts whose ``lang`` is not ``en``.
+        """
         self._guard = guard
         self._allow_non_english = allow_non_english
-        self._client = client or httpx.Client(
-            base_url=base_url,
-            headers={"Authorization": f"Bearer {bearer_token}"},
-            timeout=20.0,
-        )
+        self._client = client
 
     def fetch(
         self,

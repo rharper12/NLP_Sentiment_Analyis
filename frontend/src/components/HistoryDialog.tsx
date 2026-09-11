@@ -12,7 +12,11 @@ const when = (iso: string) => new Date(iso).toLocaleString(undefined, { month: "
 export default function HistoryDialog({ ephemeral, onClose }: { ephemeral: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const runs = useAsync<HistoryRun[]>();
-  useEffect(() => { ref.current?.showModal(); void runs.run(api.history); }, [runs.run]);
+  const { run: loadRuns } = runs;
+  useEffect(() => {
+    ref.current?.showModal();
+    void loadRuns(api.history);
+  }, [loadRuns]);
 
   return (
     <dialog ref={ref} onClose={onClose} aria-labelledby="history-heading" className="glass-panel m-auto w-[min(900px,94vw)] p-5 text-ink shadow-2xl backdrop:bg-transparent sm:p-6">

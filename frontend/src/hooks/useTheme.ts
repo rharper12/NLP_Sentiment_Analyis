@@ -9,9 +9,28 @@ function systemTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+/** Storage throws in private browsing and in webviews with storage disabled; never let that
+ *  blank the app, since this runs during the first render. */
+function readStored(): Theme | null {
+  try {
+    const value = localStorage.getItem(KEY);
+    return value === "dark" || value === "light" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(theme: Theme): void {
+  try {
+    localStorage.setItem(KEY, theme);
+  } catch {
+    /* preference simply does not persist */
+  }
+}
+
 export function useTheme() {
   const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(KEY) as Theme | null) ?? systemTheme(),
+    () => readStored() ?? systemTheme(),
   );
 
   useEffect(() => {
@@ -21,7 +40,7 @@ export function useTheme() {
   const toggle = useCallback(() => {
     setTheme((t) => {
       const next: Theme = t === "dark" ? "light" : "dark";
-      localStorage.setItem(KEY, next);
+      writeStored(next);
       return next;
     });
   }, []);

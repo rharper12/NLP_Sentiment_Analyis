@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer, estimate_cost
+from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer, cost_for_units, count_units
 from sentiment_prep.config import Settings
 from sentiment_prep.errors import ValidationError
 from sentiment_prep.logging_config import get_logger
@@ -72,16 +72,18 @@ def needs_comprehend(record: Record) -> bool:
 
 
 def _units(records: list[Record], settings: Settings) -> int:
-    return estimate_cost(
-        (r.text for r in records),
-        1.0,
-        settings.comprehend_unit_chars,
-        settings.comprehend_min_units,
-    )[0]
+    return count_units(
+        (r.text for r in records), settings.comprehend_unit_chars, settings.comprehend_min_units
+    )
 
 
 def _dollars(units: int, rate: PriceQuote | None) -> float | None:
-    return round(units * rate.price_per_unit_usd, 4) if rate else None
+    """Cost in dollars, or ``None`` when no current rate is known.
+
+    Computed in ``Decimal`` and quantised once; converted to ``float`` only here, at the edge, so
+    the value is JSON-friendly without letting float error accumulate across slices.
+    """
+    return float(cost_for_units(units, rate.price_per_unit)) if rate else None
 
 
 def estimate(bundle: DatasetBundle, settings: Settings, rate: PriceQuote | None) -> LabelEstimate:
@@ -96,7 +98,7 @@ def estimate(bundle: DatasetBundle, settings: Settings, rate: PriceQuote | None)
         unit_chars=settings.comprehend_unit_chars,
         min_units_per_document=settings.comprehend_min_units,
         estimated_cost_usd=_dollars(units, rate),
-        cost_per_unit_usd=rate.price_per_unit_usd if rate else None,
+        cost_per_unit_usd=float(rate.price_per_unit) if rate else None,
         price_status=rate.status if rate else "unavailable",
         price_fetched_at=rate.fetched_at.isoformat() if rate else None,
         price_region=settings.aws_region,

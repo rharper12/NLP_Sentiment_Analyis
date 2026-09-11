@@ -69,11 +69,16 @@ def backend_name() -> str:
     return get_engine().dialect.name
 
 
+@lru_cache(maxsize=1)
+def _session_factory() -> sessionmaker[Session]:
+    """One factory per process, bound to the cached engine."""
+    return sessionmaker(bind=get_engine(), expire_on_commit=False)
+
+
 @contextmanager
 def session() -> Iterator[Session]:
-    """Unit of work: commit on success, roll back on error."""
-    factory = sessionmaker(bind=get_engine(), expire_on_commit=False)
-    with factory() as s:
+    """Unit of work: commit on success, roll back on error, always close."""
+    with _session_factory()() as s:
         try:
             yield s
             s.commit()

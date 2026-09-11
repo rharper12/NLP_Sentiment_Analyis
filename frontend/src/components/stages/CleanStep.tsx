@@ -50,7 +50,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                     const on = config.enabled[name];
                     return (
                       <li key={name} className={`grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-2 px-5 py-4 ${on ? "" : "opacity-60"}`}>
-                        <label className="contents cursor-pointer">
+                        <label className="contents cursor-pointer" aria-label={info.title}>
                           <input type="checkbox" className="mt-1 size-4 accent-accent" checked={on} onChange={() => onToggle(name)} />
                           <span className="min-w-0">
                             <span className={`block font-medium ${on ? "" : "line-through"}`}>{info.title}</span>

@@ -66,6 +66,12 @@ If you add a service call to the code, add exactly one statement here, in the sa
 
 ## Database
 
+**Upgrading an existing deployment:** the cached-price column changed from `Float` to
+`Numeric(12, 6)`. `create_all` does not alter existing tables, so on SQLite delete the file (it is
+a cache; it rebuilds) and on Postgres run
+`ALTER TABLE price_quote ALTER COLUMN price_per_unit_usd TYPE numeric(12,6);` before deploying.
+
+
 Default is SQLite on `/tmp`: fine for demos, resets on cold start. For durable history, provision Postgres (RDS, Aurora Serverless v2, Neon, Supabase), store the URL as a
 SecureString, set `DatabaseUrlSsmPath`, and add `psycopg[binary]` to `pyproject.toml`
 dependencies before building the image. Tables are created on first use (`create_all`); the schema is small and additive. Adopt Alembic if

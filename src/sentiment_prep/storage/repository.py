@@ -7,6 +7,7 @@ development. In Lambda the S3 repository is used; every bundle round-trips throu
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from typing import Any, Protocol
 
 from sentiment_prep.errors import NotFoundError
@@ -25,16 +26,27 @@ class BundleRepository(Protocol):
 
 
 class InMemoryRepository:
-    """Dict-backed; lost when the process exits."""
+    """Bounded LRU cache of bundles; lost when the process exits.
 
-    def __init__(self) -> None:
-        self._bundles: dict[str, DatasetBundle] = {}
+    Bounded because a long-lived local or container process would otherwise hold every dataset
+    ever loaded. Evicting the least recently used bundle is safe: the checkpoints on disk or in S3
+    are the durable copy, and the UI always works from the most recent dataset.
+    """
+
+    def __init__(self, max_datasets: int = 20) -> None:
+        self._bundles: OrderedDict[str, DatasetBundle] = OrderedDict()
+        self._max = max_datasets
 
     def save(self, bundle: DatasetBundle) -> None:
         self._bundles[bundle.dataset_id] = bundle
+        self._bundles.move_to_end(bundle.dataset_id)
+        while len(self._bundles) > self._max:
+            evicted, _ = self._bundles.popitem(last=False)
+            logger.info("bundle_evicted", dataset_id=evicted, kept=len(self._bundles))
 
     def get(self, dataset_id: str) -> DatasetBundle:
         try:
+            self._bundles.move_to_end(dataset_id)
             return self._bundles[dataset_id]
         except KeyError as exc:
             raise NotFoundError(f"dataset {dataset_id} not found") from exc

@@ -2,6 +2,16 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-16: React 19, generated API types, and a real frontend toolchain
+A code review found the frontend was the weak half: React 18 against a React 19 standard, no
+ESLint (so `react-hooks/exhaustive-deps` was not enforced, and it found eight issues on its first
+run including two accessibility errors), no tests, and API responses cast with `as T` from types
+hand-copied out of the Pydantic schemas. Now: React 19 + Vite 7, `openapi-typescript` generates
+`api/schema.d.ts` and every frontend type derives from it, ESLint with `react-hooks` and
+`jsx-a11y`, and Vitest for the pure logic. The codegen immediately surfaced real nullability the
+hand-written types had hidden. Cost: a generation step that needs the API running, and one more
+toolchain to keep current.
+
 ## ADR-15: AG Grid Community for the records table, client-side row model
 600–5,000 records fit comfortably in memory, so the grid fetches once and handles sorting,
 filtering, pagination and virtualisation locally: no datasource, no server-side model, and the

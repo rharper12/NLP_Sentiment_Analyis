@@ -22,7 +22,7 @@ def post(i: int, lang: str = "en") -> dict:
     }
 
 
-def x_client(pages: list[httpx.Response]) -> httpx.Client:
+def x_client(pages: list[httpx.Response]) -> httpx.Client:  # noqa: D103
     calls = iter(pages)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -42,7 +42,7 @@ def test_x_paginates_until_limit():
         ),
         httpx.Response(200, json={"data": [post(i) for i in range(100, 200)], "meta": {}}),
     ]
-    ds = XSearchSource("tok", guard(), client=x_client(pages)).fetch(150, query="lindsay clancy")
+    ds = XSearchSource(guard(), x_client(pages)).fetch(150, query="lindsay clancy")
     assert len(ds.records) == 150
     assert ds.query.endswith("lang:en -is:retweet")
     assert ds.truncated_reason is None
@@ -50,7 +50,7 @@ def test_x_paginates_until_limit():
 
 def test_x_stops_at_last_page_with_reason():
     pages = [httpx.Response(200, json={"data": [post(i) for i in range(30)], "meta": {}})]
-    ds = XSearchSource("tok", guard(), client=x_client(pages)).fetch(600, query="q")
+    ds = XSearchSource(guard(), x_client(pages)).fetch(600, query="q")
     assert len(ds.records) == 30
     assert "7 days" in ds.truncated_reason
 
@@ -65,7 +65,7 @@ def test_x_spend_cap_truncates_without_raising():
         ),
     ]
     g = guard(per_fetch=150)
-    ds = XSearchSource("tok", g, client=x_client(pages)).fetch(600, query="q")
+    ds = XSearchSource(g, x_client(pages)).fetch(600, query="q")
     assert len(ds.records) == 100
     assert "per-fetch cap" in ds.truncated_reason
     assert g.reads_this_fetch == 100
@@ -77,14 +77,14 @@ def test_x_retries_on_429(monkeypatch):
         httpx.Response(429, headers={"x-rate-limit-reset": "0"}),
         httpx.Response(200, json={"data": [post(i) for i in range(10)], "meta": {}}),
     ]
-    ds = XSearchSource("tok", guard(), client=x_client(pages)).fetch(10, query="q")
+    ds = XSearchSource(guard(), x_client(pages)).fetch(10, query="q")
     assert len(ds.records) == 10
 
 
 def test_x_filters_short_and_non_english():
     data = [post(1), {"id": "2", "text": "too short", "lang": "en"}, post(3, lang="fr")]
     pages = [httpx.Response(200, json={"data": data, "meta": {}})]
-    ds = XSearchSource("tok", guard(), client=x_client(pages)).fetch(10, query="q")
+    ds = XSearchSource(guard(), x_client(pages)).fetch(10, query="q")
     assert [r.id for r in ds.records] == ["1"]
 
 
@@ -120,9 +120,7 @@ def test_x_fetch_stops_when_cancelled():
         calls["n"] += 1
         return calls["n"] > 1  # allow the first page, cancel before the second
 
-    ds = XSearchSource("tok", guard(), client=x_client(pages)).fetch(
-        600, query="q", should_stop=stop
-    )
+    ds = XSearchSource(guard(), x_client(pages)).fetch(600, query="q", should_stop=stop)
     assert len(ds.records) == 100 and ds.truncated_reason == "cancelled by client"
 
 

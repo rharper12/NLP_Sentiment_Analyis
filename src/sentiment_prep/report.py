@@ -112,7 +112,9 @@ def _labels_section(bundle: DatasetBundle) -> list[str]:
 
 
 def _impact_section(bundle: DatasetBundle) -> list[str]:
-    assert bundle.report is not None
+    """Render the measured-impact table. Caller guarantees ``bundle.report`` is set."""
+    if bundle.report is None:
+        return []
     lines = ["## Measured impact", ""]
     lines.append(
         "| Step | Records in | Records out | Vocab before | Vocab after "

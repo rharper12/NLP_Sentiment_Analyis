@@ -10,11 +10,14 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
 /** Always-visible X spend. Opens to caps, month total, and an optional live check with X. */
 export function SpendChip({ refreshKey }: { refreshKey: number }) {
   const spend = useAsync<SpendSummary>();
+  const { run: loadSpend } = spend;
   const [open, setOpen] = useState(false);
   const [withX, setWithX] = useState(false);
   const panelId = useId();
 
-  useEffect(() => { void spend.run((signal) => api.spend(withX, signal)); }, [refreshKey, withX, spend.run]);
+  useEffect(() => {
+    void loadSpend((signal) => api.spend(withX, signal));
+  }, [refreshKey, withX, loadSpend]);
 
   const s = spend.data;
   return (

@@ -34,15 +34,15 @@ class HuggingFaceSource:
         split: str,
         text_column: str,
         label_column: str | None,
-        base_url: str = "https://datasets-server.huggingface.co",
-        client: httpx.Client | None = None,
+        client: httpx.Client,
     ) -> None:
         self._dataset = dataset
         self._config = config
         self._split = split
         self._text_column = text_column
         self._label_column = label_column
-        self._client = client or httpx.Client(base_url=base_url, timeout=30.0)
+        # Shared, pooled client owned by the caller; this class never closes it.
+        self._client = client
 
     def fetch(
         self,

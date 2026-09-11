@@ -29,15 +29,17 @@ export default function App() {
   const dataset = useAsync<DatasetSummary>();
   const run = useAsync<PreprocessResponse>();
   const { config, dispatch, activeSteps } = usePipelineConfig();
+  const { run: loadHealth } = health;
+  const { run: loadSteps } = steps;
   const [stage, setStage] = useState<Stage>("collect");
   const [runVersion, setRunVersion] = useState(0);
   const [spendVersion, setSpendVersion] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
-    void health.run(api.health);
-    void steps.run(api.steps).then((list) => list && dispatch({ type: "init", steps: list }));
-  }, [health.run, steps.run, dispatch]);
+    void loadHealth(api.health);
+    void loadSteps(api.steps).then((list) => list && dispatch({ type: "init", steps: list }));
+  }, [loadHealth, loadSteps, dispatch]);
 
   const [labelled, setLabelled] = useState(false);
   const reached: Stage = labelled ? "export" : run.data ? "label" : dataset.data ? "clean" : "collect";
@@ -52,9 +54,12 @@ export default function App() {
   };
 
   const runPipeline = async () => {
-    if (!dataset.data) return;
+    const current = dataset.data;
+    if (!current) return;
     setStage("analyze");
-    const result = await run.run((signal) => api.preprocess(dataset.data!.dataset_id, activeSteps, config.options, config.explain, signal));
+    const result = await run.run((signal) =>
+      api.preprocess(current.dataset_id, activeSteps, config.options, config.explain, signal),
+    );
     if (result) setRunVersion((v) => v + 1);
   };
 

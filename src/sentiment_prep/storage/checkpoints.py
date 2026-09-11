@@ -17,13 +17,15 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from pydantic import BaseModel
 
 from sentiment_prep.logging_config import get_logger
+from sentiment_prep.models import CheckpointStage
 
 if TYPE_CHECKING:
     from sentiment_prep.models import DatasetBundle
 
 logger = get_logger(__name__)
 
-Stage = Literal["collected", "processed", "labelled"]
+# Single definition lives with the other domain types; aliased here for readability.
+Stage = CheckpointStage
 STAGES: tuple[Stage, ...] = ("collected", "processed", "labelled")
 Format = Literal["csv", "parquet"]
 

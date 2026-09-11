@@ -38,7 +38,7 @@ from sentiment_prep.api.schemas import (
 )
 from sentiment_prep.api.service import run_preprocessing
 from sentiment_prep.config import Settings, get_settings
-from sentiment_prep.errors import ConfigurationError, NotFoundError, ValidationError
+from sentiment_prep.errors import AppError, ConfigurationError, NotFoundError, ValidationError
 from sentiment_prep.export.csv_export import to_csv
 from sentiment_prep.export.excel_export import to_excel
 from sentiment_prep.export.parquet_export import csv_to_parquet, to_parquet
@@ -246,7 +246,8 @@ def preprocess(
     updated = checkpoint_bundle(checkpoints, updated, "processed")
     repo.save(updated)
     history.record_run(updated)
-    assert updated.processed is not None and updated.report is not None
+    if updated.processed is None or updated.report is None:  # pragma: no cover - invariant
+        raise AppError("preprocessing produced no result")
     return PreprocessResponse(
         dataset_id=dataset_id,
         applied_steps=updated.applied_steps,

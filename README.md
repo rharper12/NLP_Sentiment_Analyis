@@ -22,7 +22,8 @@ A guided five-stage flow:
    checkpoints (collected / processed / labelled) with one-click Parquet conversion.
 
 Responsive from phones to desktops, dark and light themes, cancellable requests, run history,
-and a live X spend counter. React 18 + TypeScript + Tailwind CSS v4.
+and a live X spend counter. React 19 + TypeScript + Tailwind CSS v4 + AG Grid Community, with
+API types generated from the backend's OpenAPI schema.
 
 ![Analyze stage](docs/images/3-analyze.png)
 
@@ -38,8 +39,8 @@ Defaults run fully offline: Comprehend and Bedrock are off and no X token is set
 Hugging Face dataset or a CSV and everything works; AWS-backed fields are null with a stated reason.
 
 ```bash
-make test         # 51 tests; S3 via moto, AWS ML services via fakes, history on SQLite
-make lint         # ruff, mypy --strict, tsc
+make test         # 53 backend tests + Vitest; S3 via moto, AWS ML services via fakes, history on SQLite
+make lint         # ruff, mypy --strict, tsc, eslint
 ```
 
 ## Configuration

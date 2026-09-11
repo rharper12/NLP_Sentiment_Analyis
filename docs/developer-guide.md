@@ -59,6 +59,11 @@ sentences. Never log record text above DEBUG. See [logging-and-debugging.md](log
 **Errors.** Raise `ValidationError`, `NotFoundError`, or `ConfigurationError` from `errors.py`.
 They become clean 4xx/503 responses. Everything else is a bug and becomes a 500 with a request id.
 
+**Frontend types are generated, never hand-written.** `src/api/schema.d.ts` comes from the
+backend's OpenAPI document (`make gen-api` with the API running) and `src/api/types.ts` derives
+every exported type from it. If you change a Pydantic schema, regenerate: a field that became
+optional shows up as a type error instead of `undefined` at runtime.
+
 **Frontend.** Tailwind CSS v4 utilities referencing theme tokens (`bg-surface`, `text-muted`,
 `border-rule`); the tokens are CSS variables in `styles.css` and dark mode swaps their values, so
 no component knows which theme is active. Function components and hooks only. State that must survive re-renders lives in
@@ -106,6 +111,10 @@ they do not reach into global state.
 ```bash
 make lint && make test
 ```
+
+`make lint` runs ruff, `mypy --strict`, `tsc --noEmit` and ESLint (with `react-hooks` and
+`jsx-a11y`). `make test` runs pytest and Vitest. Before shipping a UI change, also run the
+accessibility audit in `tools/a11y_audit.py`; see [design-system.md](design-system.md).
 
 Then check: docstrings on new modules, no record text in INFO logs, rationale updated if a step
 changed, `docs/decisions.md` updated if you changed a boundary in [architecture.md](architecture.md).

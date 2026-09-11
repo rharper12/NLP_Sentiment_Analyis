@@ -15,11 +15,14 @@ const STAGE_BLURB: { [k in CheckpointStage]: string } = { collected: "raw posts 
 export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: Props) {
   const save = useAsync<{ uri: string }>();
   const checkpoints = useAsync<CheckpointList>();
+  const { run: loadCheckpoints } = checkpoints;
   const [uri, setUri] = useState<string | null>(null);
   const [converting, setConverting] = useState<CheckpointStage | null>(null);
   const id = dataset.dataset_id;
 
-  useEffect(() => { if (diagnostics) void checkpoints.run((s) => api.checkpoints(id, s)); }, [id, diagnostics, checkpoints.run]);
+  useEffect(() => {
+    if (diagnostics) void loadCheckpoints((signal) => api.checkpoints(id, signal));
+  }, [id, diagnostics, loadCheckpoints]);
 
   const convert = async (stage: CheckpointStage) => {
     setConverting(stage);

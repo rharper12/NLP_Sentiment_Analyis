@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 from collections import Counter
 from collections.abc import Iterable
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, NamedTuple
 
 from sentiment_prep.logging_config import get_logger
@@ -21,6 +22,7 @@ from sentiment_prep.models import Dataset, SentimentComparison
 
 logger = get_logger(__name__)
 
+CENT_PRECISION = Decimal("0.0001")  # Comprehend prices are quoted to four decimal places
 BATCH_SIZE = 25  # Comprehend's hard limit per BatchDetectSentiment call
 MAX_BYTES = 5000  # per-document limit; longer texts are truncated, not rejected
 
@@ -38,12 +40,34 @@ def billable_units(text: str, unit_chars: int, min_units: int) -> int:
     return max(min_units, -(-chars // unit_chars))
 
 
-def estimate_cost(
-    texts: Iterable[str], cost_per_unit: float, unit_chars: int, min_units: int
-) -> tuple[int, float]:
-    """Total billable units and cost for a set of documents."""
-    units = sum(billable_units(t, unit_chars, min_units) for t in texts)
-    return units, round(units * cost_per_unit, 4)
+def count_units(texts: Iterable[str], unit_chars: int, min_units: int) -> int:
+    """Total billable units for a set of documents.
+
+    Args:
+        texts: Documents that would be sent to Comprehend.
+        unit_chars: Characters per billable unit (100 for sentiment).
+        min_units: Minimum units charged per document (3 for sentiment).
+
+    Returns:
+        The number of units Comprehend would bill. No price is applied; see ``estimate_cost``.
+    """
+    return sum(billable_units(t, unit_chars, min_units) for t in texts)
+
+
+def cost_for_units(units: int, price_per_unit: Decimal) -> Decimal:
+    """Cost of ``units`` at ``price_per_unit``.
+
+    The single place money is multiplied. ``Decimal`` throughout and quantised once, so repeated
+    slices cannot accumulate binary-float error; callers convert to ``float`` only at the API edge.
+
+    Args:
+        units: Billable units, from ``count_units``.
+        price_per_unit: Published price, parsed from the Price List API without passing via float.
+
+    Returns:
+        Cost in USD, quantised to the four decimal places AWS publishes.
+    """
+    return (Decimal(units) * price_per_unit).quantize(CENT_PRECISION, rounding=ROUND_HALF_UP)
 
 
 class ComprehendScorer:

@@ -33,9 +33,12 @@ const pct = (a: number, b: number) => (a === 0 ? null : ((b - a) / a) * 100);
 export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
   const [selected, setSelected] = useState<RecordPair | null>(null);
   const records = useAsync<RecordPair[]>();
+  const { run: loadRecords } = records;
   const [copied, setCopied] = useState(false);
-  const warnings = run?.report.warnings.filter((w) => !w.includes("disabled")) ?? [];
-  const disabledNote = run?.report.warnings.filter((w) => w.includes("disabled")) ?? [];
+  // `warnings` is optional in the schema (it has a server-side default), so normalise once.
+  const allWarnings = run?.report.warnings ?? [];
+  const warnings = allWarnings.filter((w) => !w.includes("disabled"));
+  const disabledNote = allWarnings.filter((w) => w.includes("disabled"));
 
   const rows = run ? [
     { label: "Posts", a: run.metrics_before.record_count, b: run.metrics_after.record_count, f: fmt },
@@ -46,8 +49,8 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
 
   // Reload whenever a pipeline run finishes so the processed column reflects the latest run.
   useEffect(() => {
-    void records.run((signal) => api.allRecords(datasetId, recordCount, signal));
-  }, [datasetId, recordCount, runVersion, records.run]);
+    void loadRecords((signal) => api.allRecords(datasetId, recordCount, signal));
+  }, [datasetId, recordCount, runVersion, loadRecords]);
 
   const copy = async () => { if (run?.report.explanation) { await navigator.clipboard.writeText(run.report.explanation); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
@@ -125,7 +128,7 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
           </div>
           {run.report.explanation ? (
             <><p className="mt-2 max-w-[72ch] leading-relaxed">{run.report.explanation}</p><p className="mt-2 text-xs text-muted">Generated from the numbers above; review before quoting.</p></>
-          ) : <p className="mt-2 text-sm text-muted">No explanation for this run. {run.report.warnings.filter((w) => w.includes("explanation")).join(" ")}</p>}
+          ) : <p className="mt-2 text-sm text-muted">No explanation for this run. {allWarnings.filter((w) => w.includes("explanation")).join(" ")}</p>}
         </div>
       )}
 
