@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Sentiment Prep. FastAPI on Lambda (container image) behind an HTTP API, an S3 bucket for
+  datasets, and a static-site bucket for the React UI. Secrets (X bearer token, optional database
+  URL) are read from SSM SecureStrings at runtime; switching X accounts is one parameter
+  override in samconfig.toml. IAM grants exactly the actions the code calls, on the narrowest
+  resource each service supports.
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedPattern: "[a-z0-9]+"
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+  XBearerTokenSsmPath:
+    Type: String
+    Default: /sentiment-prep/dev/x-bearer-token
+    Description: SSM SecureString holding the X API bearer token. Change to swap accounts.
+  DatabaseUrlSsmPath:
+    Type: String
+    Default: ""
+    Description: Optional SSM SecureString with a Postgres URL. Empty = SQLite on /tmp (ephemeral).
+  XMaxReadsPerFetch:
+    Type: Number
+    Default: 1000
+    MinValue: 1
+  XMaxReadsPerDay:
+    Type: Number
+    Default: 3000
+    MinValue: 1
+  BedrockTextModelId:
+    Type: String
+    Default: anthropic.claude-3-5-haiku-20241022-v1:0
+  EmbedModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+  CorsOrigins:
+    Type: String
+    Default: http://localhost:5173
+    Description: Comma-separated browser origins. Add the SiteUrl output after first deploy.
+
+Conditions:
+  HasDatabaseUrl: !Not [!Equals [!Ref DatabaseUrlSsmPath, ""]]
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 2048
+    Architectures: [x86_64]
+
+Resources:
+  # ---------------------------------------------------------------- storage
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "sentiment-prep-data-${Stage}-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireWorkingState   # in-flight bundles, not user saves
+            Status: Enabled
+            Prefix: _work/
+            ExpirationInDays: 7
+
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource: [!GetAtt DataBucket.Arn, !Sub "${DataBucket.Arn}/*"]
+            Condition:
+              Bool: { "aws:SecureTransport": "false" }
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "sentiment-prep-site-${Stage}-${AWS::AccountId}"
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadOfBuiltAssets
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${SiteBucket.Arn}/*"
+
+  # ---------------------------------------------------------------- compute
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/sentiment-prep-api-${Stage}"
+      RetentionInDays: 14
+
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "sentiment-prep-api-${Stage}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: least-privilege
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLogGroup
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${ApiLogGroup.Arn}:*"
+              - Sid: DatasetObjects
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DataBucket.Arn}/*"
+              - Sid: DatasetListing
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+              - Sid: BaselineSentiment
+                Effect: Allow
+                Action: comprehend:BatchDetectSentiment
+                Resource: "*"   # Comprehend has no resource-level permissions
+              - Sid: LiveComprehendPrice
+                Effect: Allow
+                Action: pricing:GetProducts
+                Resource: "*"   # Price List API has no resource-level permissions
+              - Sid: CurrentComprehendPrice
+                Effect: Allow
+                Action: pricing:GetProducts
+                Resource: "*"   # Price List API has no resource-level permissions
+              - Sid: InvokeExactlyTwoModels
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockTextModelId}"
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbedModelId}"
+              - Sid: ReadSecrets
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${XBearerTokenSsmPath}"
+                  - !If
+                    - HasDatabaseUrl
+                    - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DatabaseUrlSsmPath}"
+                    - !Ref AWS::NoValue
+              # SecureString decryption uses the AWS-managed aws/ssm key, whose key policy
+              # already permits use through SSM. No kms:Decrypt grant is needed.
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "sentiment-prep-api-${Stage}"
+      PackageType: Image
+      Role: !GetAtt ApiFunctionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref ApiLogGroup
+      Environment:
+        Variables:
+          RUNTIME: lambda
+          LOG_LEVEL: !Ref LogLevel
+          DATA_BUCKET: !Ref DataBucket
+          X_BEARER_TOKEN_SSM_PATH: !Ref XBearerTokenSsmPath
+          DATABASE_URL_SSM_PATH: !If [HasDatabaseUrl, !Ref DatabaseUrlSsmPath, !Ref AWS::NoValue]
+          X_MAX_READS_PER_FETCH: !Ref XMaxReadsPerFetch
+          X_MAX_READS_PER_DAY: !Ref XMaxReadsPerDay
+          BEDROCK_TEXT_MODEL_ID: !Ref BedrockTextModelId
+          EMBED_MODEL_ID: !Ref EmbedModelId
+          CORS_ORIGINS: !Ref CorsOrigins
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: ../..
+      DockerTag: !Ref Stage
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Stage
+      CorsConfiguration:
+        AllowOrigins: !Split [",", !Ref CorsOrigins]
+        AllowMethods: [GET, POST, OPTIONS]
+        AllowHeaders: ["*"]
+        ExposeHeaders: [X-Request-Id, Content-Disposition]
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+Outputs:
+  ApiUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}"
+  SwaggerUrl:
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/docs"
+  DataBucketName:
+    Value: !Ref DataBucket
+  SiteUrl:
+    Value: !GetAtt SiteBucket.WebsiteURL
+  SiteBucketName:
+    Value: !Ref SiteBucket

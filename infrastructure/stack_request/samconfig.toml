@@ -1,0 +1,48 @@
+# SAM CLI configuration. Each [env] block is a deployable environment. The X account in use is
+# whichever SSM path XBearerTokenSsmPath points at: swap accounts by changing that override, or
+# run `make put-secret NAME=x-bearer-token VALUE=... STAGE=dev` to overwrite the parameter.
+# No secret values live in this file.
+
+version = 0.1
+
+[default.global.parameters]
+stack_name = "sentiment-prep-dev"
+region = "us-east-1"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+resolve_image_repos = true
+parameter_overrides = [
+  "Stage=dev",
+  "LogLevel=INFO",
+  "XBearerTokenSsmPath=/sentiment-prep/dev/x-bearer-token",
+  "XMaxReadsPerFetch=1000",
+  "XMaxReadsPerDay=3000",
+]
+
+[default.local_start_api.parameters]
+env_vars = "infrastructure/stack_request/env.local.json"
+warm_containers = "EAGER"
+
+[prod.global.parameters]
+stack_name = "sentiment-prep-prod"
+region = "us-east-1"
+
+[prod.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+resolve_image_repos = true
+parameter_overrides = [
+  "Stage=prod",
+  "LogLevel=INFO",
+  "XBearerTokenSsmPath=/sentiment-prep/prod/x-bearer-token",
+  "XMaxReadsPerFetch=1000",
+  "XMaxReadsPerDay=3000",
+]

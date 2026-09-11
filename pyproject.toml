@@ -1,0 +1,67 @@
+[project]
+name = "sentiment-prep"
+version = "0.1.0"
+description = "Dataset preparation and preprocessing-impact analysis for sentiment analysis."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "mangum>=0.17",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "boto3>=1.34",
+    "httpx>=0.27",
+    "nltk>=3.9",
+    "openpyxl>=3.1",
+    "pyarrow>=16",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6",
+    "structlog>=24",
+    "sqlalchemy>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "uvicorn[standard]",
+    "pytest",
+    "moto[s3]",
+    "ruff",
+    "mypy",
+    "types-PyYAML",
+    "boto3-stubs[s3,comprehend,bedrock-runtime,ssm]",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sentiment_prep = ["resources/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "D"]
+ignore = ["D203", "D212", "D107", "D102", "D105", "D106"]  # interface impls are documented on the base class
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "E501", "N803"]  # fakes mirror boto3 argument names
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

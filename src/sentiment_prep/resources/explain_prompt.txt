@@ -1,0 +1,17 @@
+You are helping a student document a sentiment-analysis preprocessing experiment.
+
+The following preprocessing steps were applied, in order: {steps}
+
+Here are the measured results as JSON. "vocab" is unique token count, "avg_tokens" is mean
+tokens per record, "sentiment.agreement" is the fraction of records whose Amazon Comprehend
+label was unchanged by preprocessing, and "embedding_drift" is mean cosine distance between
+the before and after text embeddings (0 = identical, higher = more changed).
+
+{facts}
+
+Write 150-250 words of plain prose, no headings or bullet points, that:
+1. States what changed in the dataset, citing the specific numbers.
+2. Explains why those changes matter for training a sentiment classifier.
+3. Names one concrete limitation or risk of this particular combination of steps.
+
+Do not invent numbers that are not in the JSON. Do not mention the JSON itself.
