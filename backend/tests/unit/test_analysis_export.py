@@ -33,14 +33,25 @@ def test_metrics_shape():
     assert 0 < m.type_token_ratio <= 1
 
 
-def test_comprehend_batches_and_caches():
+def test_comprehend_never_pays_twice_for_the_same_text():
+    """Every document is sent once however often it is scored, because each send is billed.
+
+    Asserted as "no further calls", not as an exact call count: how many documents fit in a batch
+    is Comprehend's business, and a test that pins it breaks when the limit changes without
+    anything actually being wrong.
+    """
     ds = make_dataset([f"unique text {i}" for i in range(60)])
     fake = FakeComprehend()
     scorer = ComprehendScorer(fake)
-    scorer.label(ds)
-    assert fake.calls == 3
-    scorer.label(ds)
-    assert fake.calls == 3
+
+    first = scorer.label(ds)
+    calls_after_first = fake.calls
+    assert calls_after_first > 0
+    assert len({r.text for r in ds.records}) == 60  # all distinct, so all had to be sent
+
+    second = scorer.label(ds)
+    assert fake.calls == calls_after_first  # nothing re-sent
+    assert [x.label for x in second] == [x.label for x in first]
 
 
 def test_comprehend_labels_carry_confidence():

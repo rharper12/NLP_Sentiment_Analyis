@@ -213,7 +213,7 @@ Resources:
           Properties:
             ApiId: !Ref HttpApi
     Metadata:
-      Dockerfile: Dockerfile
+      Dockerfile: backend/Dockerfile
       DockerContext: ../..
       DockerTag: !Ref Stage
 

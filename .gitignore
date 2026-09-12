@@ -1,12 +1,26 @@
-.env
+# Secrets and local state
+backend/.env
+backend/data/
+backend/staticfiles/
+
+# Python
+.venv/
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.aws-sam/
-*.egg-info/
+
+# Node
 frontend/node_modules/
 frontend/dist/
-data/
-staticfiles/
+
+# Build and deploy
+.aws-sam/
+
+# Editors and OS
+.idea/
+.vscode/
+.run/
+.DS_Store

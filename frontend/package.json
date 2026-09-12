@@ -16,7 +16,8 @@
     "ag-grid-community": "^36.1.0",
     "ag-grid-react": "^36.1.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.2"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

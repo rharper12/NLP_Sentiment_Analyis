@@ -32,9 +32,15 @@ make put-secret NAME=x-bearer-token    VALUE='AAAA…'   STAGE=dev
 
 ## Deploy
 
+All SAM targets run from the repository root and pass `--template-file` / `--config-file` *after*
+the subcommand, which is where the SAM CLI expects them, as absolute quoted paths. SAM resolves
+`--config-file` against its own notion of the project root rather than the shell's working
+directory, so a relative path fails with "does not exist or could not be read"; the quoting keeps
+a checkout under a path containing spaces working.
+
 ```bash
 make validate                    # cfn-lint on the template
-make deploy                      # build image, push, create/update stack (default env)
+make deploy                      # builds first, then deploys from .aws-sam/build
 make deploy-site STAGE=dev       # build the UI against ApiUrl, sync to the site bucket
 make deploy CONFIG_ENV=prod      # uses the [prod] block in samconfig.toml
 ```

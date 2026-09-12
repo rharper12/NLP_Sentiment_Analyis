@@ -75,3 +75,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: wall-clock assertions that may be excluded on a contended machine (-m 'not slow')",
+]

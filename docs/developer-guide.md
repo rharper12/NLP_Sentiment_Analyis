@@ -17,25 +17,31 @@ as you get credentials.
 ## Repository map
 
 ```
-src/sentiment_prep/
-  api/            FastAPI: app.py (factory, middleware, SQLAlchemy mount), routes.py, schemas.py,
-                  service.py (orchestration), deps.py (client construction)
-  sources/        DataSource adapters + SpendGuard
-  preprocessing/  one module per step, pipeline.py, STEP_REGISTRY in __init__.py
-  analysis/       metrics, Comprehend (shared scorer), Titan embeddings, Bedrock explainer
-  labeling/       estimate, Comprehend slices, review sampling, manual labels, summary
-  export/         csv, xlsx; rows.py is the shared row shape
-  storage/        repository (in-memory | S3), checkpoints (local | S3), s3_store (saves)
-  history/        SQLAlchemy app: models, admin, services (incl. SQLAlchemyLedger)
-  sqlalchemy_project/ settings, urls, bootstrap
-  resources/      rationale.yaml, explain_prompt.txt
-  config.py       every env var; logging_config.py: structlog setup; models.py; report.py
-frontend/src/     api/ (client, types), hooks/, components/ (stages/, ui/), App.tsx, styles.css (Tailwind theme)
-                  RecordsGrid.tsx wraps AG Grid Community; see docs/design-system.md
-tools/            a11y_audit.py: drives every stage in both themes and runs axe (WCAG A/AA)
+backend/
+  src/sentiment_prep/
+    api/            FastAPI: app.py (factory, lifespan, middleware), routes.py, schemas.py,
+                    service.py (orchestration), deps.py (client construction), security.py
+    sources/        DataSource adapters + SpendGuard
+    preprocessing/  one module per step, pipeline.py, STEP_REGISTRY in __init__.py
+    analysis/       metrics, Comprehend (shared scorer), Titan embeddings, Bedrock explainer
+    labeling/       estimate, Comprehend slices, review sampling, manual labels, summary
+    pricing/        Price List lookup with a 24 h cache
+    export/         csv, xlsx, parquet; rows.py is the shared row shape
+    storage/        repository (in-memory | S3), checkpoints (local | S3), s3_store (saves)
+    history/        SQLAlchemy models, db (engine/session), services (incl. DbLedger)
+    resources/      rationale.yaml, explain_prompt.txt
+    config.py       every env var; logging_config.py: structlog; models.py; report.py
+  tests/            unit/ mirrors src; integration/ hits routes via TestClient
+  pyproject.toml    dependencies, ruff, mypy, pytest
+  Dockerfile        Lambda image (built with the repo root as context)
+frontend/
+  src/api/          schema.d.ts (generated), types.ts (derived), validation.ts (Zod), client.ts
+  src/hooks/        useAsync, usePipelineConfig, useTheme
+  src/components/   stages/ (one per step of the flow), label/, ui/
 infrastructure/stack_request/   template.yaml, samconfig.toml, env.local.json
-tests/            unit/ mirrors src; integration/ hits routes via TestClient
-docs/             you are here
+tools/              a11y_audit.py
+docs/               you are here
+Makefile            runs both halves; every target cd's into the right folder
 ```
 
 ## Conventions
@@ -70,6 +76,16 @@ sentences. Never log record text above DEBUG. See [logging-and-debugging.md](log
 
 **Errors.** Raise `ValidationError`, `NotFoundError`, or `ConfigurationError` from `errors.py`.
 They become clean 4xx/503 responses. Everything else is a bug and becomes a 500 with a request id.
+
+**Tests assert behaviour, not implementation.** Prefer "no further calls were billed" over an
+exact call count, "these ids were reviewed" over the order they came back in. A test that pins an
+internal constant fails when nothing is actually broken, and then gets deleted rather than fixed.
+
+**Frontend types are generated; responses are validated.** `api/validation.ts` holds a Zod schema
+per response, each annotated `z.ZodType<GeneratedType>` so a schema that drifts from the OpenAPI
+document fails to compile. Objects are loose, so a field added server-side never breaks an older
+UI, but a missing or wrong-typed field throws `ApiContractError` naming the field instead of
+letting `undefined` surface three components deep.
 
 **Frontend types are generated, never hand-written.** `src/api/schema.d.ts` comes from the
 backend's OpenAPI document (`make gen-api` with the API running) and `src/api/types.ts` derives
@@ -112,7 +128,8 @@ they do not reach into global state.
 
 ## Testing
 
-- `pytest -q` runs everything in about seven seconds. S3 uses `moto`; Comprehend and Bedrock use
+- `make test` runs both suites; `cd backend && pytest -q` takes about seven seconds. Wall-clock
+  assertions are marked `slow` and can be skipped with `pytest -m "not slow"`. S3 uses `moto`; Comprehend and Bedrock use
   the fakes in `tests/conftest.py`; history uses a fresh SQLite file under `/tmp` each session.
 - Integration tests build the app with `create_app()` and monkeypatch `api.deps` functions. Do the
   same for a new external dependency rather than reaching for network mocks.

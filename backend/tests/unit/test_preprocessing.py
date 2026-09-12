@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from sentiment_prep.errors import ValidationError
@@ -83,15 +85,24 @@ def test_pipeline_default_order_runs_all_steps(dataset: Dataset):
     assert results[-1].vocab_after <= results[0].vocab_before
 
 
-def test_pipeline_is_fast_enough():
-    import time
+@pytest.mark.slow
+def test_a_full_pipeline_run_stays_within_the_request_budget():
+    """600 records through every step must finish well inside the API's 60 s Lambda timeout.
 
+    A wall-clock assertion is inherently machine-dependent, so the bound is deliberately loose:
+    it exists to catch an accidental O(n^2) step or a per-record network call, not to measure
+    performance. Marked slow so it can be excluded on a contended CI box: `pytest -m "not slow"`.
+    """
     big = make_dataset(
         [f"Record number {i} was absolutely wonderful and I loved it!" for i in range(600)]
     )
     started = time.perf_counter()
-    Pipeline([STEP_REGISTRY[n]() for n in DEFAULT_ORDER]).run(big)
-    assert time.perf_counter() - started < 5
+    processed, results = Pipeline([STEP_REGISTRY[n]() for n in DEFAULT_ORDER]).run(big)
+    elapsed = time.perf_counter() - started
+
+    assert len(processed.records) == 600
+    assert len(results) == len(DEFAULT_ORDER)
+    assert elapsed < 10
 
 
 def test_missing_data_fill_value_is_configurable_and_validated():

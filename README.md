@@ -23,14 +23,14 @@ A guided five-stage flow:
 
 Responsive from phones to desktops, dark and light themes, cancellable requests, run history,
 and a live X spend counter. React 19 + TypeScript + Tailwind CSS v4 + AG Grid Community, with
-API types generated from the backend's OpenAPI schema.
+API types generated from the backend's OpenAPI schema and every response validated with Zod.
 
 ![Analyze stage](docs/images/3-analyze.png)
 
 ## Quick start
 
 ```bash
-make setup        # Python deps, NLTK corpora, npm packages, .env
+make setup        # backend deps + NLTK corpora + frontend packages + backend/.env
 make local-api    # http://localhost:8000/docs  (Swagger)
 make frontend     # http://localhost:5173
 ```
@@ -39,7 +39,7 @@ Defaults run fully offline: Comprehend and Bedrock are off and no X token is set
 Hugging Face dataset or a CSV and everything works; AWS-backed fields are null with a stated reason.
 
 ```bash
-make test         # 58 backend tests + Vitest; S3 via moto, AWS ML services via fakes, history on SQLite
+make test         # 59 backend tests + 12 frontend tests; S3 via moto, AWS ML services via fakes, history on SQLite
 make lint         # ruff, mypy --strict, tsc, eslint
 ```
 

@@ -2,6 +2,15 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-20: Repository split into backend/ and frontend/, with Zod at the client boundary
+The Python package used to own the repository root, which made the frontend look like an
+afterthought and forced every tool to disambiguate paths. Each half now owns its folder, its
+dependency manifest and its tests, and the root `Makefile` is the only thing that knows about
+both. Alongside it, every API response is now parsed by a Zod schema bound to the generated
+OpenAPI type: the types say what the backend claims, the schemas check what it sent. Objects are
+loose so a newer API cannot break an older UI, and a mismatch raises `ApiContractError` naming the
+field. Cost: ~200 lines of schema to keep in step, enforced by the compiler rather than by memory.
+
 ## ADR-19: An optional shared-secret API key, required in any deployment
 The API spends money on someone's behalf: an X search bills the operator's credits, Comprehend
 labelling bills their AWS account. An unauthenticated internet-facing URL is therefore an open
