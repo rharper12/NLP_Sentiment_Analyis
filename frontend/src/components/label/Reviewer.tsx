@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, isAbort } from "../../api/client";
 import { SENTIMENT_LABELS, type PostRecord, type SentimentLabel } from "../../api/types";
+import { toError } from "../../hooks/useAsync";
 import { SkeletonLines } from "../ui/Skeleton";
 
 import { InfoIcon } from "./InfoIcon";
@@ -49,7 +50,7 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
       .catch((error) => {
         if (isAbort(error)) return;
         requestedTo.current = offset - 1; // allow a retry
-        onError(error as Error);
+        onError(toError(error));
       });
     return () => controller.abort();
   }, [index, items.length, total, datasetId, onError]);
@@ -58,7 +59,7 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
     if (pending.current.length === 0) return;
     const batch = pending.current; pending.current = [];
     setSaving(true);
-    try { await api.manualLabels(datasetId, batch); } catch (e) { pending.current = [...batch, ...pending.current]; onError(e as Error); } finally { setSaving(false); }
+    try { await api.manualLabels(datasetId, batch); } catch (e) { pending.current = [...batch, ...pending.current]; onError(toError(e)); } finally { setSaving(false); }
   }, [datasetId, onError]);
 
   const decide = useCallback((label: SentimentLabel) => {

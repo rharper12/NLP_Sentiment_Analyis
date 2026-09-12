@@ -9,7 +9,7 @@ Tests monkeypatch these functions to inject fakes.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 
@@ -29,6 +29,11 @@ from sentiment_prep.storage.repository import BundleRepository, InMemoryReposito
 from sentiment_prep.storage.s3_store import S3Store
 
 if TYPE_CHECKING:
+    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
+    from mypy_boto3_comprehend.client import ComprehendClient
+    from mypy_boto3_pricing.client import PricingClient
+    from mypy_boto3_s3.client import S3Client
+
     from sentiment_prep.pricing.comprehend_price import PriceQuote
 
 logger = get_logger(__name__)
@@ -57,11 +62,17 @@ def _http_client(base_url: str, bearer_token: str | None = None) -> httpx.Client
     return client
 
 
+AwsService = Literal["s3", "comprehend", "bedrock-runtime", "pricing", "ssm"]
+
+
 @lru_cache(maxsize=8)
-def _boto_client(service: str, region: str) -> Any:
+def _boto_client(service: AwsService, region: str) -> Any:
     """Cached boto3 client. Clients are thread-safe and meant to be reused, not rebuilt.
 
-    ``Settings`` is deliberately not a parameter: it is unhashable and would defeat the cache.
+    Returns ``Any`` because ``boto3.client`` is overloaded on literal service names and one
+    generic factory cannot satisfy every overload; the public getters below narrow the type, so
+    callers still see a precise client. ``Settings`` is deliberately not a parameter: it is
+    unhashable and would defeat the cache.
     """
     import boto3
 
@@ -86,7 +97,7 @@ def get_repository() -> BundleRepository:
     if settings.runtime == "lambda":
         if not settings.data_bucket:
             raise ConfigurationError("DATA_BUCKET is required when RUNTIME=lambda")
-        return S3Repository(settings.data_bucket, _boto_client("s3", settings.aws_region))
+        return S3Repository(settings.data_bucket, _s3_client())
     logger.info("repository_in_memory", max_datasets=settings.local_repository_size)
     return InMemoryRepository(settings.local_repository_size)
 
@@ -96,11 +107,7 @@ def get_checkpoint_store() -> CheckpointStore:
     """S3 when a bucket is configured, else a gitignored local folder."""
     settings = get_settings()
     if settings.data_bucket:
-        return S3CheckpointStore(
-            settings.data_bucket,
-            settings.checkpoint_prefix,
-            _boto_client("s3", settings.aws_region),
-        )
+        return S3CheckpointStore(settings.data_bucket, settings.checkpoint_prefix, _s3_client())
     logger.info("checkpoints_local", directory=settings.checkpoint_dir)
     return LocalCheckpointStore(settings.checkpoint_dir)
 
@@ -151,9 +158,7 @@ def get_s3_store() -> S3Store:
     settings = get_settings()
     if not settings.data_bucket:
         raise ConfigurationError("DATA_BUCKET is not configured; saving to S3 is unavailable")
-    return S3Store(
-        settings.data_bucket, settings.dataset_prefix, _boto_client("s3", settings.aws_region)
-    )
+    return S3Store(settings.data_bucket, settings.dataset_prefix, _s3_client())
 
 
 def get_comprehend_rate() -> PriceQuote | None:
@@ -164,24 +169,31 @@ def get_comprehend_rate() -> PriceQuote | None:
     from sentiment_prep.pricing.comprehend_price import PRICING_ENDPOINT_REGION, current_rate
 
     settings = get_settings()
-    client = None
+    client: PricingClient | None = None
     if settings.pricing_enabled:
         try:
-            client = _boto_client("pricing", PRICING_ENDPOINT_REGION)
+            client = cast("PricingClient", _boto_client("pricing", PRICING_ENDPOINT_REGION))
         except Exception as exc:  # noqa: BLE001 - no credentials is a normal local state
             logger.warning("pricing_client_unavailable", error=str(exc))
     return current_rate(client, settings.aws_region, settings.pricing_cache_hours)
 
 
-def get_comprehend_client() -> Any | None:
+def get_comprehend_client() -> ComprehendClient | None:
     """``None`` disables the sentiment comparison and labelling rather than failing requests."""
     settings = get_settings()
-    return _boto_client("comprehend", settings.aws_region) if settings.comprehend_enabled else None
+    if not settings.comprehend_enabled:
+        return None
+    return cast("ComprehendClient", _boto_client("comprehend", settings.aws_region))
 
 
-def get_bedrock_client() -> Any | None:
+def get_bedrock_client() -> BedrockRuntimeClient | None:
     """Shared by the embedder and the explainer."""
     settings = get_settings()
-    return (
-        _boto_client("bedrock-runtime", settings.aws_region) if settings.bedrock_enabled else None
-    )
+    if not settings.bedrock_enabled:
+        return None
+    return cast("BedrockRuntimeClient", _boto_client("bedrock-runtime", settings.aws_region))
+
+
+def _s3_client() -> S3Client:
+    """Typed S3 client for the stores below."""
+    return cast("S3Client", _boto_client("s3", get_settings().aws_region))

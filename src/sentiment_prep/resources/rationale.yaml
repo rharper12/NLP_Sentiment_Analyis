@@ -3,14 +3,17 @@
 
 missing_data:
   title: Handle missing data
-  summary: Drop or fill records with empty text before anything else runs.
+  summary: Drop empty records, or fill them with a placeholder you choose.
   strengths: >
     Removes rows that would otherwise produce empty token lists, zero-length embeddings, or
     Comprehend errors. Doing it first means every later statistic is computed over real text.
   limitations: >
     Dropping rows can bias the dataset if missingness correlates with a class (for example,
-    image-only posts skew positive). Filling with a placeholder token keeps the row count but
-    injects a synthetic token the model must learn to ignore.
+    image-only posts skew positive). Filling keeps the row count but injects a synthetic token
+    the model must learn to ignore, so the placeholder should be a string the corpus cannot
+    contain. Note that most rows become empty *during* cleaning rather than arriving that way:
+    a post that is only a link and a mention is empty once URLs and mentions are stripped, so
+    move this step after "Remove punctuation" to see it act on them.
 
 lowercase:
   title: Lowercase

@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.orm import Session, sessionmaker
 
 from sentiment_prep.config import get_settings
@@ -43,7 +44,8 @@ def get_engine() -> Engine:
     if url.startswith("sqlite"):
         # SQLite needs WAL for concurrent readers and a busy timeout for the ledger writes.
         @event.listens_for(engine, "connect")
-        def _pragmas(connection, _record) -> None:  # type: ignore[no-untyped-def]
+        def _pragmas(connection: DBAPIConnection, _record: object) -> None:
+            """Apply the connection settings SQLite needs for concurrent readers."""
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA busy_timeout=5000")
 

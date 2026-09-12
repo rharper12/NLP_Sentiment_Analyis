@@ -6,7 +6,7 @@ import datetime as dt
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import CursorResult, case, func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from sentiment_prep.history.db import session
@@ -21,9 +21,14 @@ from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
 
 if TYPE_CHECKING:
+    from sqlalchemy import CursorResult
+
     from sentiment_prep.pricing.comprehend_price import PriceQuote
 
 SERVICE_CODE_COMPREHEND = "AmazonComprehend"
+# Queries are stored for traceability, not for replay; truncated so one pathological search
+# cannot bloat the audit table.
+MAX_STORED_QUERY_CHARS = 500
 
 logger = get_logger(__name__)
 
@@ -185,6 +190,12 @@ class DbLedger:
     """
 
     def __init__(self, cost_per_read_usd: float, query: str = "") -> None:
+        """Record spend against the history database.
+
+        Args:
+        cost_per_read_usd: Published X price per post read, used for the audit row's cost.
+        query: Search text recorded alongside spend so a bill can be traced to a topic.
+        """
         self._cost = Decimal(str(cost_per_read_usd))
         self._query = query
 
@@ -242,7 +253,7 @@ class DbLedger:
                         day=date,
                         reads=actual,
                         cost_usd=self._cost * actual,
-                        query=(query or self._query)[:500],
+                        query=(query or self._query)[:MAX_STORED_QUERY_CHARS],
                     )
                 )
             if reserved != actual:

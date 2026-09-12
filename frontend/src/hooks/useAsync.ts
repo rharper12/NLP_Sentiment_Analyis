@@ -11,6 +11,11 @@ export interface AsyncState<T> {
   error: Error | null;
 }
 
+/** Normalise anything thrown into an Error, so callers can always read `.message`. */
+export function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 export function useAsync<T>() {
   const [state, setState] = useState<AsyncState<T>>({ data: null, loading: false, error: null });
   const controller = useRef<AbortController | null>(null);
@@ -31,8 +36,10 @@ export function useAsync<T>() {
       if (controller.current === own) setState({ data, loading: false, error: null });
       return data;
     } catch (error) {
+      // `catch` gives `unknown`; a thrown non-Error (a string, a rejected value) must not become
+      // a fake Error whose `.message` is undefined at render time.
       if (controller.current === own && !isAbort(error))
-        setState((s) => ({ ...s, loading: false, error: error as Error }));
+        setState((s) => ({ ...s, loading: false, error: toError(error) }));
       return null;
     }
   }, []);

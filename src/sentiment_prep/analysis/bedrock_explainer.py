@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import json
 from importlib import resources
-from typing import Any
+from typing import TYPE_CHECKING
 
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import ImpactReport
+
+if TYPE_CHECKING:
+    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
 
 logger = get_logger(__name__)
 
@@ -24,7 +27,13 @@ def load_prompt() -> str:
 class BedrockExplainer:
     """Uses the Converse API so any Bedrock text model works with the same code."""
 
-    def __init__(self, client: Any, model_id: str) -> None:
+    def __init__(self, client: BedrockRuntimeClient, model_id: str) -> None:
+        """Explain an impact report in prose.
+
+        Args:
+        client: boto3 Bedrock runtime client, shared and owned by the caller.
+        model_id: Text model invoked through the Converse API.
+        """
         self._client = client
         self._model_id = model_id
 

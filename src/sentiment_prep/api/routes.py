@@ -50,6 +50,7 @@ from sentiment_prep.logging_config import bind_context, get_logger
 from sentiment_prep.models import Dataset, DatasetBundle, LabelSummary
 from sentiment_prep.preprocessing import DEFAULT_ORDER
 from sentiment_prep.report import load_rationale, render_report
+from sentiment_prep.sources.base import DataSource
 from sentiment_prep.sources.csv_upload import CsvUploadSource
 from sentiment_prep.storage.checkpoints import (
     CheckpointInfo,
@@ -67,6 +68,11 @@ logger = get_logger(__name__)
 
 PREVIEW_ROWS = 20
 MIN_RECORDS_FOR_TASK = 500
+# How often the disconnect watcher polls while a paid fetch runs. Short enough to stop the next
+# page promptly, long enough not to spin.
+DISCONNECT_POLL_SECONDS = 0.25
+# Upper bound on rows accepted from an uploaded CSV, so a stray file cannot exhaust memory.
+MAX_UPLOAD_RECORDS = 5000
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 RepoDep = Annotated[BundleRepository, Depends(deps.get_repository)]
@@ -124,7 +130,7 @@ async def load_dataset(
     further reads are billed. The ``collected`` checkpoint is written before returning.
     """
     bind_context(source=body.source, limit=body.limit)
-    source: Any = (
+    source: DataSource = (
         deps.get_x_source(query=body.query or "") if body.source == "x" else deps.get_hf_source()
     )
     stop = threading.Event()
@@ -135,7 +141,7 @@ async def load_dataset(
                 logger.warning("client_disconnected_during_fetch")
                 stop.set()
                 return
-            await anyio.sleep(0.25)
+            await anyio.sleep(DISCONNECT_POLL_SECONDS)
 
     async with anyio.create_task_group() as group:
         group.start_soon(watch_disconnect)
@@ -164,7 +170,7 @@ async def upload_dataset(
     repo: RepoDep,
     checkpoints: CheckpointDep,
     file: Annotated[UploadFile, File()],
-    limit: int = 5000,
+    limit: int = MAX_UPLOAD_RECORDS,
 ) -> DatasetSummary:
     """CSV with a ``text`` column and optional ``label``/``id`` columns."""
     content = await file.read()

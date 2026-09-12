@@ -10,10 +10,13 @@ from __future__ import annotations
 import json
 import math
 import random
-from typing import Any
+from typing import TYPE_CHECKING
 
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import Dataset
+
+if TYPE_CHECKING:
+    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
 
 logger = get_logger(__name__)
 
@@ -21,7 +24,21 @@ logger = get_logger(__name__)
 class EmbeddingDrift:
     """Compute mean cosine distance between before/after texts for a fixed sample."""
 
-    def __init__(self, client: Any, model_id: str, sample_size: int = 50, seed: int = 7) -> None:
+    def __init__(
+        self,
+        client: BedrockRuntimeClient,
+        model_id: str,
+        sample_size: int = 50,
+        seed: int = 7,
+    ) -> None:
+        """Measure how far preprocessing moved records in embedding space.
+
+        Args:
+        client: boto3 Bedrock runtime client, shared and owned by the caller.
+        model_id: Embedding model id.
+        sample_size: Records embedded per run; caps the cost of a drift measurement.
+        seed: Fixes the sample so repeated runs on one dataset are comparable.
+        """
         self._client = client
         self._model_id = model_id
         self._sample_size = sample_size

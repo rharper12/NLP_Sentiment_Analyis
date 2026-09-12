@@ -102,6 +102,15 @@ class SpendGuard:
         cost_per_read_usd: float,
         query: str = "",
     ) -> None:
+        """Enforce the read caps for one fetch.
+
+        Args:
+        ledger: Persistent daily counter; the authority on whether budget remains.
+        max_per_fetch: Reads one fetch may bill, however many pages it takes.
+        max_per_day: Reads billable across all fetches in a UTC day.
+        cost_per_read_usd: Published price, for the log line only.
+        query: Search text recorded with the spend, so a bill traces to a topic.
+        """
         self._ledger = ledger
         self._max_per_fetch = max_per_fetch
         self._max_per_day = max_per_day
@@ -114,15 +123,6 @@ class SpendGuard:
     def today() -> str:
         """UTC date key used for the daily ledger."""
         return datetime.now(UTC).strftime("%Y-%m-%d")
-
-    def remaining(self) -> int:
-        """Reads this fetch may still make before either cap is reached.
-
-        Measured against *reserved* reads, so a concurrent fetch's in-flight claim counts.
-        """
-        fetch_left = self._max_per_fetch - self.reads_this_fetch - self._reserved
-        day_left = self._max_per_day - self._ledger.reserved(self.today())
-        return max(0, min(fetch_left, day_left))
 
     def reserve(self, reads: int) -> None:
         """Claim budget for a request that may return up to ``reads`` posts.

@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 from collections import OrderedDict
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from sentiment_prep.errors import NotFoundError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
 
 logger = get_logger(__name__)
 
@@ -55,7 +58,13 @@ class InMemoryRepository:
 class S3Repository:
     """Stores each bundle at ``s3://{bucket}/_work/{dataset_id}.json``."""
 
-    def __init__(self, bucket: str, client: Any) -> None:
+    def __init__(self, bucket: str, client: S3Client) -> None:
+        """Store working bundles as JSON objects in S3.
+
+        Args:
+        bucket: Data bucket. Bundles live under the ``_work/`` prefix.
+        client: boto3 S3 client, shared and owned by the caller.
+        """
         self._bucket = bucket
         self._client = client
 

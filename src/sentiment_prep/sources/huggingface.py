@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -36,6 +37,16 @@ class HuggingFaceSource:
         label_column: str | None,
         client: httpx.Client,
     ) -> None:
+        """Read rows from a public Hugging Face dataset.
+
+        Args:
+        dataset: Hub dataset id, e.g. ``cardiffnlp/tweet_eval``.
+        config: Dataset configuration name.
+        split: Split to read, e.g. ``train``.
+        text_column: Column holding the text.
+        label_column: Column holding the label, or ``None`` for an unlabelled dataset.
+        client: Shared ``httpx.Client``; owned by the caller and never closed here.
+        """
         self._dataset = dataset
         self._config = config
         self._split = split
@@ -105,7 +116,7 @@ class HuggingFaceSource:
             truncated_reason=truncated_reason,
         )
 
-    def _label_for(self, row: dict) -> str | None:  # type: ignore[type-arg]
+    def _label_for(self, row: dict[str, Any]) -> str | None:
         if not self._label_column or self._label_column not in row:
             return None
         raw = row[self._label_column]

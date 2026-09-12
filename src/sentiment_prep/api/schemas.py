@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sentiment_prep.analysis.metrics import DatasetMetrics
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
 from sentiment_prep.models import ImpactReport, Record, SentimentLabel, SourceType
+from sentiment_prep.preprocessing.missing_data import DEFAULT_FILL_VALUE, MAX_FILL_VALUE_CHARS
 from sentiment_prep.storage.checkpoints import CheckpointInfo
 
 
@@ -42,6 +43,14 @@ class StepOptions(BaseModel):
     """Per-step knobs the UI exposes. Unset means the step default."""
 
     missing_data_strategy: Literal["drop", "fill"] = "drop"
+    missing_data_fill_value: str = Field(
+        default=DEFAULT_FILL_VALUE,
+        max_length=MAX_FILL_VALUE_CHARS,
+        description=(
+            "Placeholder written into empty records when the strategy is 'fill'. It becomes a "
+            "token in the vocabulary, so pick something the corpus cannot contain."
+        ),
+    )
     keep_negations: bool = True
 
 

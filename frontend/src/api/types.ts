@@ -29,10 +29,8 @@ export type ReviewPage = S["ReviewPage"];
 export type CheckpointInfo = S["CheckpointInfo"];
 export type CheckpointList = S["CheckpointList"];
 
-export type SourceType = NonNullable<PostRecord["source_type"]>;
 export type LabelSource = NonNullable<PostRecord["label_source"]>;
 export type SentimentLabel = NonNullable<S["ManualLabelItem"]["label"]>;
-export type PriceStatus = LabelEstimate["price_status"];
 export type ReviewMode = S["ReviewRequest"]["mode"];
 export type SampleUnit = NonNullable<S["ReviewRequest"]["unit"]>;
 export type CheckpointStage = CheckpointInfo["stage"];

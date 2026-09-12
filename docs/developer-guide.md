@@ -51,7 +51,19 @@ docs/             you are here
 - No commented-out code. No `print`. No bare `except` outside the enrichment boundary in
   `service.py`, where it is annotated with why.
 
-**Types.** `mypy --strict` passes. Use `Any` only at boto3/httpx boundaries and say so.
+**Linting is the contract, not a habit.** ruff enforces `A, ASYNC, B, BLE, C4, D, DTZ, E, F, I, N,
+PIE, PTH, RET, RUF, SIM, TRY, UP`. `BLE` means every broad `except` must carry a written
+justification; `DTZ` bans timezone-naive datetimes (this code deals in money and daily caps);
+`PTH` keeps filesystem work on `pathlib`. Two rules are switched off deliberately: `TRY003`
+(user-facing exception messages are written out in full) and `TRY400` (`logger.error(...,
+exc_info=True)` is intentional; `.exception()` would duplicate the message).
+
+**Types.** `mypy --strict` passes. AWS clients are typed with `boto3-stubs`
+(`ComprehendClient`, `S3Client`, `BedrockRuntimeClient`, `PricingClient`) imported under
+`TYPE_CHECKING`, so the stubs cost nothing at runtime. `Any` survives in four places only, each
+with a comment saying why: the generic `_boto_client` factory (boto3's overloads are keyed on
+literal service names), `**extra` kwargs, structlog's renderer, and the raw JSON dicts from the
+Price List API. Nothing else should need it.
 
 **Logging.** `log.info("event_name", key=value)`. Event names are snake_case identifiers, not
 sentences. Never log record text above DEBUG. See [logging-and-debugging.md](logging-and-debugging.md).

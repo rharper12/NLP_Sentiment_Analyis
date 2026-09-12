@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -20,6 +20,8 @@ from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import CheckpointStage
 
 if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
+
     from sentiment_prep.models import DatasetBundle
 
 logger = get_logger(__name__)
@@ -28,6 +30,7 @@ logger = get_logger(__name__)
 Stage = CheckpointStage
 STAGES: tuple[Stage, ...] = ("collected", "processed", "labelled")
 Format = Literal["csv", "parquet"]
+FORMATS: tuple[Format, ...] = ("csv", "parquet")
 
 
 class CheckpointInfo(BaseModel):
@@ -84,7 +87,7 @@ class LocalCheckpointStore:
             return []
         found: list[CheckpointInfo] = []
         for stage in STAGES:
-            for fmt in ("csv", "parquet"):
+            for fmt in FORMATS:
                 path = folder / _name(stage, fmt)
                 if path.exists():
                     stat = path.stat()
@@ -103,7 +106,14 @@ class LocalCheckpointStore:
 class S3CheckpointStore:
     """Objects at ``s3://{bucket}/{prefix}/{dataset_id}/{stage}.{fmt}``."""
 
-    def __init__(self, bucket: str, prefix: str, client: Any) -> None:
+    def __init__(self, bucket: str, prefix: str, client: S3Client) -> None:
+        """Write stage snapshots to a bucket.
+
+        Args:
+        bucket: Destination bucket for stage snapshots.
+        prefix: Key prefix; each dataset gets a folder beneath it.
+        client: boto3 S3 client, shared and owned by the caller.
+        """
         from boto3.s3.transfer import TransferConfig
 
         self._bucket = bucket
@@ -163,8 +173,12 @@ class S3CheckpointStore:
         found: list[CheckpointInfo] = []
         for obj in response.get("Contents", []):
             name = obj["Key"].rsplit("/", 1)[-1]
-            stage, _, fmt = name.partition(".")
-            if stage in STAGES and fmt in ("csv", "parquet"):
+            stage_name, _, fmt_name = name.partition(".")
+            # Narrow the parsed strings before trusting them: anything else in this prefix is not
+            # a checkpoint and is skipped rather than turned into a malformed record.
+            stage = next((s for s in STAGES if s == stage_name), None)
+            fmt = next((f for f in FORMATS if f == fmt_name), None)
+            if stage and fmt:
                 found.append(
                     CheckpointInfo(
                         stage=stage,
@@ -187,7 +201,9 @@ def checkpoint_bundle(store: CheckpointStore, bundle: DatasetBundle, stage: Stag
 
     try:
         info = store.save(bundle.dataset_id, stage, "csv", to_csv(bundle))
-    except Exception:  # noqa: BLE001 - see docstring
+    # Broad by design: a checkpoint is a safety net. Losing one must not fail the request that
+    # just spent money, which is the very request the checkpoint exists to protect.
+    except Exception:
         logger.error("checkpoint_failed", stage=stage, exc_info=True)
         return bundle
     return bundle.model_copy(update={"checkpoints": {**bundle.checkpoints, stage: info.uri}})

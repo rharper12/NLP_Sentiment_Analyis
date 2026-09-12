@@ -54,7 +54,7 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
 export const initialConfig: PipelineConfig = {
   order: [],
   enabled: {},
-  options: { missing_data_strategy: "drop", keep_negations: true },
+  options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: true },
   explain: true,
 };
 
@@ -62,12 +62,4 @@ export function usePipelineConfig() {
   const [config, dispatch] = useReducer(reduce, initialConfig);
   const activeSteps = config.order.filter((name) => config.enabled[name]);
   return { config, dispatch, activeSteps };
-}
-
-/** Stable string used to detect whether the current config differs from the last run. */
-export function configSignature(config: PipelineConfig): string {
-  return JSON.stringify([
-    config.order.filter((n) => config.enabled[n]),
-    config.options,
-  ]);
 }

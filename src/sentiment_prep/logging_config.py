@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars, get_contextvars
@@ -97,7 +97,7 @@ def configure_logging(level: str = "INFO", json_output: bool | None = None) -> N
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Module logger. Bound context (see ``bind_context``) is merged in automatically."""
-    return structlog.get_logger(name)  # type: ignore[no-any-return]
+    return cast("structlog.stdlib.BoundLogger", structlog.get_logger(name))
 
 
 def bind_context(**values: Any) -> None:

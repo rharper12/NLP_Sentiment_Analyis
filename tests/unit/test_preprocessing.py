@@ -1,5 +1,6 @@
 import pytest
 
+from sentiment_prep.errors import ValidationError
 from sentiment_prep.models import Dataset, Record
 from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_REGISTRY, Pipeline
 from sentiment_prep.preprocessing.lemmatize import LemmatizeStep
@@ -91,3 +92,16 @@ def test_pipeline_is_fast_enough():
     started = time.perf_counter()
     Pipeline([STEP_REGISTRY[n]() for n in DEFAULT_ORDER]).run(big)
     assert time.perf_counter() - started < 5
+
+
+def test_missing_data_fill_value_is_configurable_and_validated():
+    """The placeholder becomes a real token, so a blank one must be refused, not silently used."""
+    filled = MissingDataStep("fill", fill_value="<<none>>").transform(rec("   "))
+    assert filled is not None and filled.text == "<<none>>"
+    # Surrounding whitespace is trimmed rather than turned into a token with spaces in it.
+    assert MissingDataStep("fill", fill_value="  [NA]  ").transform(rec("")).text == "[NA]"
+    for bad in ("", "   ", "x" * 41):
+        with pytest.raises(ValidationError):
+            MissingDataStep("fill", fill_value=bad)
+    # The value is irrelevant when dropping, so it is not validated there.
+    assert MissingDataStep("drop", fill_value="").transform(rec("ok")) is not None

@@ -7,6 +7,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from sentiment_prep.export.rows import ROW_COLUMNS, bundle_rows
 from sentiment_prep.models import DatasetBundle
@@ -48,7 +49,8 @@ def to_excel(bundle: DatasetBundle) -> bytes:
     return buffer.getvalue()
 
 
-def _write_sheet(sheet, columns: list[str], rows: list[list[object]]) -> None:  # type: ignore[no-untyped-def]
+def _write_sheet(sheet: Worksheet, columns: list[str], rows: list[list[object]]) -> None:
+    """Write a header row and body, then size and freeze the header."""
     sheet.append(columns)
     for cell in sheet[1]:
         cell.font = Font(bold=True)

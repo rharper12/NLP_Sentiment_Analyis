@@ -15,7 +15,11 @@ import hashlib
 from collections import Counter
 from collections.abc import Iterable
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+if TYPE_CHECKING:
+    from mypy_boto3_comprehend.client import ComprehendClient
+    from mypy_boto3_comprehend.literals import LanguageCodeType
 
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import Dataset, SentimentComparison
@@ -49,7 +53,7 @@ def count_units(texts: Iterable[str], unit_chars: int, min_units: int) -> int:
         min_units: Minimum units charged per document (3 for sentiment).
 
     Returns:
-        The number of units Comprehend would bill. No price is applied; see ``estimate_cost``.
+        The number of units Comprehend would bill. No price is applied; see ``cost_for_units``.
     """
     return sum(billable_units(t, unit_chars, min_units) for t in texts)
 
@@ -73,7 +77,14 @@ def cost_for_units(units: int, price_per_unit: Decimal) -> Decimal:
 class ComprehendScorer:
     """Label records; compare two labelled datasets."""
 
-    def __init__(self, client: Any, language_code: str = "en") -> None:
+    def __init__(self, client: ComprehendClient, language_code: LanguageCodeType = "en") -> None:
+        """Score documents with Amazon Comprehend.
+
+        Args:
+        client: boto3 Comprehend client, shared and owned by the caller.
+        language_code: Language passed to Comprehend; documents in other languages are
+            rejected by the service rather than mislabelled.
+        """
         self._client = client
         self._language = language_code
         self._cache: dict[str, SentimentLabel] = {}
@@ -114,16 +125,18 @@ class ComprehendScorer:
 
     def _score_batch(self, texts: list[str]) -> None:
         response = self._client.batch_detect_sentiment(TextList=texts, LanguageCode=self._language)
-        for item in response.get("ResultList", []):
-            label = str(item["Sentiment"]).lower()
-            scores = item.get("SentimentScore", {})
-            confidence = scores.get(str(item["Sentiment"]).capitalize())
-            self._cache[self._key(texts[item["Index"]])] = SentimentLabel(
-                label, round(float(confidence), 4) if confidence is not None else None
+        for result in response.get("ResultList", []):
+            sentiment = result["Sentiment"]
+            # SentimentScore is keyed by the capitalised class name, e.g. {"Positive": 0.98}.
+            # The stub types it as a heterogeneous dict, so narrow before rounding.
+            score = result.get("SentimentScore", {}).get(sentiment.capitalize())
+            confidence = round(score, 4) if isinstance(score, float) else None
+            self._cache[self._key(texts[result["Index"]])] = SentimentLabel(
+                sentiment.lower(), confidence
             )
-        for item in response.get("ErrorList", []):
-            self._cache[self._key(texts[item["Index"]])] = SentimentLabel("error", None)
-            logger.warning("comprehend_rejected_document", code=item.get("ErrorCode"))
+        for failure in response.get("ErrorList", []):
+            self._cache[self._key(texts[failure["Index"]])] = SentimentLabel("error", None)
+            logger.warning("comprehend_rejected_document", code=failure.get("ErrorCode"))
         logger.info("comprehend_batch_scored", documents=len(texts))
 
     @staticmethod

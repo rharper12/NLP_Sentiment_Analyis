@@ -597,6 +597,8 @@ export interface components {
             diagnostics: boolean;
             /** X Configured */
             x_configured: boolean;
+            /** Auth Required */
+            auth_required: boolean;
             /** Runtime */
             runtime?: string | null;
             /** Database */
@@ -987,6 +989,12 @@ export interface components {
              */
             missing_data_strategy: "drop" | "fill";
             /**
+             * Missing Data Fill Value
+             * @description Placeholder written into empty records when the strategy is 'fill'. It becomes a token in the vocabulary, so pick something the corpus cannot contain.
+             * @default [EMPTY]
+             */
+            missing_data_fill_value: string;
+            /**
              * Keep Negations
              * @default true
              */
@@ -1069,7 +1077,9 @@ export interface operations {
     load_dataset_dataset_load_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1113,7 +1123,9 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1155,7 +1167,9 @@ export interface operations {
     get_dataset_dataset__dataset_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1200,7 +1214,9 @@ export interface operations {
                 /** @description Case-insensitive substring on original text */
                 search?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1240,7 +1256,9 @@ export interface operations {
     list_steps_steps_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1278,7 +1296,9 @@ export interface operations {
     preprocess_dataset__dataset_id__preprocess_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1322,7 +1342,9 @@ export interface operations {
     label_summary_dataset__dataset_id__labels_summary_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1362,7 +1384,9 @@ export interface operations {
     label_estimate_dataset__dataset_id__labels_estimate_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1402,7 +1426,9 @@ export interface operations {
     label_comprehend_dataset__dataset_id__labels_comprehend_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1449,7 +1475,9 @@ export interface operations {
                 offset?: number;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1489,7 +1517,9 @@ export interface operations {
     choose_review_dataset__dataset_id__labels_review_put: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1533,7 +1563,9 @@ export interface operations {
     manual_labels_dataset__dataset_id__labels_manual_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1577,7 +1609,9 @@ export interface operations {
     list_checkpoints_dataset__dataset_id__checkpoints_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1617,7 +1651,9 @@ export interface operations {
     convert_checkpoint_dataset__dataset_id__checkpoints__stage__parquet_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
                 stage: "collected" | "processed" | "labelled";
@@ -1658,7 +1694,9 @@ export interface operations {
     export_csv_dataset__dataset_id__export_csv_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1696,7 +1734,9 @@ export interface operations {
     export_excel_dataset__dataset_id__export_xlsx_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1734,7 +1774,9 @@ export interface operations {
     export_parquet_dataset__dataset_id__export_parquet_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1772,7 +1814,9 @@ export interface operations {
     export_report_dataset__dataset_id__report_md_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1810,7 +1854,9 @@ export interface operations {
     save_dataset_dataset__dataset_id__save_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path: {
                 dataset_id: string;
             };
@@ -1852,7 +1898,9 @@ export interface operations {
             query?: {
                 include_x_usage?: boolean;
             };
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1892,7 +1940,9 @@ export interface operations {
             query?: {
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

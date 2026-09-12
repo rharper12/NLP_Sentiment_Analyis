@@ -2,6 +2,9 @@ import type { StepInfo } from "../../api/types";
 import type { PipelineConfig } from "../../hooks/usePipelineConfig";
 import { Skeleton } from "../ui/Skeleton";
 
+/** Mirrors MAX_FILL_VALUE_CHARS in preprocessing/missing_data.py. */
+const MAX_FILL_VALUE = 40;
+
 interface Props {
   steps: StepInfo[];
   config: PipelineConfig;
@@ -25,6 +28,11 @@ const GROUPS: { title: string; blurb: string; steps: string[] }[] = [
 export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, onExplain, onRun, onBack }: Props) {
   const byName = new Map(steps.map((s) => [s.name, s]));
   const active = config.order.filter((n) => config.enabled[n]);
+  // A blank placeholder would leave the record empty and defeat the step, so the run is blocked
+  // rather than letting the server reject it after the person has waited.
+  const fillValid =
+    config.options.missing_data_strategy !== "fill" ||
+    config.options.missing_data_fill_value.trim().length > 0;
 
   return (
     <section className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -77,13 +85,39 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                           </label>
                         )}
                         {on && name === "missing_data" && (
-                          <label className="col-start-2 col-span-2 flex items-center gap-2 text-sm">
-                            Empty text:
-                            <select className="field w-auto py-1" value={config.options.missing_data_strategy} onChange={(e) => onOptions({ missing_data_strategy: e.target.value as "drop" | "fill" })}>
-                              <option value="drop">drop the row</option>
-                              <option value="fill">fill with [EMPTY]</option>
-                            </select>
-                          </label>
+                          <div className="col-start-2 col-span-2 flex flex-wrap items-center gap-2 text-sm">
+                            <label className="flex items-center gap-2">
+                              Empty text:
+                              <select
+                                className="field w-auto py-1"
+                                value={config.options.missing_data_strategy}
+                                onChange={(e) => onOptions({ missing_data_strategy: e.target.value as "drop" | "fill" })}
+                              >
+                                <option value="drop">drop the row</option>
+                                <option value="fill">fill with a placeholder</option>
+                              </select>
+                            </label>
+                            {config.options.missing_data_strategy === "fill" && (
+                              <>
+                                <label className="flex items-center gap-2">
+                                  Placeholder:
+                                  <input
+                                    className="field tnum w-40 py-1"
+                                    value={config.options.missing_data_fill_value}
+                                    maxLength={MAX_FILL_VALUE}
+                                    aria-invalid={!fillValid}
+                                    aria-describedby="fill-help"
+                                    onChange={(e) => onOptions({ missing_data_fill_value: e.target.value })}
+                                  />
+                                </label>
+                                <p id="fill-help" className={`w-full text-xs ${fillValid ? "text-muted" : "text-warn-ink"}`}>
+                                  {fillValid
+                                    ? "Becomes a token in the vocabulary, so pick something the posts cannot contain."
+                                    : `Enter a placeholder of 1–${MAX_FILL_VALUE} characters.`}
+                                </p>
+                              </>
+                            )}
+                          </div>
                         )}
                       </li>
                     );
@@ -106,7 +140,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
               <input type="checkbox" className="mt-1 accent-accent" checked={config.explain} onChange={(e) => onExplain(e.target.checked)} />
               <span>Ask the model to explain the results in plain English <span className="text-muted">(uses Bedrock)</span></span>
             </label>
-            <button type="button" className="btn-primary" disabled={busy || active.length === 0} onClick={onRun}>
+            <button type="button" className="btn-primary" disabled={busy || active.length === 0 || !fillValid} onClick={onRun}>
               {busy ? "Running…" : "Run pipeline and measure →"}
             </button>
             <button type="button" className="btn-link self-start" onClick={onBack}>← Back to Collect</button>
@@ -117,7 +151,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
 
       <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-3 border-t border-rule bg-surface/95 px-4 py-3 backdrop-blur lg:hidden">
         <span className="tnum text-sm text-muted">{active.length} of {steps.length} steps on</span>
-        <button type="button" className="btn-primary" disabled={busy || active.length === 0} onClick={onRun}>{busy ? "Running…" : "Run and measure →"}</button>
+        <button type="button" className="btn-primary" disabled={busy || active.length === 0 || !fillValid} onClick={onRun}>{busy ? "Running…" : "Run and measure →"}</button>
       </div>
     </section>
   );

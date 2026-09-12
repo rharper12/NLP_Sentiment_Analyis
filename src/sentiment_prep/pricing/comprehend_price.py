@@ -16,12 +16,15 @@ import datetime as dt
 import json
 import re
 from decimal import Decimal
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 from sentiment_prep.history import services as history
 from sentiment_prep.logging_config import get_logger
+
+if TYPE_CHECKING:
+    from mypy_boto3_pricing.client import PricingClient
 
 logger = get_logger(__name__)
 
@@ -88,7 +91,7 @@ def _first_tier_price(product: dict[str, Any]) -> tuple[Decimal, str] | None:
     return best
 
 
-def fetch_rate(client: Any, region: str) -> PriceQuote | None:
+def fetch_rate(client: PricingClient, region: str) -> PriceQuote | None:
     """Query the Price List API once. Returns ``None`` when no sentiment SKU is found."""
     paginator = client.get_paginator("get_products")
     pages = paginator.paginate(
@@ -119,7 +122,7 @@ def fetch_rate(client: Any, region: str) -> PriceQuote | None:
     return None
 
 
-def current_rate(client: Any | None, region: str, cache_hours: int) -> PriceQuote | None:
+def current_rate(client: PricingClient | None, region: str, cache_hours: int) -> PriceQuote | None:
     """Cached rate if fresh; else a live lookup; else the stale cache; else ``None``."""
     cached = history.get_price_quote(SERVICE_CODE, region)
     now = dt.datetime.now(dt.UTC)

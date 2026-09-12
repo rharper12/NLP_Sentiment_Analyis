@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from collections import Counter
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
@@ -21,6 +21,9 @@ from sentiment_prep.errors import ValidationError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle, LabelSummary, Record, SentimentLabel
 from sentiment_prep.pricing.comprehend_price import PriceQuote, PriceStatus
+
+if TYPE_CHECKING:
+    from mypy_boto3_comprehend.client import ComprehendClient
 
 logger = get_logger(__name__)
 
@@ -107,7 +110,7 @@ def estimate(bundle: DatasetBundle, settings: Settings, rate: PriceQuote | None)
 
 def label_with_comprehend(
     bundle: DatasetBundle,
-    client: Any,
+    client: ComprehendClient,
     settings: Settings,
     max_records: int,
     rate: PriceQuote | None = None,

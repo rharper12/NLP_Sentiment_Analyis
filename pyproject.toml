@@ -27,7 +27,7 @@ dev = [
     "ruff",
     "mypy",
     "types-PyYAML",
-    "boto3-stubs[s3,comprehend,bedrock-runtime,ssm]",
+    "boto3-stubs[bedrock-runtime,comprehend,pricing,s3,ssm]",
 ]
 
 [build-system]
@@ -46,8 +46,18 @@ target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "N", "D"]
-ignore = ["D203", "D212", "D107", "D102", "D105", "D106"]  # interface impls are documented on the base class
+# Beyond style: BLE forces every broad `except` to carry a justification, DTZ bans timezone-naive
+# datetimes (this code deals in money and daily caps), PTH keeps filesystem work on pathlib, and
+# TRY/RET/SIM catch the control-flow habits that make code hard to follow later.
+select = [
+    "A", "ASYNC", "B", "BLE", "C4", "D", "DTZ", "E", "F", "I",
+    "N", "PIE", "PTH", "RET", "RUF", "SIM", "TRY", "UP",
+]
+ignore = [
+    "D203", "D212", "D107", "D102", "D105", "D106",
+    "TRY003",  # user-facing exception messages are written out in full, not in exception names
+    "TRY400",  # logger.error with exc_info is deliberate; .exception() duplicates the message
+]  # interface impls are documented on the base class
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

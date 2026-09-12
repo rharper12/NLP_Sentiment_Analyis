@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING
 
 from sentiment_prep import __version__
 from sentiment_prep.export.parquet_export import to_parquet
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
 
 logger = get_logger(__name__)
 
@@ -22,7 +25,14 @@ logger = get_logger(__name__)
 class S3Store:
     """Save a bundle under ``s3://{bucket}/{prefix}/{dataset_id}/{timestamp}/``."""
 
-    def __init__(self, bucket: str, prefix: str, client: Any) -> None:
+    def __init__(self, bucket: str, prefix: str, client: S3Client) -> None:
+        """Write user-facing saves to a bucket.
+
+        Args:
+        bucket: Destination bucket for user-facing saves.
+        prefix: Key prefix, one folder per dataset and timestamp beneath it.
+        client: boto3 S3 client, shared and owned by the caller.
+        """
         self._bucket = bucket
         self._prefix = prefix.strip("/")
         self._client = client

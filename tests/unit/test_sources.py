@@ -22,7 +22,7 @@ def post(i: int, lang: str = "en") -> dict:
     }
 
 
-def x_client(pages: list[httpx.Response]) -> httpx.Client:  # noqa: D103
+def x_client(pages: list[httpx.Response]) -> httpx.Client:
     calls = iter(pages)
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -31,8 +31,19 @@ def x_client(pages: list[httpx.Response]) -> httpx.Client:  # noqa: D103
     return httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.x.test/2")
 
 
+_LEDGERS: dict[int, InMemoryLedger] = {}
+
+
 def guard(per_fetch=1000, per_day=3000) -> SpendGuard:
-    return SpendGuard(InMemoryLedger(), per_fetch, per_day, 0.005)
+    ledger = InMemoryLedger()
+    g = SpendGuard(ledger, per_fetch, per_day, 0.005)
+    _LEDGERS[id(g)] = ledger
+    return g
+
+
+def ledger_of(g: SpendGuard) -> InMemoryLedger:
+    """The ledger a test guard was built with, so assertions go through the real interface."""
+    return _LEDGERS[id(g)]
 
 
 def test_x_paginates_until_limit():
@@ -184,14 +195,17 @@ def test_x_upstream_failures_become_actionable_errors():
         with pytest.raises(ExternalServiceError) as caught:
             source.fetch(100, query="q")
         assert phrase in str(caught.value) and str(status) in str(caught.value)
-        assert g.remaining() == 1000  # reservation handed back, nothing stranded
+        assert ledger_of(g).reserved(SpendGuard.today()) == 0  # nothing stranded
 
 
 def test_release_returns_budget_to_the_day():
     """An unused reservation must not strand budget until midnight."""
     ledger = InMemoryLedger()
-    g = SpendGuard(ledger, max_per_fetch=1000, max_per_day=100, cost_per_read_usd=0.005)
-    g.reserve(100)
-    assert g.remaining() == 0
-    g.release()
-    assert g.remaining() == 100
+    guard_ = SpendGuard(ledger, max_per_fetch=1000, max_per_day=100, cost_per_read_usd=0.005)
+    today = SpendGuard.today()
+    guard_.reserve(100)
+    assert ledger.reserved(today) == 100
+    assert ledger.reserve(today, 1, max_per_day=100) is False  # budget is fully committed
+    guard_.release()
+    assert ledger.reserved(today) == 0
+    assert ledger.reserve(today, 100, max_per_day=100) is True

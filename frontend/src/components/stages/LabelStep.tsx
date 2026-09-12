@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, isAbort } from "../../api/client";
 import type { LabelEstimate, LabelSummary } from "../../api/types";
-import { useAsync } from "../../hooks/useAsync";
+import { toError, useAsync } from "../../hooks/useAsync";
 import { ConfirmDialog } from "../label/ConfirmDialog";
 import { CostChip } from "../label/CostChip";
 import { ReviewChoice } from "../label/ReviewChoice";
@@ -68,7 +68,7 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
         if (p.done || p.labelled_in_call === 0) break;
       }
     } catch (e) {
-      if (!isAbort(e)) setError(e as Error);
+      if (!isAbort(e)) setError(toError(e));
     } finally {
       labelling.current = null;
       await refresh();
@@ -137,7 +137,7 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
           const s = await api.chooseReview(datasetId, mode, size, unit);
           summary.run(() => Promise.resolve(s));
           setPhase(mode === "none" ? "summary" : "reviewing");
-        } catch (e) { setError(e as Error); }
+        } catch (e) { setError(toError(e)); }
       }} onBack={() => setPhase("method")} />}
 
       {phase === "reviewing" && <Reviewer datasetId={datasetId} onError={setError} onDone={async () => { await refresh(); setPhase("summary"); }} />}
