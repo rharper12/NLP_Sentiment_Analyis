@@ -88,3 +88,17 @@ class PriceQuoteRow(Base):
     unit: Mapped[str] = mapped_column(String(64), default="")
     sku: Mapped[str] = mapped_column(String(64), default="")
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SpendDay(Base):
+    """Running total of reserved reads for one day.
+
+    Separate from ``SpendEntry``, which is the append-only audit trail. This row exists so the
+    cap check and the increment can be one conditional ``UPDATE``: without it, two processes can
+    read the same total and both decide they have room.
+    """
+
+    __tablename__ = "spend_day"
+
+    day: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    reads: Mapped[int] = mapped_column(Integer, default=0)

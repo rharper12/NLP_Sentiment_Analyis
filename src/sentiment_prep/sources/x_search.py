@@ -87,8 +87,14 @@ class XSearchSource:
                 logger.warning("x_fetch_truncated_by_cap", reason=capped.reason)
                 break
 
-            payload = self._get_page(full_query, page_size, next_token)
+            try:
+                payload = self._get_page(full_query, page_size, next_token)
+            except httpx.HTTPError:
+                # Nothing was billed, so hand the reservation back before giving up.
+                self._guard.release()
+                raise
             if payload is None:
+                self._guard.release()
                 truncated_reason = "rate limited after retries"
                 break
 

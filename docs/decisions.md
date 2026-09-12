@@ -2,6 +2,15 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-17: The daily spend cap is enforced by the database, not the application
+The guard used to read the day's total, decide, then write — so two concurrent fetches could each
+pass a check only one should. A `spend_day` counter row is now incremented by a single conditional
+`UPDATE … WHERE reads + :n <= :cap`; a zero row count means someone else took the last of the
+budget. Reservations are claimed before the request goes out and the unused part is released when
+the page returns fewer posts than requested, so a cancelled or failed fetch does not strand budget.
+`spend_entry` stays as the append-only audit trail of what was actually billed. Cost: one more
+table and a two-step reserve/settle protocol instead of a single `add`.
+
 ## ADR-16: React 19, generated API types, and a real frontend toolchain
 A code review found the frontend was the weak half: React 18 against a React 19 standard, no
 ESLint (so `react-hooks/exhaustive-deps` was not enforced, and it found eight issues on its first

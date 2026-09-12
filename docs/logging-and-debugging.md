@@ -58,7 +58,8 @@ Locally, `make local-api` prints coloured lines; pipe through `grep request_id=<
 | `dataset_stored` | routes | records, source |
 | `x_fetch_started` / `x_page_received` / `x_fetch_complete` | sources.x_search | query, requested, returned, reads_billed |
 | `x_fetch_truncated_by_cap` / `x_rate_limited` | sources.x_search | reason / attempt, wait_seconds |
-| `x_reads_consumed` | spend_guard | reads, reads_this_fetch, reads_today, estimated_cost_usd |
+| `x_reads_consumed` | spend_guard | reads, released, reads_this_fetch, reads_today, estimated_cost_usd |
+| `spend_reservation_refused` | history.services | day, reads, cap |
 | `client_disconnected_during_fetch` | routes | (request context) |
 | `hugging_face_fetch_complete` / `csv_parsed` | sources | returned, skipped_empty |
 | `step_applied` | preprocessing.base | all StepResult fields except sample_diffs |

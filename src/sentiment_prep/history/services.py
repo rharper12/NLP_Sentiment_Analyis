@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import datetime as dt
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from sentiment_prep.history.db import session
-from sentiment_prep.history.models import DatasetRun, PipelineRun, PriceQuoteRow, SpendEntry
+from sentiment_prep.history.models import (
+    DatasetRun,
+    PipelineRun,
+    PriceQuoteRow,
+    SpendDay,
+    SpendEntry,
+)
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
 
@@ -169,10 +176,12 @@ def put_price_quote(quote: PriceQuote) -> None:
 
 
 class DbLedger:
-    """``SpendLedger`` backed by ``spend_entry`` rows.
+    """``SpendLedger`` backed by a conditional counter plus an append-only audit trail.
 
-    Append-only, so concurrent Lambda invocations cannot overwrite each other's counts the way a
-    single JSON object in S3 could.
+    ``spend_day`` holds the reserved total and is the thing the cap is enforced against; a
+    reservation is a single ``UPDATE … WHERE reads + :n <= :cap``, so the database, not the
+    application, decides whether there is room. ``spend_entry`` records what was actually billed
+    and is what the spend panel reports.
     """
 
     def __init__(self, cost_per_read_usd: float, query: str = "") -> None:
@@ -180,6 +189,7 @@ class DbLedger:
         self._query = query
 
     def get(self, day: str) -> int:
+        """Reads actually billed for ``day`` (the audit trail, not the reservation counter)."""
         with session() as s:
             total = s.scalar(
                 select(func.coalesce(func.sum(SpendEntry.reads), 0)).where(
@@ -188,14 +198,47 @@ class DbLedger:
             )
         return int(total or 0)
 
-    def add(self, day: str, reads: int) -> int:
+    def reserve(self, day: str, reads: int, max_per_day: int) -> bool:
+        """Claim ``reads`` against the day's cap in one statement.
+
+        The conditional ``UPDATE`` is the lock: the row is write-locked for the duration, and a
+        zero row count means another caller took the remaining budget first.
+        """
+        date = dt.date.fromisoformat(day)
         with session() as s:
-            s.add(
-                SpendEntry(
-                    day=dt.date.fromisoformat(day),
-                    reads=reads,
-                    cost_usd=self._cost * reads,
-                    query=self._query[:500],
-                )
+            if s.get(SpendDay, date) is None:
+                try:
+                    with s.begin_nested():  # savepoint: a concurrent insert is expected, not fatal
+                        s.add(SpendDay(day=date, reads=0))
+                except IntegrityError:
+                    pass
+            result = s.execute(
+                update(SpendDay)
+                .where(SpendDay.day == date, SpendDay.reads + reads <= max_per_day)
+                .values(reads=SpendDay.reads + reads)
             )
+            claimed = cast("CursorResult[Any]", result).rowcount
+        if not claimed:
+            logger.warning("spend_reservation_refused", day=day, reads=reads, cap=max_per_day)
+        return bool(claimed)
+
+    def settle(self, day: str, reserved: int, actual: int, query: str) -> int:
+        """Write the audit row and release whatever part of the reservation went unused."""
+        date = dt.date.fromisoformat(day)
+        with session() as s:
+            if actual:
+                s.add(
+                    SpendEntry(
+                        day=date,
+                        reads=actual,
+                        cost_usd=self._cost * actual,
+                        query=(query or self._query)[:500],
+                    )
+                )
+            if reserved != actual:
+                s.execute(
+                    update(SpendDay)
+                    .where(SpendDay.day == date)
+                    .values(reads=func.max(SpendDay.reads - (reserved - actual), 0))
+                )
         return self.get(day)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, isAbort } from "../../api/client";
-import { SENTIMENT_LABELS, type Record, type SentimentLabel } from "../../api/types";
+import { SENTIMENT_LABELS, type PostRecord, type SentimentLabel } from "../../api/types";
 import { SkeletonLines } from "../ui/Skeleton";
 
 import { InfoIcon } from "./InfoIcon";
@@ -19,7 +19,7 @@ interface Props {
  * reviewer advances.
  */
 export function Reviewer({ datasetId, onError, onDone }: Props) {
-  const [items, setItems] = useState<Record[]>([]);
+  const [items, setItems] = useState<PostRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [index, setIndex] = useState(0);
   const [decisions, setDecisions] = useState<{ [id: string]: SentimentLabel }>({});

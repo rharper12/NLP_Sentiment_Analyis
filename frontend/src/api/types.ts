@@ -7,7 +7,8 @@ import type { components } from "./schema";
 
 type S = components["schemas"];
 
-export type Record = S["Record"];
+/** One collected post. Named PostRecord so it cannot shadow TypeScript's built-in Record<K, V>. */
+export type PostRecord = S["Record"];
 export type DatasetSummary = S["DatasetSummary"];
 export type StepInfo = S["StepInfo"];
 export type StepResult = S["StepResult"];
@@ -28,8 +29,8 @@ export type ReviewPage = S["ReviewPage"];
 export type CheckpointInfo = S["CheckpointInfo"];
 export type CheckpointList = S["CheckpointList"];
 
-export type SourceType = NonNullable<Record["source_type"]>;
-export type LabelSource = NonNullable<Record["label_source"]>;
+export type SourceType = NonNullable<PostRecord["source_type"]>;
+export type LabelSource = NonNullable<PostRecord["label_source"]>;
 export type SentimentLabel = NonNullable<S["ManualLabelItem"]["label"]>;
 export type PriceStatus = LabelEstimate["price_status"];
 export type ReviewMode = S["ReviewRequest"]["mode"];

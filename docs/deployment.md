@@ -66,8 +66,8 @@ If you add a service call to the code, add exactly one statement here, in the sa
 
 ## Database
 
-**Upgrading an existing deployment:** the cached-price column changed from `Float` to
-`Numeric(12, 6)`. `create_all` does not alter existing tables, so on SQLite delete the file (it is
+**Upgrading an existing deployment:** a `spend_day` table was added (created automatically) and
+the cached-price column changed from `Float` to `Numeric(12, 6)`. `create_all` does not alter existing tables, so on SQLite delete the file (it is
 a cache; it rebuilds) and on Postgres run
 `ALTER TABLE price_quote ALTER COLUMN price_per_unit_usd TYPE numeric(12,6);` before deploying.
 

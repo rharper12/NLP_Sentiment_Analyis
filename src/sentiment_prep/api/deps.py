@@ -128,6 +128,7 @@ def get_x_source(query: str = "") -> XSearchSource:
         max_per_fetch=settings.x_max_reads_per_fetch,
         max_per_day=settings.x_max_reads_per_day,
         cost_per_read_usd=settings.x_cost_per_read_usd,
+        query=query,
     )
     return XSearchSource(guard=guard, client=_http_client(settings.x_api_base_url, token))
 

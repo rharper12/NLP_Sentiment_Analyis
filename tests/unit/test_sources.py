@@ -88,21 +88,39 @@ def test_x_filters_short_and_non_english():
     assert [r.id for r in ds.records] == ["1"]
 
 
-def test_spend_guard_daily_cap():
+def test_db_ledger_reservations_are_atomic_and_capped():
+    """The cap is enforced by the database, not by a read-then-write in the application."""
+    ledger = DbLedger(0.005, query="test")
+    day = "2030-01-01"
+    assert ledger.get(day) == 0
+
+    assert ledger.reserve(day, 40, max_per_day=50) is True
+    assert ledger.settle(day, reserved=40, actual=40, query="q") == 40
+
+    # A second caller sees the first reservation and is refused rather than both squeezing in.
+    assert ledger.reserve(day, 20, max_per_day=50) is False
+    assert ledger.reserve(day, 10, max_per_day=50) is True
+    assert DbLedger(0.005).get(day) == 40  # reserved, not yet billed
+
+
+def test_db_ledger_releases_the_unused_part_of_a_reservation():
+    """A page that returns fewer posts than requested must hand the difference back."""
+    ledger = DbLedger(0.005)
+    day = "2030-01-02"
+    assert ledger.reserve(day, 100, max_per_day=100) is True
+    assert ledger.reserve(day, 1, max_per_day=100) is False
+    ledger.settle(day, reserved=100, actual=10, query="q")
+    assert ledger.get(day) == 10
+    # 90 reads went back into the day's budget, so the next reservation fits.
+    assert ledger.reserve(day, 80, max_per_day=100) is True
+
+
+def test_guard_refuses_when_the_ledger_refuses():
     g = guard(per_day=50)
     g.reserve(50)
     g.record(50)
     with pytest.raises(SpendCapReachedError):
         g.reserve(1)
-
-
-def test_db_ledger_is_append_only():
-    ledger = DbLedger(0.005, query="test")
-    day = "2030-01-01"
-    assert ledger.get(day) == 0
-    ledger.add(day, 40)
-    ledger.add(day, 10)
-    assert DbLedger(0.005).get(day) == 50
 
 
 def test_x_fetch_stops_when_cancelled():
