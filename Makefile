@@ -47,7 +47,8 @@ deploy: build ## Deploy the API stack
 deploy-site: ## Build the UI against the deployed API and upload it to the site bucket
 	$(eval API_URL := $(shell aws cloudformation describe-stacks --stack-name sentiment-prep-$(STAGE) --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text))
 	$(eval SITE_BUCKET := $(shell aws cloudformation describe-stacks --stack-name sentiment-prep-$(STAGE) --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text))
-	cd frontend && VITE_API_URL=$(API_URL) npm run build
+	$(eval API_KEY := $(shell aws ssm get-parameter --name /sentiment-prep/$(STAGE)/api-key --with-decryption --query Parameter.Value --output text 2>/dev/null))
+	cd frontend && VITE_API_URL=$(API_URL) VITE_API_KEY=$(API_KEY) npm run build
 	aws s3 sync frontend/dist s3://$(SITE_BUCKET) --delete
 
 put-secret: ## Store a SecureString: make put-secret NAME=x-bearer-token VALUE=... [STAGE=dev]

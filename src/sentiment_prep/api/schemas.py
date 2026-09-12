@@ -192,6 +192,7 @@ class HealthResponse(BaseModel):
     version: str
     diagnostics: bool
     x_configured: bool
+    auth_required: bool
     runtime: str | None = None
     database: str | None = None
     database_ephemeral: bool | None = None

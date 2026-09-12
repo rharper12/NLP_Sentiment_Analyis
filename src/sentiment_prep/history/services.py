@@ -6,7 +6,7 @@ import datetime as dt
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import CursorResult, func, select, update
+from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from sentiment_prep.history.db import session
@@ -198,6 +198,16 @@ class DbLedger:
             )
         return int(total or 0)
 
+    def reserved(self, day: str) -> int:
+        """Reads claimed for ``day``, including fetches still in flight.
+
+        This, not ``get``, is what remaining budget must be measured against: a reservation is
+        money already committed even though the audit row is not written until the page returns.
+        """
+        with session() as s:
+            row = s.get(SpendDay, dt.date.fromisoformat(day))
+        return row.reads if row else 0
+
     def reserve(self, day: str, reads: int, max_per_day: int) -> bool:
         """Claim ``reads`` against the day's cap in one statement.
 
@@ -236,9 +246,16 @@ class DbLedger:
                     )
                 )
             if reserved != actual:
+                # CASE, not func.max: two-argument max() is scalar on SQLite but an aggregate on
+                # PostgreSQL (where the scalar form is greatest()). CASE behaves the same on both.
+                released = reserved - actual
                 s.execute(
                     update(SpendDay)
                     .where(SpendDay.day == date)
-                    .values(reads=func.max(SpendDay.reads - (reserved - actual), 0))
+                    .values(
+                        reads=case(
+                            (SpendDay.reads - released < 0, 0), else_=SpendDay.reads - released
+                        )
+                    )
                 )
         return self.get(day)

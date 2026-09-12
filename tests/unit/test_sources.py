@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from sentiment_prep.errors import ValidationError
+from sentiment_prep.errors import ExternalServiceError, ValidationError
 from sentiment_prep.history.services import DbLedger
 from sentiment_prep.sources.csv_upload import CsvUploadSource
 from sentiment_prep.sources.huggingface import HuggingFaceSource
@@ -173,3 +173,25 @@ def test_csv_upload_requires_text_column():
         CsvUploadSource(b"body,label\nhi,pos\n").fetch(10)
     ds = CsvUploadSource("\ufeffText,Label\nhello there,pos\n,neg\n".encode()).fetch(10)
     assert len(ds.records) == 1 and ds.records[0].label == "pos"
+
+
+def test_x_upstream_failures_become_actionable_errors():
+    """A bad token must not surface as a generic 500; the reservation is released either way."""
+    cases = {401: "credentials", 402: "credit balance", 400: "search operators", 503: "unavailable"}
+    for status, phrase in cases.items():
+        g = guard()
+        source = XSearchSource(g, x_client([httpx.Response(status, json={})]))
+        with pytest.raises(ExternalServiceError) as caught:
+            source.fetch(100, query="q")
+        assert phrase in str(caught.value) and str(status) in str(caught.value)
+        assert g.remaining() == 1000  # reservation handed back, nothing stranded
+
+
+def test_release_returns_budget_to_the_day():
+    """An unused reservation must not strand budget until midnight."""
+    ledger = InMemoryLedger()
+    g = SpendGuard(ledger, max_per_fetch=1000, max_per_day=100, cost_per_read_usd=0.005)
+    g.reserve(100)
+    assert g.remaining() == 0
+    g.release()
+    assert g.remaining() == 100

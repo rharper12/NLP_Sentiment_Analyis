@@ -2,6 +2,28 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-19: An optional shared-secret API key, required in any deployment
+The API spends money on someone's behalf: an X search bills the operator's credits, Comprehend
+labelling bills their AWS account. An unauthenticated internet-facing URL is therefore an open
+wallet, which no amount of spend-capping fixes. Every endpoint except `/health` now requires
+`X-API-Key` when `API_KEY` (or `API_KEY_SSM_PATH`) is set; the comparison is constant-time.
+It is optional so local development stays frictionless, and `/health` reports `auth_required` so
+an operator can see at a glance whether a deployment is open. Cost: one more secret to manage,
+and the browser build embeds the key, so it gates the operator's budget rather than
+authenticating individual users — a real multi-user deployment wants a proper identity provider.
+
+## ADR-18: React 19 APIs adopted only where they fit
+The upgrade to React 19 made `useActionState`, `useOptimistic`, `use`, `<Context>` as a provider
+and document metadata available. Only **document metadata** was adopted (`DocumentTitle` renders
+`<title>`, which React hoists): it satisfies WCAG 2.4.2 for a single-page app whose title would
+otherwise never change. The others were considered and rejected on merit, not overlooked:
+`useOptimistic` does not fit the reviewer, because a label is authoritative locally and a failed
+save is **retried**, not reverted — showing a revert would misrepresent what the app does;
+`useActionState` would replace the collect form's pending state but would fight the cancel button,
+which needs an `AbortController` the action API does not surface; `forwardRef` and legacy context
+were never used, so `ref`-as-prop and `<Context>` have nothing to replace. Adopting an API to be
+able to say you use it is how a codebase acquires patterns nobody can justify later.
+
 ## ADR-17: The daily spend cap is enforced by the database, not the application
 The guard used to read the day's total, decide, then write — so two concurrent fetches could each
 pass a check only one should. A `spend_day` counter row is now incremented by a single conditional

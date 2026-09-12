@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useState } from "react";
 
 import { api } from "./api/client";
 import type { DatasetSummary, HealthResponse, PreprocessResponse, StepInfo } from "./api/types";
+import { DocumentTitle } from "./components/DocumentTitle";
 import { Header } from "./components/Header";
 import { STAGES, Stepper, type Stage } from "./components/Stepper";
 import { AnalyzeStep } from "./components/stages/AnalyzeStep";
@@ -67,6 +68,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <DocumentTitle stage={stage} records={dataset.data?.record_count ?? null} />
       <Header theme={theme} onToggleTheme={toggle} onOpenHistory={() => setHistoryOpen(true)} spendVersion={spendVersion} />
       <Stepper current={stage} reached={reached} onSelect={go} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">

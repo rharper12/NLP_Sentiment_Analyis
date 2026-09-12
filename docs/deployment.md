@@ -17,10 +17,12 @@ SecureStrings from SSM at startup:
 
 | SSM path (default, per stage) | Used for | Required |
 |---|---|---|
+| `/sentiment-prep/{stage}/api-key` | the `X-API-Key` every request must carry | **yes, for any internet-facing deployment** |
 | `/sentiment-prep/{stage}/x-bearer-token` | X API | only for X fetches |
 | custom, set via `DatabaseUrlSsmPath` | Postgres URL for durable history | optional |
 
 ```bash
+make put-secret NAME=api-key VALUE="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')" STAGE=dev
 make put-secret NAME=x-bearer-token    VALUE='AAAA…'   STAGE=dev
 ```
 
@@ -37,6 +39,11 @@ make deploy-site STAGE=dev       # build the UI against ApiUrl, sync to the site
 make deploy CONFIG_ENV=prod      # uses the [prod] block in samconfig.toml
 ```
 
+Build the UI with the same key (`VITE_API_KEY=… npm run build`, which `make deploy-site` passes
+through) or the deployed site cannot call its own API. Check `/health` after deploying: if
+`auth_required` is false, the deployment is open to anyone who finds the URL and can spend your X
+credits — fix that before sharing the link.
+
 After the first deploy, copy the `SiteUrl` output into the `CorsOrigins` override and deploy
 again so the browser can call the API. 
 
@@ -52,7 +59,7 @@ The role in the template grants exactly the actions the code calls:
 | `comprehend:BatchDetectSentiment` | `*` (Comprehend has no resource-level permissions) |
 | `pricing:GetProducts` | `*` (Price List API has no resource-level permissions; endpoint is us-east-1 regardless of deploy region) |
 | `bedrock:InvokeModel` | the two model ARNs from the parameters |
-| `ssm:GetParameter` | the one (or two) exact parameter ARNs |
+| `ssm:GetParameter` | the two (or three) exact parameter ARNs |
 
 No `kms:Decrypt` is needed: SecureStrings use the AWS-managed `aws/ssm` key, whose key policy
 permits decryption through SSM for principals in the account. The data bucket blocks public

@@ -197,3 +197,26 @@ def test_spend_and_history(client):
     assert (
         runs and runs[0]["dataset_id"] == dataset_id and runs[0]["applied_steps"] == ["lowercase"]
     )
+
+
+def test_api_key_protects_every_endpoint_except_health(client, monkeypatch):
+    """Without this, anyone who finds the URL can spend the operator's X and AWS budget."""
+    from sentiment_prep.config import get_settings
+
+    monkeypatch.setenv("API_KEY", "s3cret")
+    get_settings.cache_clear()
+    try:
+        assert client.get("/health").status_code == 200
+        assert client.get("/health").json()["auth_required"] is True
+        assert client.get("/steps").status_code == 401
+        assert client.get("/steps", headers={"X-API-Key": "wrong"}).status_code == 401
+        assert client.get("/steps", headers={"X-API-Key": "s3cret"}).status_code == 200
+    finally:
+        monkeypatch.delenv("API_KEY")
+        get_settings.cache_clear()
+
+
+def test_api_is_open_when_no_key_is_configured(client):
+    """Local development stays frictionless; /health says so."""
+    assert client.get("/health").json()["auth_required"] is False
+    assert client.get("/steps").status_code == 200

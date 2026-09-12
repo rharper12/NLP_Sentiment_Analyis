@@ -23,6 +23,16 @@ class NotFoundError(AppError):
     status_code = 404
 
 
+class ExternalServiceError(AppError):
+    """An upstream API refused or failed.
+
+    Carries a message safe to show a user: which service, what it said, and what to check. Never
+    the credentials themselves.
+    """
+
+    status_code = 502
+
+
 class ConfigurationError(AppError):
     """A required setting is missing, e.g. no X token when the X source is requested."""
 

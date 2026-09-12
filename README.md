@@ -39,7 +39,7 @@ Defaults run fully offline: Comprehend and Bedrock are off and no X token is set
 Hugging Face dataset or a CSV and everything works; AWS-backed fields are null with a stated reason.
 
 ```bash
-make test         # 53 backend tests + Vitest; S3 via moto, AWS ML services via fakes, history on SQLite
+make test         # 58 backend tests + Vitest; S3 via moto, AWS ML services via fakes, history on SQLite
 make lint         # ruff, mypy --strict, tsc, eslint
 ```
 
@@ -55,6 +55,7 @@ change:
 | `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | hard caps on billed reads (defaults 1000 / 3000) |
 | `COMPREHEND_ENABLED`, `BEDROCK_ENABLED` | turn paid services on |
 | `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (cached 24 h; no hard-coded fallback) |
+| `API_KEY` | shared secret required on every request except `/health`; unset locally, **required for any internet-facing deployment** |
 | `DIAGNOSTICS` | expose operator-only details in `/health` and the UI (defaults on locally, off in Lambda) |
 | `CHECKPOINT_DIR` | local folder for stage snapshots when no bucket is set (gitignored) |
 | `DATABASE_URL` | Postgres for durable history; default SQLite |

@@ -23,6 +23,9 @@ import type {
 } from "./types";
 
 const BASE = import.meta.env.VITE_API_URL ?? "/api";
+// Set at build time for deployments whose API requires a key. Never a user secret: it gates the
+// operator's own budget, and the built bundle is only as private as where it is hosted.
+const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 
 export class ApiError extends Error {
   constructor(
@@ -38,7 +41,9 @@ export const isAbort = (error: unknown) =>
   error instanceof DOMException && error.name === "AbortError";
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, init);
+  const headers = new Headers(init.headers);
+  if (API_KEY) headers.set("X-API-Key", API_KEY);
+  const response = await fetch(`${BASE}${path}`, { ...init, headers });
   const requestId = response.headers.get("X-Request-Id");
   if (!response.ok) {
     let message = response.statusText;

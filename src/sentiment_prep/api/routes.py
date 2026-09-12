@@ -60,6 +60,9 @@ from sentiment_prep.storage.checkpoints import (
 from sentiment_prep.storage.repository import BundleRepository
 
 router = APIRouter()
+# Health is deliberately unauthenticated so load balancers and uptime checks can reach it; it
+# exposes nothing beyond liveness unless diagnostics are on.
+public_router = APIRouter()
 logger = get_logger(__name__)
 
 PREVIEW_ROWS = 20
@@ -73,7 +76,9 @@ CheckpointDep = Annotated[CheckpointStore, Depends(deps.get_checkpoint_store)]
 # --- system -----------------------------------------------------------------------------------
 
 
-@router.get("/health", tags=["system"], response_model=HealthResponse, summary="Liveness check")
+@public_router.get(
+    "/health", tags=["system"], response_model=HealthResponse, summary="Liveness check"
+)
 def health(settings: SettingsDep) -> HealthResponse:
     """Liveness and, only with diagnostics on, the facts an operator checks first.
 
@@ -86,6 +91,7 @@ def health(settings: SettingsDep) -> HealthResponse:
         version=__version__,
         diagnostics=diagnostics,
         x_configured=bool(settings.x_bearer_token or settings.x_bearer_token_ssm_path),
+        auth_required=bool(settings.resolve_api_key()),
         runtime=settings.runtime if diagnostics else None,
         database=db.backend_name() if diagnostics else None,
         database_ephemeral=db.is_ephemeral() if diagnostics else None,
@@ -489,14 +495,18 @@ def spend(settings: SettingsDep, include_x_usage: bool = Query(False)) -> SpendS
     ``include_x_usage=true`` also asks X for its own usage figure. That call is free but only
     some tiers expose it, so ``x_usage`` is null when unavailable.
     """
-    totals = history.spend_totals(datetime.now(UTC).date())
+    today = datetime.now(UTC).date()
+    totals = history.spend_totals(today)
+    # Remaining budget counts reservations, not just billed reads, so a fetch in flight elsewhere
+    # is already subtracted here.
+    committed = deps.get_spend_ledger().reserved(today.isoformat())
     configured = bool(settings.x_bearer_token or settings.x_bearer_token_ssm_path)
     x_usage = deps.get_x_source().usage() if include_x_usage and configured else None
     return SpendSummary(
         **totals,
         cap_per_fetch=settings.x_max_reads_per_fetch,
         cap_per_day=settings.x_max_reads_per_day,
-        remaining_today=max(0, settings.x_max_reads_per_day - totals["today_reads"]),
+        remaining_today=max(0, settings.x_max_reads_per_day - committed),
         cost_per_read_usd=settings.x_cost_per_read_usd,
         x_usage=x_usage,
         x_configured=configured,

@@ -3,7 +3,8 @@
 Swagger UI: `/docs`. OpenAPI JSON: `/openapi.json`. This page is the narrative; the schema is the
 contract.
 
-Every response includes `X-Request-Id`. Error bodies are uniform:
+When `API_KEY` is configured, every endpoint except `/health` requires an `X-API-Key` header and
+returns 401 without it. Every response includes `X-Request-Id`. Error bodies are uniform:
 
 ```json
 {"error": "unknown step 'bogus'; valid steps: [...]", "request_id": "…"}
@@ -14,6 +15,8 @@ Every response includes `X-Request-Id`. Error bodies are uniform:
 | 400 | Request understood but wrong: bad CSV, unknown step, empty X query |
 | 404 | Dataset id not found (working state expires after 7 days in Lambda) |
 | 422 | Body failed schema validation (FastAPI default) |
+| 401 | Missing or wrong `X-API-Key` (only when a key is configured) |
+| 502 | An upstream API refused or failed; the message says which and what to check |
 | 503 | A required setting is missing, e.g. no X token, no data bucket for save |
 | 500 | Bug. Quote the request id. |
 

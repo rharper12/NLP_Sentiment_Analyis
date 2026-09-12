@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     embed_model_id: str = "amazon.titan-embed-text-v2:0"
     embed_sample_size: int = Field(default=50, ge=5, le=200)
 
+    # Shared secret required on every request when set. Unset locally; required in Lambda.
+    api_key: str | None = None
+    api_key_ssm_path: str | None = None
+
     cors_origins: str = "http://localhost:5173"
 
     # History database. Empty = SQLite (./data locally, /tmp in Lambda, which is ephemeral).
@@ -88,6 +92,12 @@ class Settings(BaseSettings):
     def diagnostics_enabled(self) -> bool:
         """Explicit setting wins; otherwise only the local runtime exposes diagnostics."""
         return self.runtime == "local" if self.diagnostics is None else self.diagnostics
+
+    def resolve_api_key(self) -> str | None:
+        """Env var first, then SSM, else ``None`` (authentication disabled)."""
+        if self.api_key:
+            return self.api_key
+        return self._ssm_value(self.api_key_ssm_path) if self.api_key_ssm_path else None
 
     def resolve_database_url(self) -> str | None:
         """Env var first, then SSM, else ``None`` (caller falls back to SQLite)."""

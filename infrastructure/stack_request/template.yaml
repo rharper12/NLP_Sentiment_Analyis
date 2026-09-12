@@ -16,6 +16,12 @@ Parameters:
     Type: String
     Default: INFO
     AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+  ApiKeySsmPath:
+    Type: String
+    Default: /sentiment-prep/dev/api-key
+    Description: >
+      SSM SecureString holding the shared secret every request must present. Required: the API
+      spends X credits and AWS budget, so an open deployment is an open wallet.
   XBearerTokenSsmPath:
     Type: String
     Default: /sentiment-prep/dev/x-bearer-token
@@ -171,6 +177,7 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ApiKeySsmPath}"
                   - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${XBearerTokenSsmPath}"
                   - !If
                     - HasDatabaseUrl
@@ -192,6 +199,7 @@ Resources:
           RUNTIME: lambda
           LOG_LEVEL: !Ref LogLevel
           DATA_BUCKET: !Ref DataBucket
+          API_KEY_SSM_PATH: !Ref ApiKeySsmPath
           X_BEARER_TOKEN_SSM_PATH: !Ref XBearerTokenSsmPath
           DATABASE_URL_SSM_PATH: !If [HasDatabaseUrl, !Ref DatabaseUrlSsmPath, !Ref AWS::NoValue]
           X_MAX_READS_PER_FETCH: !Ref XMaxReadsPerFetch

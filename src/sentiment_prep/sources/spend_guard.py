@@ -27,7 +27,11 @@ class SpendLedger(Protocol):
     """
 
     def get(self, day: str) -> int:
-        """Reads already committed for ``day``."""
+        """Reads already billed for ``day``."""
+        ...
+
+    def reserved(self, day: str) -> int:
+        """Reads claimed for ``day``, including fetches still in flight."""
         ...
 
     def reserve(self, day: str, reads: int, max_per_day: int) -> bool:
@@ -63,6 +67,9 @@ class InMemoryLedger:
         self._counts: dict[str, int] = {}
 
     def get(self, day: str) -> int:
+        return self._counts.get(day, 0)
+
+    def reserved(self, day: str) -> int:
         return self._counts.get(day, 0)
 
     def reserve(self, day: str, reads: int, max_per_day: int) -> bool:
@@ -109,9 +116,12 @@ class SpendGuard:
         return datetime.now(UTC).strftime("%Y-%m-%d")
 
     def remaining(self) -> int:
-        """How many more reads this fetch may make before a cap is reached."""
-        fetch_left = self._max_per_fetch - self.reads_this_fetch
-        day_left = self._max_per_day - self._ledger.get(self.today())
+        """Reads this fetch may still make before either cap is reached.
+
+        Measured against *reserved* reads, so a concurrent fetch's in-flight claim counts.
+        """
+        fetch_left = self._max_per_fetch - self.reads_this_fetch - self._reserved
+        day_left = self._max_per_day - self._ledger.reserved(self.today())
         return max(0, min(fetch_left, day_left))
 
     def reserve(self, reads: int) -> None:

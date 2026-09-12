@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 
+from sentiment_prep.errors import ExternalServiceError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import Dataset, Record
 from sentiment_prep.sources.spend_guard import SpendCapReachedError, SpendGuard
@@ -89,7 +90,7 @@ class XSearchSource:
 
             try:
                 payload = self._get_page(full_query, page_size, next_token)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ExternalServiceError):
                 # Nothing was billed, so hand the reservation back before giving up.
                 self._guard.release()
                 raise
@@ -155,10 +156,33 @@ class XSearchSource:
                 logger.warning("x_rate_limited", attempt=attempt, wait_seconds=wait)
                 time.sleep(wait)
                 continue
-            response.raise_for_status()
+            self._raise_for_status(response)
             data: Json = response.json()
             return data
         return None
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> None:
+        """Turn an X error response into a message the person can act on.
+
+        Without this an expired token surfaces as a generic 500 "internal error", which tells the
+        operator nothing. The upstream status is preserved in the text; the token never is.
+        """
+        if response.is_success:
+            return
+        status = response.status_code
+        if status in (401, 403):
+            detail = "X rejected the credentials. Check the bearer token and the app's permissions."
+        elif status == 402:
+            detail = "X reports the account cannot make this request. Check the credit balance."
+        elif status == 400:
+            detail = "X rejected the query. Check the search operators."
+        elif status >= 500:
+            detail = "X is unavailable. Try again shortly."
+        else:
+            detail = "X refused the request."
+        logger.error("x_request_failed", status=status, body=response.text[:200])
+        raise ExternalServiceError(f"{detail} (X API returned HTTP {status})")
 
     @staticmethod
     def _backoff_seconds(response: httpx.Response, attempt: int) -> float:

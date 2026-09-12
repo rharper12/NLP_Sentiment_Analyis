@@ -16,15 +16,16 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mangum import Mangum
 
 from sentiment_prep import __version__
 from sentiment_prep.api import deps
-from sentiment_prep.api.routes import router
+from sentiment_prep.api.routes import public_router, router
 from sentiment_prep.api.schemas import ErrorResponse
+from sentiment_prep.api.security import require_api_key
 from sentiment_prep.config import get_settings
 from sentiment_prep.errors import AppError
 from sentiment_prep.history.db import get_engine
@@ -45,7 +46,8 @@ Typical flow: **load** a dataset (X, Hugging Face, or CSV) → **preprocess** wi
 of steps → inspect the impact report → **label** (Comprehend, manual review, or both) →
 **export** as CSV/Excel/Parquet/Markdown or **save** to S3.
 
-Every response carries an `X-Request-Id` header; quote it when reading logs. Run history and X
+Every response carries an `X-Request-Id` header; quote it when reading logs. When `API_KEY` is
+configured, every endpoint except `/health` requires an `X-API-Key` header. Run history and X
 spend are available under the `account` tag.
 """
 
@@ -134,7 +136,9 @@ def create_app() -> FastAPI:
             content=ErrorResponse(error="internal error", request_id=get_request_id()).model_dump(),
         )
 
-    app.include_router(router)
+    # Applied to the router, not to /health, so an uptime probe needs no secret.
+    app.include_router(public_router)
+    app.include_router(router, dependencies=[Depends(require_api_key)])
     return app
 
 
