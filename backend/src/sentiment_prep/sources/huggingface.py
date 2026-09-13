@@ -63,6 +63,7 @@ class HuggingFaceSource:
     ) -> Dataset:
         """Page through ``/rows`` until ``limit`` records. ``query`` is ignored."""
         records: list[Record] = []
+        skipped = 0
         offset = 0
         started = time.perf_counter()
         truncated_reason: str | None = None
@@ -90,6 +91,7 @@ class HuggingFaceSource:
                 row = item["row"]
                 text = str(row.get(self._text_column, "")).strip()
                 if not text:
+                    skipped += 1
                     continue
                 records.append(
                     Record(
@@ -114,6 +116,7 @@ class HuggingFaceSource:
             source_type="huggingface",
             query=f"{self._dataset}/{self._config}/{self._split}",
             truncated_reason=truncated_reason,
+            filtered_out={"empty_text": skipped} if skipped else {},
         )
 
     def _label_for(self, row: dict[str, Any]) -> str | None:

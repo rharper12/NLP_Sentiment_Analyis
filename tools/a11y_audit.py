@@ -1,7 +1,8 @@
 """Accessibility audit: drive every stage in both themes and run axe-core contrast rules.
 
-Run with the API on :8000 and a built UI served on :5173 (``make local-api`` and
-``npx vite preview --port 5173`` after ``npm run build``). Requires ``pip install playwright``
+Run against the production bundle, which is what ships: ``make dev-api`` in one terminal and
+``make preview`` in another, then ``make audit-a11y``. The dev server also works but is slow
+enough that the waits below can time out. Requires ``pip install playwright``
 and ``playwright install chromium``. Exit code is non-zero when axe reports any violation, so this
 can gate a release: re-run it whenever a token in ``frontend/src/styles.css`` changes.
 """

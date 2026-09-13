@@ -562,6 +562,13 @@ export interface components {
             record_count: number;
             /** Labelled Count */
             labelled_count: number;
+            /**
+             * Filtered Out
+             * @description Posts the source returned but that were not kept, by reason.
+             */
+            filtered_out?: {
+                [key: string]: number;
+            };
             /** Truncated Reason */
             truncated_reason: string | null;
             /** Estimated Cost Usd */

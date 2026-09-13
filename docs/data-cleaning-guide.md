@@ -15,9 +15,22 @@ Tokenization and missing-data handling are always needed; the question is only *
 
 ## Step by step
 
-### Handle missing data — always first
-Empty or whitespace-only text produces zero vectors and API errors. **Drop** when you have plenty
-of data and missingness is random. **Fill** with a placeholder when row count matters (paired
+### Handle empty records — last, not first
+Social-media posts almost never *arrive* empty: the X API always returns text, and a media-only
+tweet's text is its `t.co` link. They **become** empty — a link-and-mention post has nothing left
+once URLs and mentions are stripped, an emoji-only post nothing after special characters, "I am
+what I am" nothing after stopwords. So the sweep belongs at the end of the pipeline, where the
+emptying happens, not at the start where it cannot see it.
+
+Two different problems, handled in two different places:
+
+1. **No content on arrival** (a post that is only a link) is filtered at *collection*, by counting
+   tokens after links and mentions are removed. Doing it there keeps the record count identical
+   across every preprocessing configuration you try, so two runs are compared against the same
+   denominator. Report how many were dropped and why.
+2. **Emptied by the steps** is what the pipeline's final sweep handles.
+
+**Drop** is the right default. Empty or whitespace-only text produces zero vectors and API errors. **Fill** with a placeholder when row count matters (paired
 data, fixed-size batches) or when you want to study how much was missing. Watch for missingness
 that correlates with a label: image-only posts are often positive; dropping them skews the class
 balance. Report the count either way.

@@ -2,6 +2,31 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-22: Deduplicate at collection, with a prefix filter and a deliberately high threshold
+Duplicates that straddle a train/test split let a model score itself on memorised text, which on a
+600-row corpus can move accuracy several points. X is full of copypasta and quote-tweets that
+differ only in a link, so posts are deduplicated at collection: exact matching after normalising
+away case, punctuation, links and mentions, then near-duplicate matching by Jaccard overlap.
+
+Two choices worth recording. The threshold is 0.9, which is high on purpose: a one-word difference
+in a short post scores about 0.85, and "this verdict is good" versus "this verdict is not good"
+scores 0.75 — collapsing those would silently delete the negative half of a corpus. And candidates
+come from a prefix filter (the rarest `floor((1-t)*size)+1` tokens), which is exact rather than
+heuristic. The first implementation indexed every token below a frequency cutoff and degenerated
+to comparing all pairs on a small-vocabulary corpus: 15.3 s for 5,000 posts, against 1.7 s now.
+
+## ADR-21: Filter contentless posts at collection; sweep emptied ones at the end
+Posts do not arrive empty, they become empty, so a missing-data check at the head of the pipeline
+caught almost nothing on X data. Two changes: the X adapter now measures length in *content*
+tokens (links and mentions removed) and drops posts with fewer than five, recording a per-reason
+tally on the dataset; and `missing_data` moved to the end of the default order, where the steps
+that empty a record have already run. Filtering at collection rather than mid-pipeline is the
+important half: it fixes N across every preprocessing configuration, so an agreement figure for
+"with stopword removal" versus "without" is computed over the same rows. The tally is surfaced in
+the UI and the report, because a dropped-post count is a limitation a write-up should state rather
+than a number to hide. Cost: one more field on `Dataset`, and a UI group that exists to hold a
+single step.
+
 ## ADR-20: Repository split into backend/ and frontend/, with Zod at the client boundary
 The Python package used to own the repository root, which made the frontend look like an
 afterthought and forced every tool to disambiguate paths. Each half now owns its folder, its

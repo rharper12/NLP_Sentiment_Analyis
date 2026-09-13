@@ -77,9 +77,18 @@ def _dataset_section(bundle: DatasetBundle) -> list[str]:
         + (f" (query: `{original.query}`)" if original.query else "")
     )
     lines.append(f"- Fetched: {original.fetched_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    dropped_at_source = sum(original.filtered_out.values())
+    if dropped_at_source:
+        lines.append(f"- Posts returned by the source: {len(original.records) + dropped_at_source}")
+        for reason, count in sorted(original.filtered_out.items()):
+            lines.append(f"  - dropped at collection ({reason.replace('_', ' ')}): {count}")
     lines.append(f"- Records collected: {len(original.records)}")
     if bundle.processed is not None:
-        lines.append(f"- Records after preprocessing: {len(bundle.processed.records)}")
+        removed = len(original.records) - len(bundle.processed.records)
+        lines.append(
+            f"- Records after preprocessing: {len(bundle.processed.records)}"
+            + (f" ({removed} emptied by the steps and dropped)" if removed else "")
+        )
     if original.truncated_reason:
         lines.append(f"- Note: fetch stopped early ({original.truncated_reason})")
     for stage, uri in sorted(bundle.checkpoints.items()):

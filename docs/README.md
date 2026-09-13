@@ -6,6 +6,7 @@ order below the first time, then use them as reference.
 | Guide | Read it when |
 |---|---|
 | [How the app works](how-the-app-works.md) | First day. A walk from the UI to the code for one complete run. |
+| [Architecture diagrams](architecture-diagrams.md) | You want the picture: context, stages, module dependencies, the paid request path. |
 | [Architecture](architecture.md) | You need to know where something lives and why it lives there. |
 | [Developer guide](developer-guide.md) | Setting up, running tests, adding a step or a data source, opening a PR. |
 | [Logging and debugging](logging-and-debugging.md) | Something failed and you have a request id. |

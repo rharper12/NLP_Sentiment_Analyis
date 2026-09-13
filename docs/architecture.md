@@ -1,5 +1,7 @@
 # Architecture
 
+Diagrams for all of this are in [architecture-diagrams.md](architecture-diagrams.md).
+
 ```
 Browser (React 18, Vite)  ──HTTPS──►  API Gateway (HTTP API)  ──►  Lambda container
                                                                      │

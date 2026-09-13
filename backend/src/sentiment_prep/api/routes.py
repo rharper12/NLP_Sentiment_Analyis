@@ -52,6 +52,7 @@ from sentiment_prep.preprocessing import DEFAULT_ORDER
 from sentiment_prep.report import load_rationale, render_report
 from sentiment_prep.sources.base import DataSource
 from sentiment_prep.sources.csv_upload import CsvUploadSource
+from sentiment_prep.sources.dedupe import deduplicate
 from sentiment_prep.storage.checkpoints import (
     CheckpointInfo,
     CheckpointStore,
@@ -531,6 +532,21 @@ def recent_history(limit: int = Query(20, ge=1, le=100)) -> list[HistoryRun]:
 def _store(
     dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore, **extra: Any
 ) -> DatasetSummary:
+    """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
+
+    Deduplication happens here rather than in each adapter so every source gets it, and before
+    the pipeline so the record count is fixed for every preprocessing configuration that follows.
+    """
+    settings = get_settings()
+    if settings.dedupe_enabled:
+        kept, removed = deduplicate(dataset.records, settings.dedupe_similarity)
+        if removed:
+            dataset = dataset.model_copy(
+                update={
+                    "records": kept,
+                    "filtered_out": {**dataset.filtered_out, **removed},
+                }
+            )
     bundle = DatasetBundle(dataset_id=uuid.uuid4().hex[:12], original=dataset)
     bind_context(dataset_id=bundle.dataset_id)
     bundle = checkpoint_bundle(checkpoints, bundle, "collected")
@@ -554,6 +570,7 @@ def _summary(bundle: DatasetBundle, estimated_cost_usd: float | None = None) -> 
         query=dataset.query,
         record_count=len(dataset.records),
         labelled_count=sum(1 for r in dataset.records if r.label),
+        filtered_out=dataset.filtered_out,
         truncated_reason=dataset.truncated_reason,
         estimated_cost_usd=estimated_cost_usd,
         warnings=warnings,

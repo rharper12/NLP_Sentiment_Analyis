@@ -34,6 +34,10 @@ const BASE = import.meta.env.VITE_API_URL ?? "/api";
 // operator's own budget, and the built bundle is only as private as where it is hosted.
 const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 
+/** Shown whenever the request never reached the API, which is nearly always "it isn't running". */
+const UNREACHABLE =
+  `Cannot reach the API at ${BASE}. Start it with \`make local-api\` (or check VITE_API_URL).`;
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -72,7 +76,17 @@ async function request<T>(
 ): Promise<T> {
   const headers = new Headers(init.headers);
   if (API_KEY) headers.set("X-API-Key", API_KEY);
-  const response = await fetch(`${BASE}${path}`, { ...init, headers });
+
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}${path}`, { ...init, headers });
+  } catch (cause) {
+    // fetch only rejects when the request never reached a server: the API is down, the origin is
+    // wrong, or the network is gone. "Failed to fetch" tells the person nothing they can act on.
+    if (isAbort(cause)) throw cause;
+    throw new ApiError(UNREACHABLE, 0, null);
+  }
+
   const requestId = response.headers.get("X-Request-Id");
   if (!response.ok) {
     let message = response.statusText;
@@ -80,7 +94,9 @@ async function request<T>(
       const body = (await response.json()) as { error?: string; detail?: unknown };
       message = body.error ?? JSON.stringify(body.detail ?? body);
     } catch {
-      /* non-JSON error body; keep statusText */
+      // A 5xx with no JSON body is almost always the dev proxy reporting that nothing is
+      // listening, not the API reporting a bug. Say the useful thing.
+      if (response.status >= 500) message = UNREACHABLE;
     }
     throw new ApiError(message, response.status, requestId);
   }

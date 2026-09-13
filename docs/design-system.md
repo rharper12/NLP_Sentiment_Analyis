@@ -53,11 +53,13 @@ runs axe-core's colour-contrast and ARIA rules. It exits non-zero on any violati
 shipping and whenever a token changes:
 
 ```bash
-make local-api                     # terminal 1
-cd frontend && npm run build && npx vite preview --port 5173   # terminal 2
-pip install playwright && playwright install chromium
-python tools/a11y_audit.py         # terminal 3
+make dev-api      # terminal 1
+make preview      # terminal 2 — builds and serves the production bundle
+make audit-a11y   # terminal 3 (needs: pip install playwright && playwright install chromium)
 ```
+
+The audit runs against the **production bundle**, not the dev server, because that is the artefact
+that ships. `make preview` builds it with an explicit API origin exactly as a deployment does.
 
 Lighthouse in Chrome DevTools is a fine second opinion; axe is what the script runs because it can
 be automated.

@@ -51,6 +51,10 @@ class Dataset(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     query: str | None = None
     truncated_reason: str | None = None
+    # Why posts the source returned were not kept, e.g. {"no_content_after_cleaning": 34}.
+    # Recorded at collection so the write-up can state the denominator honestly: these rows
+    # never reach the pipeline, so its per-step counts do not account for them.
+    filtered_out: dict[str, int] = Field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.records)

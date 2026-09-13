@@ -220,3 +220,17 @@ def test_api_is_open_when_no_key_is_configured(client):
     """Local development stays frictionless; /health says so."""
     assert client.get("/health").json()["auth_required"] is False
     assert client.get("/steps").status_code == 200
+
+
+def test_duplicate_posts_are_removed_at_collection_and_reported(client):
+    """The dataset a model trains on must not contain the same text twice; the count says so."""
+    rows = "text\n" + "".join("the identical viral take on the trial\n" for _ in range(5))
+    rows += "a genuinely different opinion about the coverage\n"
+    files = {"file": ("d.csv", rows.encode(), "text/csv")}
+
+    summary = client.post("/dataset/upload", files=files).json()
+
+    assert summary["record_count"] == 2
+    assert summary["filtered_out"] == {"duplicate": 4}
+    report = client.get(f"/dataset/{summary['dataset_id']}/report.md").text
+    assert "dropped at collection (duplicate): 4" in report

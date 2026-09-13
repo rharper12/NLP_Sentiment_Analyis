@@ -2,18 +2,21 @@
 # Task 1 report. Keep each entry honest about limits; graders read this.
 
 missing_data:
-  title: Handle missing data
-  summary: Drop empty records, or fill them with a placeholder you choose.
+  title: Handle empty records
+  summary: Drop records with no text left, or fill them with a placeholder you choose.
   strengths: >
     Removes rows that would otherwise produce empty token lists, zero-length embeddings, or
-    Comprehend errors. Doing it first means every later statistic is computed over real text.
+    Comprehend errors. It runs last by default because posts rarely arrive empty: they become
+    empty. A post that is only a link and a mention has real text on arrival and nothing left
+    once URLs and mentions are stripped, so a sweep at the end catches what a check at the
+    start cannot.
   limitations: >
     Dropping rows can bias the dataset if missingness correlates with a class (for example,
     image-only posts skew positive). Filling keeps the row count but injects a synthetic token
     the model must learn to ignore, so the placeholder should be a string the corpus cannot
-    contain. Note that most rows become empty *during* cleaning rather than arriving that way:
-    a post that is only a link and a mention is empty once URLs and mentions are stripped, so
-    move this step after "Remove punctuation" to see it act on them.
+    contain. Posts that were *already* empty of content on arrival are filtered at collection
+    instead, so that the record count is identical across every preprocessing configuration and
+    two runs can be compared against the same denominator.
 
 lowercase:
   title: Lowercase

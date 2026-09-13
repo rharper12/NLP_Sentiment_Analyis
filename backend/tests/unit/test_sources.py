@@ -209,3 +209,37 @@ def test_release_returns_budget_to_the_day():
     guard_.release()
     assert ledger.reserved(today) == 0
     assert ledger.reserve(today, 100, max_per_day=100) is True
+
+
+def test_x_measures_length_by_content_not_by_links_and_mentions():
+    """A post whose bulk is a link and a mention says nothing, and would be emptied by cleaning.
+
+    Filtering it at collection rather than mid-pipeline keeps the record count identical across
+    preprocessing configurations, so two runs are comparable.
+    """
+    link_only = {"id": "1", "text": "@someone check this out https://t.co/abcdef", "lang": "en"}
+    real = {
+        "id": "2",
+        "text": "@someone this trial coverage has been relentless today",
+        "lang": "en",
+    }
+    pages = [httpx.Response(200, json={"data": [link_only, real], "meta": {}})]
+
+    ds = XSearchSource(guard(), x_client(pages)).fetch(10, query="q")
+
+    assert [r.id for r in ds.records] == ["2"]
+    assert ds.filtered_out == {"no_content_after_cleaning": 1}
+
+
+def test_x_reports_why_posts_were_dropped():
+    """The write-up needs the denominator: how many the source returned, not just how many kept."""
+    data = [
+        {"id": "1", "text": "a perfectly ordinary english post about things", "lang": "en"},
+        {"id": "2", "text": "https://t.co/x @y", "lang": "en"},
+        {"id": "3", "text": "un message parfaitement ordinaire au sujet des choses", "lang": "fr"},
+    ]
+    ds = XSearchSource(
+        guard(), x_client([httpx.Response(200, json={"data": data, "meta": {}})])
+    ).fetch(10, query="q")
+    assert [r.id for r in ds.records] == ["1"]
+    assert ds.filtered_out == {"no_content_after_cleaning": 1, "not_english": 1}

@@ -63,9 +63,9 @@ def run_preprocessing(
     if comprehend is not None:
         try:
             report.sentiment = ComprehendScorer(comprehend).compare(bundle.original, processed)
-        # Broad by design: every enrichment below is optional, and no failure of one may cost the
-        # caller the deterministic results they already paid for. The cause is logged with a
-        # traceback and summarised in `warnings` so it is never silent.
+        # Broad by design: this enrichment is optional and its failure must not cost the caller
+        # the deterministic results they already paid for. Logged with a traceback and summarised
+        # in `warnings`, so a degraded run is never silent.
         except Exception as exc:
             logger.error("comprehend_comparison_failed", exc_info=True)
             report.warnings.append(f"sentiment comparison unavailable: {type(exc).__name__}")
@@ -77,7 +77,8 @@ def run_preprocessing(
             report.embedding_drift = EmbeddingDrift(
                 bedrock, settings.embed_model_id, settings.embed_sample_size
             ).compute(bundle.original, processed)
-        except Exception as exc:  # optional enrichment; see the note above
+        # Optional enrichment: a failure degrades the report rather than failing the request.
+        except Exception as exc:
             logger.error("embedding_drift_failed", exc_info=True)
             report.warnings.append(f"embedding drift unavailable: {type(exc).__name__}")
         if request.explain:
@@ -85,7 +86,8 @@ def run_preprocessing(
                 report.explanation = BedrockExplainer(
                     bedrock, settings.bedrock_text_model_id
                 ).explain(report, request.steps)
-            except Exception as exc:  # optional enrichment; see the note above
+            # Optional enrichment: a failure degrades the report rather than failing the request.
+            except Exception as exc:
                 logger.error("explanation_failed", exc_info=True)
                 report.warnings.append(f"explanation unavailable: {type(exc).__name__}")
     else:

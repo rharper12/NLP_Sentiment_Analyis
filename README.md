@@ -31,16 +31,18 @@ API types generated from the backend's OpenAPI schema and every response validat
 
 ```bash
 make setup        # backend deps + NLTK corpora + frontend packages + backend/.env
-make local-api    # http://localhost:8000/docs  (Swagger)
-make frontend     # http://localhost:5173
+make dev          # API on :8000 (Swagger at /docs) and UI on :5173, together
 ```
+
+`make` on its own lists every target, grouped. The UI proxies `/api` to the backend and says so
+plainly if it cannot reach it. See [docs/deployment.md](docs/deployment.md#troubleshooting) if a `make` target
+cannot find `uvicorn` or Docker.
 
 Defaults run fully offline: Comprehend and Bedrock are off and no X token is set. Load the
 Hugging Face dataset or a CSV and everything works; AWS-backed fields are null with a stated reason.
 
 ```bash
-make test         # 59 backend tests + 12 frontend tests; S3 via moto, AWS ML services via fakes, history on SQLite
-make lint         # ruff, mypy --strict, tsc, eslint
+make check        # lint, types and both test suites (59 backend + 12 frontend); S3 via moto, AWS ML services via fakes, history on SQLite
 ```
 
 ## Configuration
@@ -66,7 +68,7 @@ change:
 The [`docs/`](docs/README.md) folder is written so a new engineer can contribute on day one:
 
 - [How the app works](docs/how-the-app-works.md), a walk from click to file.
-- [Architecture](docs/architecture.md) and [Decisions](docs/decisions.md).
+- [Architecture diagrams](docs/architecture-diagrams.md), [Architecture](docs/architecture.md) and [Decisions](docs/decisions.md).
 - [Developer guide](docs/developer-guide.md): setup, conventions, adding a step or source, PR checklist.
 - [Logging and debugging](docs/logging-and-debugging.md): structlog events and CloudWatch queries.
 - [API reference](docs/api.md) and [Deployment](docs/deployment.md) (secrets, least-privilege IAM).

@@ -64,7 +64,11 @@ class CsvUploadSource:
                 break
 
         logger.info("csv_parsed", returned=len(records), skipped_empty=skipped)
-        return Dataset(records=records, source_type="csv")
+        return Dataset(
+            records=records,
+            source_type="csv",
+            filtered_out={"empty_text": skipped} if skipped else {},
+        )
 
 
 def _csv_label(row: dict[str, str], columns: dict[str, str]) -> str | None:

@@ -78,6 +78,18 @@ def test_step_result_statistics(dataset: Dataset):
     assert len(dataset.records) == 8
 
 
+def test_empty_records_are_swept_after_the_steps_that_empty_them(dataset: Dataset):
+    """A post that is only a link and a mention survives arrival and is emptied by cleaning."""
+    ds = make_dataset(["@user https://t.co/abc", "a genuinely opinionated post about things"])
+    steps = [STEP_REGISTRY[n]() for n in DEFAULT_ORDER]
+
+    processed, results = Pipeline(steps).run(ds)
+
+    assert DEFAULT_ORDER[-1] == "missing_data"  # the sweep runs last for exactly this reason
+    assert len(processed.records) == 1
+    assert results[-1].records_in == 2 and results[-1].records_out == 1
+
+
 def test_pipeline_default_order_runs_all_steps(dataset: Dataset):
     processed, results = Pipeline([STEP_REGISTRY[n]() for n in DEFAULT_ORDER]).run(dataset)
     assert [r.step_name for r in results] == DEFAULT_ORDER

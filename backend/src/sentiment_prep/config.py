@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     hf_text_column: str = "text"
     hf_label_column: str = "label"
 
+    # Duplicate removal at collection. Threshold 1.0 keeps only exact-after-normalisation
+    # matching; lower values also drop near-duplicates by token overlap.
+    dedupe_enabled: bool = True
+    dedupe_similarity: float = Field(default=0.9, gt=0.0, le=1.0)
+
     # Checkpoints: CSV snapshots written as soon as data exists (collected, processed, labelled)
     # so a crash after a paid step never loses what was paid for. Local folder is gitignored.
     checkpoint_dir: str = "data/checkpoints"

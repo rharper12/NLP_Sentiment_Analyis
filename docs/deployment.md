@@ -90,6 +90,27 @@ SecureString, set `DatabaseUrlSsmPath`, and add `psycopg[binary]` to `pyproject.
 dependencies before building the image. Tables are created on first use (`create_all`); the schema is small and additive. Adopt Alembic if
 you ever need a destructive change.
 
+## Troubleshooting
+
+**`sam build` says "requires Docker. is Docker running?" but `docker info` works.** SAM looks for
+`/var/run/docker.sock`. Docker Desktop on macOS does not create that path unless *Settings →
+Advanced → Allow the default Docker socket to be used* is ticked; without it the socket lives at
+`~/.docker/run/docker.sock`. `make build` detects this and sets `DOCKER_HOST` for you. To run SAM
+directly, either tick that setting or export it yourself:
+
+```bash
+export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
+```
+
+Also worth updating the CLI: 1.122 predates several Docker Desktop socket fixes.
+
+**`uvicorn: command not found` from `make local-api`.** Make's recipes run in `/bin/sh`, which does
+not inherit an activated virtualenv. The Makefile puts `.venv/bin` first on `PATH`, so this works
+without activation once `make setup` has run — if it still fails, the virtualenv is somewhere other
+than `.venv/` at the repository root.
+
+**The UI loads but every request fails.** The API is not running: `make dev` (or `make dev-api`) in a second terminal. The error notice says so explicitly rather than reporting "Internal Server Error".
+
 ## Operating
 
 - `/health` returns operator details only when `DIAGNOSTICS` is true; it defaults to false in

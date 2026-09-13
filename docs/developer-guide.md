@@ -6,7 +6,7 @@
 git clone <repo> && cd sentiment-prep
 make setup          # Python deps, NLTK corpora, npm packages, .env from .env.example
 make test           # 40 tests, no AWS credentials needed
-make local-api      # http://localhost:8000/docs
+make dev            # API on :8000 and UI on :5173, together
 make frontend       # http://localhost:5173 (proxies /api to :8000)
 ```
 

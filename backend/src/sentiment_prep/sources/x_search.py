@@ -11,7 +11,9 @@ topic; the adapter only appends language and retweet filters when the caller has
 
 from __future__ import annotations
 
+import re
 import time
+from collections import Counter
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -26,11 +28,27 @@ from sentiment_prep.sources.spend_guard import SpendCapReachedError, SpendGuard
 logger = get_logger(__name__)
 
 PAGE_SIZE = 100
-MIN_TOKENS = 5
+# Minimum *content* tokens: a post whose length is made up of a link and a mention has nothing to
+# classify, and would be emptied by the cleaning steps anyway. Filtering here rather than mid-
+# pipeline keeps the record count identical across every preprocessing configuration, so two runs
+# can be compared against the same denominator.
+MIN_CONTENT_TOKENS = 5
 MAX_RETRIES = 3
 DEFAULT_QUERY_SUFFIX = "lang:en -is:retweet"
 
 Json = dict[str, Any]
+
+# Links and mentions are stripped before measuring length, for the same reason the punctuation
+# step removes them later: neither carries sentiment.
+_NOISE = re.compile(r"https?://\S+|www\.\S+|@\w+")
+
+
+def content_tokens(text: str) -> list[str]:
+    """Words left once links and mentions are removed.
+
+    Used to decide whether a post says anything at all, rather than counting a link as content.
+    """
+    return _NOISE.sub(" ", text).split()
 
 
 class XSearchSource:
@@ -71,6 +89,7 @@ class XSearchSource:
             raise ValueError("X search requires a query")
         full_query = query if "lang:" in query else f"{query} {DEFAULT_QUERY_SUFFIX}"
         records: list[Record] = []
+        filtered: Counter[str] = Counter()
         next_token: str | None = None
         truncated_reason: str | None = None
         started = time.perf_counter()
@@ -101,7 +120,9 @@ class XSearchSource:
 
             posts = payload.get("data", [])
             self._guard.record(len(posts))
-            records.extend(self._to_records(posts))
+            kept, dropped = self._to_records(posts)
+            records.extend(kept)
+            filtered.update(dropped)
             next_token = payload.get("meta", {}).get("next_token")
             logger.debug("x_page_received", posts=len(posts), has_next=bool(next_token))
             if not next_token or not posts:
@@ -114,12 +135,17 @@ class XSearchSource:
             "x_fetch_complete",
             requested=limit,
             returned=len(records),
+            filtered_out=dict(filtered),
             reads_billed=self._guard.reads_this_fetch,
             duration_ms=round((time.perf_counter() - started) * 1000, 1),
             truncated_reason=truncated_reason,
         )
         return Dataset(
-            records=records, source_type="x", query=full_query, truncated_reason=truncated_reason
+            records=records,
+            source_type="x",
+            query=full_query,
+            truncated_reason=truncated_reason,
+            filtered_out=dict(filtered),
         )
 
     def usage(self) -> Json | None:
@@ -191,13 +217,17 @@ class XSearchSource:
             return max(1.0, min(60.0, int(reset) - time.time()))
         return float(2**attempt)
 
-    def _to_records(self, posts: list[Json]) -> list[Record]:
+    def _to_records(self, posts: list[Json]) -> tuple[list[Record], Counter[str]]:
+        """Convert a page of posts, returning the kept records and a tally of what was dropped."""
         records: list[Record] = []
+        dropped: Counter[str] = Counter()
         for post in posts:
             text = str(post.get("text", "")).strip()
-            if len(text.split()) < MIN_TOKENS:
-                continue
             if not self._allow_non_english and post.get("lang") not in (None, "en"):
+                dropped["not_english"] += 1
+                continue
+            if len(content_tokens(text)) < MIN_CONTENT_TOKENS:
+                dropped["no_content_after_cleaning"] += 1
                 continue
             created = post.get("created_at")
             records.append(
@@ -210,4 +240,4 @@ class XSearchSource:
                     ),
                 )
             )
-        return records
+        return records, dropped

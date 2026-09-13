@@ -33,6 +33,10 @@ class DatasetSummary(BaseModel):
     query: str | None
     record_count: int
     labelled_count: int
+    filtered_out: dict[str, int] = Field(
+        default_factory=dict,
+        description="Posts the source returned but that were not kept, by reason.",
+    )
     truncated_reason: str | None
     estimated_cost_usd: float | None = None
     warnings: list[str] = Field(default_factory=list)

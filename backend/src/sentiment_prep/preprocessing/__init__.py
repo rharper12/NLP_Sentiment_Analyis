@@ -22,7 +22,16 @@ STEP_REGISTRY: dict[str, type[PreprocessStep]] = {
     LemmatizeStep.name: LemmatizeStep,
 }
 
-# Sensible order when the user has not reordered: fix data, normalise, split, prune, reduce.
-DEFAULT_ORDER: list[str] = list(STEP_REGISTRY)
+# Recommended order: normalise the text, split and prune it, then sweep up anything the earlier
+# steps emptied. Handling missing data *last* matters because posts rarely arrive empty — they
+# become empty, when a link-and-mention post loses its link and mention.
+DEFAULT_ORDER: list[str] = [
+    LowercaseStep.name,
+    PunctuationStep.name,
+    TokenizeStep.name,
+    StopwordStep.name,
+    LemmatizeStep.name,
+    MissingDataStep.name,
+]
 
 __all__ = ["DEFAULT_ORDER", "STEP_REGISTRY", "Pipeline", "PreprocessStep"]
