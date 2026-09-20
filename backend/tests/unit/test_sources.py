@@ -286,3 +286,43 @@ def test_a_backwards_window_is_refused_rather_than_clamped():
     now = datetime.now(UTC)
     with pytest.raises(ValidationError, match="before its end"):
         clamp_window(now, now - timedelta(days=1))
+
+
+@pytest.mark.parametrize("actual", [100, 20, 0])
+def test_reservation_and_audit_settle_on_original_utc_day(monkeypatch, actual):
+    from contextlib import contextmanager
+    from datetime import date
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from sentiment_prep.history.models import Base, SpendDay, SpendEntry
+    from sentiment_prep.history.services import DbLedger
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    @contextmanager
+    def transaction():
+        with Session(engine) as session, session.begin():
+            yield session
+
+    ledger = DbLedger(0.017, session_scope=transaction)
+    guard = SpendGuard(ledger, 1000, 3000, 0.017)
+    day = ["2026-09-20"]
+    monkeypatch.setattr(SpendGuard, "today", staticmethod(lambda: day[0]))
+    guard.reserve(100)
+    day[0] = "2026-09-21"
+    if actual:
+        guard.record(actual)
+    else:
+        guard.release()
+    with Session(engine) as session:
+        assert session.get(SpendDay, date(2026, 9, 20)).reads == actual
+        assert session.get(SpendDay, date(2026, 9, 21)) is None
+        entries = session.scalars(select(SpendEntry)).all()
+        assert len(entries) == bool(actual)
+        if entries:
+            assert entries[0].day == date(2026, 9, 20)
+            assert float(entries[0].cost_usd) == pytest.approx(actual * 0.017)
+    engine.dispose()

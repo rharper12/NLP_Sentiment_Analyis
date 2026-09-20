@@ -46,7 +46,7 @@ fields @timestamp, request_id, message | filter message in ["comprehend_comparis
 fields @timestamp, duration_ms | filter message = "database_ready"
 ```
 
-Locally, `make local-api` prints coloured lines; pipe through `grep request_id=<id>` or set
+Locally, `make dev-api` prints coloured lines; pipe through `grep request_id=<id>` or set
 `LOG_LEVEL=DEBUG` to see per-page X fetch events and `history_*` writes.
 
 ## Event catalogue
@@ -69,7 +69,7 @@ Locally, `make local-api` prints coloured lines; pipe through `grep request_id=<
 | `explanation_generated` | analysis.bedrock_explainer | chars |
 | `*_failed` | api.service | exc_info |
 | `comprehend_batch_scored` / `comprehend_labels_applied` | analysis / labeling | documents / records, units, cost_usd |
-| `comprehend_price_fetched` / `comprehend_price_stale` / `comprehend_price_lookup_failed` / `comprehend_price_not_found` | pricing | sku, price / fetched_at / error / region |
+| `comprehend_price_fetched` / `comprehend_price_lookup_failed` / `comprehend_price_not_found` | pricing | sku, price / no provider details / region |
 | `manual_labels_applied` / `review_sample_chosen` | labeling | records / mode, size |
 | `checkpoint_saved` / `checkpoint_failed` | storage.checkpoints | stage, format, bytes, uri |
 | `dataset_saved` / `bundle_saved_to_s3` | storage | uri, records / dataset_id |

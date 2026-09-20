@@ -46,8 +46,8 @@ class SpendLedger(Protocol):
     def settle(self, day: str, reserved: int, actual: int, query: str) -> int:
         """Reconcile a reservation once the real count is known.
 
-        ``actual`` is at most ``reserved`` (a page can return fewer posts than requested); the
-        difference is released back to the day's budget.
+        Unused reads are released back to the reservation day's budget. If a provider returns
+        more than requested, every returned read is still accounted for.
 
         Returns:
             The day's committed total after settling.
@@ -117,6 +117,7 @@ class SpendGuard:
         self._cost_per_read = Decimal(str(cost_per_read_usd))
         self._query = query
         self._reserved = 0
+        self._reservation_day: str | None = None
         self.reads_this_fetch = 0
 
     @staticmethod
@@ -136,22 +137,28 @@ class SpendGuard:
         """
         if self.reads_this_fetch + self._reserved + reads > self._max_per_fetch:
             raise SpendCapReachedError(f"per-fetch cap of {self._max_per_fetch} reads reached")
-        if not self._ledger.reserve(self.today(), reads, self._max_per_day):
-            used_today = self._ledger.get(self.today())
+        day = self._reservation_day or self.today()
+        if not self._ledger.reserve(day, reads, self._max_per_day):
+            used_today = self._ledger.get(day)
             raise SpendCapReachedError(
                 f"daily cap of {self._max_per_day} reads reached ({used_today} used today)"
             )
+        self._reservation_day = day
         self._reserved += reads
 
-    def record(self, reads: int) -> None:
-        """Settle the outstanding reservation against the reads that actually happened.
+    def record(self, reads: int) -> Decimal:
+        """Settle against the UTC date captured at reservation, even after midnight.
 
         Args:
-            reads: Posts the API returned, never more than the amount reserved.
+            reads: All posts the API returned, including an unexpectedly oversized page.
         """
+        day = self._reservation_day
+        if day is None or reads < 0:
+            raise ValueError("Settlement requires a matching reservation")
         reserved, self._reserved = self._reserved, 0
+        self._reservation_day = None
         self.reads_this_fetch += reads
-        total_today = self._ledger.settle(self.today(), reserved, reads, self._query)
+        total_today = self._ledger.settle(day, reserved, reads, self._query)
         logger.info(
             "x_reads_consumed",
             reads=reads,
@@ -160,6 +167,8 @@ class SpendGuard:
             reads_today=total_today,
             estimated_cost_usd=float(Decimal(self.reads_this_fetch) * self._cost_per_read),
         )
+
+        return self._cost_per_read * reads
 
     def release(self) -> None:
         """Give back an unused reservation, e.g. when a request fails before any read is billed."""

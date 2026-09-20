@@ -17,6 +17,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -149,7 +150,11 @@ class XSearchSource:
                 or self._end
                 or now - END_TIME_LAG
             )
-        state = progress.model_copy(deep=True) if progress else CollectionProgress(request={})
+        state = (
+            progress.model_copy(deep=True)
+            if progress
+            else CollectionProgress(request={}, billed_reads=0, committed_cost_usd=Decimal("0"))
+        )
         records = list(resume.records) if resume is not None else []
         filtered = Counter(resume.filtered_out if resume is not None else {})
         self._guard.reads_this_fetch = state.reads
@@ -240,7 +245,12 @@ class XSearchSource:
                     else "no more matching posts in the last 7 days"
                 )
             save()  # A failure here must stop; never fetch another paid page.
-            self._guard.record(len(posts))
+            committed = self._guard.record(len(posts))
+            if state.committed_cost_usd is not None:
+                state.committed_cost_usd += committed
+            if state.billed_reads is not None:
+                state.billed_reads += len(posts)
+            save()
         if not state.complete:
             save()
         return snapshot()

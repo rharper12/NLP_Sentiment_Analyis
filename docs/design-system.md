@@ -1,8 +1,7 @@
 # Design system and accessibility
 
 All visual values live in `frontend/src/styles.css`. Components use Tailwind v4 utilities that
-resolve to those tokens (`bg-surface`, `text-muted`, `border-rule`) plus two component classes.
-Nothing else in the codebase hard-codes a colour, blur, shadow or radius.
+resolve to those tokens (`bg-surface`, `text-muted`, `border-rule`) plus shared control and surface classes.
 
 ## Tokens
 
@@ -11,21 +10,16 @@ so a change is always made as a pair. The `@theme` block maps them into Tailwind
 
 | Group | Tokens | Notes |
 |---|---|---|
-| Colour | `--color-bg`, `--color-surface`, `--color-surface-2`, `--color-ink`, `--color-muted`, `--color-rule`, `--color-accent`, `--color-accent-ink`, `--color-accent-soft`, semantic `removed` / `introduced` / `warn` / `error` | accent is the same blue as the author's other tools; dark mode lightens it for contrast |
-| Glass | `--glass-bg`, `--glass-bg-fallback`, `--glass-border`, `--glass-highlight`, `--glass-blur`, `--glass-shadow` | see below |
+| Colour | `--color-bg`, `--color-surface`, `--color-surface-2`, `--color-ink`, `--color-muted`, `--color-rule`, `--color-control`, `--color-accent`, `--color-accent-ink`, `--color-accent-soft`, semantic `removed` / `introduced` / `warn` / `error` | accent is the same blue as the author's other tools; dark mode lightens it for contrast |
+| Glass | `--glass-bg`, `--glass-border`, `--glass-highlight`, `--glass-shadow` | see below |
 | Focus | `--focus-ring` | used by every `:focus-visible` |
 
 ## The glass surface
 
-`.glass-panel` is the only glass class. It sets an **opaque fallback background first**
-(`--glass-bg-fallback`, the colour the translucent surface renders to over the page gradient),
-then inside `@supports (backdrop-filter: …)` switches to the translucent `--glass-bg` with
-`backdrop-filter: blur(var(--glass-blur)) saturate(160%)`. A 1px `--glass-border`, an inset
-1px `--glass-highlight` for the top edge, a three-layer `--glass-shadow` and 16px radius complete
-it. `.glass-bar` is the same recipe for the header and stepper, without radius or drop shadow.
-
-Because components only ever use the class, changing the look is a token edit, and browsers
-without `backdrop-filter` get a solid, legible surface instead of text over the page gradient.
+`.glass-panel` and `.glass-bar` use opaque theme backgrounds, with or without backdrop-filter
+support. Light is `#f9fafd`; dark is `#161e30`. Borders, highlights and shadows retain depth
+without relying on an arbitrary underlay to meet contrast. Decorative rules use `--color-rule`;
+interactive control boundaries use the stronger `--color-control`.
 
 ## Selected and focus states
 
@@ -35,21 +29,24 @@ and renders as **three cues together**: accent-soft background, accent border, a
 ring (`box-shadow`). That satisfies WCAG 1.4.11 without relying on colour alone, and the default
 selection is visible on first paint, not only to assistive tech.
 
-Focus is a `box-shadow` ring (`2px surface + 2px --focus-ring`) on every focusable element; the
-native outline is removed only because the ring replaces it. On a selected control the focus ring
-stacks outside the selection ring so both remain visible (2.4.7).
+Focus uses a 2px outline with a surface-colored separation. Grid action and progress-strip
+outlines are inset so their scroll containers cannot clip them. Selected controls retain their
+selection ring. Off-step text stays opaque and uses strikethrough plus checkbox state.
 
 ## Verifying contrast
 
-Contrast is measured against the **rendered** glass surface, not the token's raw alpha colour:
+Permanent tests calculate WCAG contrast from the actual source colors. Minimum ratios across
+the tested background, surface, secondary surface, glass and selected surfaces:
 
-| Theme | Rendered glass | ink | muted | accent |
-|---|---|---|---|---|
-| light | ≈ `#f9fafd` | 14.9:1 | 5.9:1 | 5.3:1 |
-| dark | ≈ `#161e30` | 14.6:1 | 7.3:1 | 6.9:1 |
+| Theme | Normal ink | Muted text | Control boundary | Focus color |
+|---|---:|---:|---:|---:|
+| light | 13.49:1 | 5.18:1 | 3.28:1 | 4.64:1 |
+| dark | 10.46:1 | 5.54:1 | 3.46:1 | 5.10:1 |
+
+These calculations and automated checks do not constitute a full manual WCAG audit.
 
 `tools/a11y_audit.py` drives all five stages in both themes (and a 390px phone viewport) and
-runs axe-core's colour-contrast and ARIA rules. It exits non-zero on any violation. Run it before
+runs axe-core's WCAG A/AA rules, off-step/fallback checks, and native record-diff keyboard/focus tests. It exits non-zero on any violation. Run it before
 shipping and whenever a token changes:
 
 ```bash
@@ -87,4 +84,4 @@ inside a `<dl>` that the narrower list had missed.
 Anything that reveals deployment internals (checkpoint paths, whether Comprehend/Bedrock are
 enabled, the runtime) renders only when `/health` reports `diagnostics: true`. That is the local
 runtime by default; the `DIAGNOSTICS` setting overrides it. The values are not merely hidden with
-CSS: the API returns them as `null`, so a deployed build never has them to render.
+CSS: the API omits protected fields and requires diagnostics authorization for checkpoint APIs.

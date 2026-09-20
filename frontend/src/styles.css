@@ -14,6 +14,7 @@
   --color-ink: var(--t-ink);
   --color-muted: var(--t-muted);
   --color-rule: var(--t-rule);
+  --color-control: var(--t-control);
   --color-accent: var(--t-accent);
   --color-accent-ink: var(--t-accent-ink);
   --color-accent-soft: var(--t-accent-soft);
@@ -25,10 +26,8 @@
   --color-error-ink: var(--t-error-ink);
   /* Glass surface tokens (values below, per theme). */
   --glass-bg: var(--t-glass-bg);
-  --glass-bg-fallback: var(--t-glass-bg-fallback);
   --glass-border: var(--t-glass-border);
   --glass-highlight: var(--t-glass-highlight);
-  --glass-blur: var(--t-glass-blur);
   --glass-shadow: var(--t-glass-shadow);
   --focus-ring: var(--t-focus-ring);
 }
@@ -38,17 +37,14 @@
 /* Light --------------------------------------------------------------------------------- */
 :root {
   --t-bg: #eef2f9; --t-surface: #ffffff; --t-surface-2: #e9eef7;
-  --t-ink: #14203a; --t-muted: #566178; --t-rule: #d3dbe8;
+  --t-ink: #14203a; --t-muted: #566178; --t-rule: #d3dbe8; --t-control: #73819a;
   --t-accent: #1f5fe0; --t-accent-ink: #ffffff; --t-accent-soft: #e2ebfb;
-  --t-removed: #b42318; --t-introduced: #1a7f4b;
+  --t-removed: #b42318; --t-introduced: #167344;
   --t-warn-bg: #fff6e0; --t-warn-ink: #7a4b00; --t-error-bg: #fdecec; --t-error-ink: #8a1c1c;
-  /* Glass: translucent white over a soft blue-violet gradient page. Rendered surface ≈ #f9fafd,
-     so ink (#14203a) is 14.9:1 and muted (#566178) is 5.9:1 against it. */
-  --t-glass-bg: rgba(255, 255, 255, 0.72);
-  --t-glass-bg-fallback: #f9fafd;                 /* used when backdrop-filter is unsupported */
+  /* Opaque glass-colored surfaces bound contrast even over arbitrary content. */
+  --t-glass-bg: #f9fafd;
   --t-glass-border: rgba(20, 32, 58, 0.10);
   --t-glass-highlight: rgba(255, 255, 255, 0.85);
-  --t-glass-blur: 18px;
   --t-glass-shadow: 0 1px 2px rgba(20, 32, 58, 0.06), 0 8px 24px rgba(20, 32, 58, 0.08), 0 24px 60px rgba(20, 32, 58, 0.06);
   --t-focus-ring: #1f5fe0;
   --t-page-gradient: radial-gradient(1200px 600px at 10% -10%, #dbe6ff 0%, transparent 60%),
@@ -58,16 +54,13 @@
 /* Dark ---------------------------------------------------------------------------------- */
 :root[data-theme="dark"] {
   --t-bg: #0d1220; --t-surface: #171f31; --t-surface-2: #212b42;
-  --t-ink: #e8ecf6; --t-muted: #a3aec4; --t-rule: #2f3b57;
+  --t-ink: #e8ecf6; --t-muted: #a3aec4; --t-rule: #2f3b57; --t-control: #7888a8;
   --t-accent: #7aa5ff; --t-accent-ink: #0b1220; --t-accent-soft: #223457;
   --t-removed: #ff8a7a; --t-introduced: #6fdba5;
   --t-warn-bg: #2e2612; --t-warn-ink: #f4cd74; --t-error-bg: #3a1a1a; --t-error-ink: #ffb4b4;
-  /* Rendered glass ≈ #161e30: ink 14.6:1, muted 7.3:1, accent 6.9:1. */
-  --t-glass-bg: rgba(23, 31, 49, 0.66);
-  --t-glass-bg-fallback: #161e30;
+  --t-glass-bg: #161e30;
   --t-glass-border: rgba(255, 255, 255, 0.10);
   --t-glass-highlight: rgba(255, 255, 255, 0.10);
-  --t-glass-blur: 20px;
   --t-glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 30px rgba(0, 0, 0, 0.40), 0 30px 80px rgba(0, 0, 0, 0.35);
   --t-focus-ring: #7aa5ff;
   --t-page-gradient: radial-gradient(1200px 600px at 10% -10%, #1b2a55 0%, transparent 60%),
@@ -79,48 +72,30 @@
   html { font-family: var(--font-sans); font-feature-settings: "cv11", "ss01"; }
   body { @apply text-ink antialiased; background: var(--t-page-gradient), var(--t-bg); background-attachment: fixed; }
   .tnum { font-variant-numeric: tabular-nums; }
-  /* WCAG 2.4.7: a visible ring on every focusable element, drawn with box-shadow (not the
-     native outline) so it follows rounded geometry and stays ≥3:1 against adjacent colours. */
-  :focus-visible { outline: none; box-shadow: 0 0 0 2px var(--t-surface), 0 0 0 4px var(--focus-ring); }
+  :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 2px var(--t-surface); }
   dialog::backdrop { background: rgba(8, 12, 24, 0.45); }
 }
 
 @layer components {
-  .field { @apply w-full rounded-lg border border-rule bg-surface px-3 py-2 text-ink placeholder:text-muted; }
-  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-rule bg-surface px-3.5 py-2 text-sm font-medium text-ink hover:bg-surface-2 disabled:opacity-45 disabled:pointer-events-none; }
+  .field { @apply w-full rounded-lg border border-control bg-surface px-3 py-2 text-ink placeholder:text-muted; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg border border-control bg-surface px-3.5 py-2 text-sm font-medium text-ink hover:bg-surface-2 disabled:opacity-45 disabled:pointer-events-none; }
   .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-accent-ink hover:brightness-105 disabled:opacity-45 disabled:pointer-events-none; }
   .btn-link { @apply text-sm font-medium text-accent hover:underline disabled:opacity-45; }
 
-  /* The one glass surface. Opaque fallback is declared first so unsupported browsers keep
-     legible text; the @supports block layers the translucent version on top. */
+  /* Opaque in both filter-capable and fallback browsers; shadows retain depth. */
   .glass-panel {
-    background: var(--glass-bg-fallback);
+    background: var(--glass-bg);
     border: 1px solid var(--glass-border);
     border-radius: 16px;
     box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
   }
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    .glass-panel {
-      background: var(--glass-bg);
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-      backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-    }
-  }
   .glass-bar {
-    background: var(--glass-bg-fallback);
+    background: var(--glass-bg);
     border-bottom: 1px solid var(--glass-border);
   }
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    .glass-bar {
-      background: var(--glass-bg);
-      -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-      backdrop-filter: blur(var(--glass-blur)) saturate(160%);
-    }
-  }
-
   /* Selectable controls (tabs, option cards, label buttons). Selected state = ring + border +
      background shift, independent of colour alone (WCAG 1.4.11 ≥3:1 against neighbours). */
-  .selectable { @apply relative rounded-lg border border-rule bg-surface text-ink transition-colors hover:bg-surface-2; }
+  .selectable { @apply relative rounded-lg border border-control bg-surface text-ink transition-colors hover:bg-surface-2; }
   .selectable[aria-selected="true"], .selectable[aria-pressed="true"], .selectable[data-selected="true"] {
     background: var(--t-accent-soft);
     border-color: var(--t-accent);
@@ -130,6 +105,8 @@
   .selectable[aria-selected="true"]:focus-visible, .selectable[aria-pressed="true"]:focus-visible, .selectable[data-selected="true"]:focus-visible {
     box-shadow: 0 0 0 1px var(--t-accent), 0 0 0 3px var(--t-surface), 0 0 0 5px var(--focus-ring);
   }
+  /* Grid cells clip overflow; draw their actionable control focus inside its boundary. */
+  .record-diff-action:focus-visible { outline-offset: -3px; }
   .skeleton { @apply inline-block rounded bg-surface-2 align-middle; background-image: linear-gradient(90deg, var(--t-surface-2) 0%, var(--t-rule) 50%, var(--t-surface-2) 100%); background-size: 200% 100%; }
 }
 
@@ -137,5 +114,5 @@
   .skeleton { animation: shimmer 1.4s linear infinite; }
   @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
   dialog[open] { animation: rise 160ms ease-out; }
-  @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+  @keyframes rise { from { transform: translateY(8px); } }
 }

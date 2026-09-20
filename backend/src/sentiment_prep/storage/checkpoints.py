@@ -9,6 +9,7 @@ splits into a multipart upload automatically above ``TransferConfig.multipart_th
 
 from __future__ import annotations
 
+import hashlib
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,12 +19,11 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from pydantic import BaseModel
 
 from sentiment_prep.logging_config import get_logger
-from sentiment_prep.models import CheckpointStage
+from sentiment_prep.models import CheckpointStage, CheckpointState, DatasetBundle
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
 
-    from sentiment_prep.models import DatasetBundle
 
 logger = get_logger(__name__)
 
@@ -42,6 +42,8 @@ class CheckpointInfo(BaseModel):
     uri: str
     bytes: int
     written_at: datetime
+    revision: str | None = None
+    status: Literal["current", "stale", "failed"] = "stale"
 
 
 class CheckpointStore(Protocol):
@@ -69,13 +71,15 @@ class LocalCheckpointStore:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / _name(stage, fmt)
         # Write to a temp name then rename so a crash mid-write never leaves a half file.
-        with NamedTemporaryFile(dir=folder, suffix=".tmp", delete=False) as temporary:
-            tmp = Path(temporary.name)
-            temporary.write(data)
+        tmp: Path | None = None
         try:
+            with NamedTemporaryFile(dir=folder, suffix=".tmp", delete=False) as temporary:
+                tmp = Path(temporary.name)
+                temporary.write(data)
             tmp.replace(path)
         finally:
-            tmp.unlink(missing_ok=True)
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
         info = CheckpointInfo(
             stage=stage, format=fmt, uri=str(path), bytes=len(data), written_at=datetime.now(UTC)
         )
@@ -196,19 +200,66 @@ class S3CheckpointStore:
         return found
 
 
-def checkpoint_bundle(store: CheckpointStore, bundle: DatasetBundle, stage: Stage) -> DatasetBundle:
-    """Write the bundle's rows as the ``stage`` CSV and record the URI on the bundle.
+def invalidate_checkpoints(bundle: DatasetBundle, *stages: Stage) -> None:
+    """Mark changed stages and their downstream snapshots stale, retaining previous files."""
+    affected = {stage for upstream in stages for stage in STAGES[STAGES.index(upstream) :]}
+    for key, state in bundle.checkpoint_status.items():
+        if key.split(":")[0] in affected:
+            state.status = "stale"
 
-    Failures are logged and swallowed: a checkpoint is a safety net, and losing it must not fail
-    the request that just spent money.
-    """
+
+def checkpoint_warnings(bundle: DatasetBundle) -> list[str]:
+    """Public-safe status only: never include paths, provider messages or credentials."""
+    warnings = []
+    for stage in STAGES:
+        state = bundle.checkpoint_status.get(f"{stage}:csv")
+        if state and state.status == "failed":
+            warnings.append(
+                f"The {stage} checkpoint could not be updated. "
+                "Any previous snapshot may be outdated; download a fresh export."
+            )
+        elif state and state.status == "stale":
+            action = (
+                "rerun preprocessing before regenerating downstream checkpoints."
+                if stage == "processed"
+                else "download a fresh export."
+            )
+            warnings.append(f"The {stage} checkpoint is outdated; {action}")
+    return warnings
+
+
+def checkpoint_info(info: CheckpointInfo, bundle: DatasetBundle) -> CheckpointInfo:
+    """Join actual stored files with revision metadata; legacy files have unknown freshness."""
+    state = bundle.checkpoint_status.get(f"{info.stage}:{info.format}", CheckpointState())
+    return info.model_copy(update={"revision": state.revision, "status": state.status})
+
+
+def checkpoint_bundle(store: CheckpointStore, bundle: DatasetBundle, stage: Stage) -> DatasetBundle:
+    """Attempt an atomic CSV replacement, retaining old files and exposing failure status."""
     from sentiment_prep.export.csv_export import to_checkpoint_csv
 
+    updated = bundle.model_copy(deep=True)
+    key = f"{stage}:csv"
+    previous = updated.checkpoint_status.get(key, CheckpointState())
     try:
-        info = store.save(bundle.dataset_id, stage, "csv", to_checkpoint_csv(bundle))
-    # Broad by design: a checkpoint is a safety net. Losing one must not fail the request that
-    # just spent money, which is the very request the checkpoint exists to protect.
-    except Exception:
+        content = to_checkpoint_csv(bundle)
+        revision = hashlib.sha256(content).hexdigest()
+        converted = updated.checkpoint_status.get(f"{stage}:parquet")
+        if converted and converted.revision != revision:
+            converted.status = "stale"
+        info = store.save(bundle.dataset_id, stage, "csv", content)
+    except Exception:  # a snapshot failure must not discard already committed paid work
         logger.error("checkpoint_failed", stage=stage, exc_info=True)
-        return bundle
-    return bundle.model_copy(update={"checkpoints": {**bundle.checkpoints, stage: info.uri}})
+        converted = updated.checkpoint_status.get(f"{stage}:parquet")
+        if converted:
+            converted.status = "stale"
+        updated.checkpoint_status[key] = previous.model_copy(update={"status": "failed"})
+        return updated
+    updated.checkpoints[stage] = info.uri
+    # Label writes preserve valid reviewer labels, but cannot refresh an old processed input.
+    processed = updated.checkpoint_status.get("processed:csv")
+    stale_input = stage == "labelled" and processed is not None and processed.status != "current"
+    updated.checkpoint_status[key] = CheckpointState(
+        revision=revision, status="stale" if stale_input else "current"
+    )
+    return updated

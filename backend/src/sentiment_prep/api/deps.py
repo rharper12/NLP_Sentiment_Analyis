@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 import httpx
 
@@ -48,7 +48,13 @@ logger = get_logger(__name__)
 HTTP_TIMEOUT = httpx.Timeout(3.0, connect=1.0, pool=1.0)
 
 
-_open_clients: list[httpx.Client] = []
+class Closeable(Protocol):
+    """A client owned by this factory, closed only at real process/server teardown."""
+
+    def close(self) -> None: ...
+
+
+_open_clients: list[Closeable] = []
 
 
 @lru_cache(maxsize=4)
@@ -99,17 +105,25 @@ def _boto_client(service: AwsService, region: str) -> Any:
     unhashable and would defeat the cache.
     """
     logger.debug("boto_client_created", service=service, region=region)
-    return boto_session().client(service, region_name=region, config=AWS_CONFIG)
+    client = boto_session().client(service, region_name=region, config=AWS_CONFIG)
+    _open_clients.append(client)
+    return client
 
 
 def close_clients() -> None:
-    """Close every pooled HTTP client and drop the caches. Called on application shutdown."""
+    """Close owned clients once and discard every object retaining them at real teardown."""
+    get_repository.cache_clear()
+    get_checkpoint_store.cache_clear()
     boto_session.cache_clear()
-    for client in _open_clients:
-        client.close()
+    owned = {id(c): c for c in _open_clients}
     _open_clients.clear()
     _http_client.cache_clear()
     _boto_client.cache_clear()
+    for client in owned.values():
+        try:
+            client.close()
+        except Exception:  # One broken close must not strand other owned clients.
+            logger.warning("client_close_failed", exc_info=True)
     logger.info("clients_closed")
 
 
@@ -207,7 +221,12 @@ def get_comprehend_rate() -> PriceQuote | None:
             client = cast("PricingClient", _boto_client("pricing", PRICING_ENDPOINT_REGION))
         except Exception as exc:  # noqa: BLE001 - no credentials is a normal local state
             logger.warning("pricing_client_unavailable", error=str(exc))
-    return current_rate(client, settings.aws_region, settings.pricing_cache_hours)
+    return current_rate(
+        client,
+        settings.aws_region,
+        settings.pricing_cache_hours,
+        settings.pricing_stale_grace_hours,
+    )
 
 
 def get_comprehend_client() -> ComprehendClient | None:

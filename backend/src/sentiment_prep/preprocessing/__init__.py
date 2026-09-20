@@ -4,6 +4,8 @@
 adding a module here and a rationale entry in ``resources/rationale.yaml``.
 """
 
+from typing import Literal
+
 from sentiment_prep.preprocessing.base import PreprocessStep
 from sentiment_prep.preprocessing.lemmatize import LemmatizeStep
 from sentiment_prep.preprocessing.lowercase import LowercaseStep
@@ -33,5 +35,15 @@ DEFAULT_ORDER: list[str] = [
     LemmatizeStep.name,
     MissingDataStep.name,
 ]
+
+StepGroup = Literal["clean", "normalise", "final"]
+STEP_GROUPS: dict[str, StepGroup] = {
+    LowercaseStep.name: "clean",
+    PunctuationStep.name: "clean",
+    TokenizeStep.name: "normalise",
+    StopwordStep.name: "normalise",
+    LemmatizeStep.name: "normalise",
+    MissingDataStep.name: "final",
+}
 
 __all__ = ["DEFAULT_ORDER", "STEP_REGISTRY", "Pipeline", "PreprocessStep"]

@@ -51,7 +51,7 @@ interface Props {
   pairs: RecordPair[];
   theme: Theme;
   hasRun: boolean;
-  onSelect: (pair: RecordPair) => void;
+  onSelect: (pair: RecordPair, trigger?: HTMLElement) => void;
 }
 
 const SOURCE_TITLE: { [key in LabelSource]: string } = {
@@ -103,6 +103,38 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
   const columns = useMemo<ColDef<Row>[]>(
     () => [
       {
+        colId: "inspect",
+        headerName: "Inspect",
+        width: 140,
+        pinned: "left",
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: ({ data }: ICellRendererParams<Row>) => data && (
+          <button type="button" className="btn record-diff-action my-1 py-1"
+            aria-label={`View changes for record ${data.id}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              const pair = pairs.find((p) => p.original.id === data.id);
+              if (pair) onSelect(pair, event.currentTarget);
+            }}>View changes</button>
+        ),
+        // Let the native button receive activation and Tab from its containing grid cell.
+        // Other keys retain AG Grid's normal row/column navigation.
+        suppressKeyboardEvent: ({ event }) => {
+          const target = event.target;
+          const cell = target instanceof HTMLElement ? target.closest(".ag-cell") : null;
+          const button = cell?.querySelector("button");
+          if (event.key === "Tab" && !event.shiftKey && target === cell && button) {
+            event.preventDefault(); button.focus(); return true;
+          }
+          if (event.key === "Tab" && event.shiftKey && target === button && cell instanceof HTMLElement) {
+            event.preventDefault(); cell.focus(); return true;
+          }
+          return target === button && (event.key === "Enter" || event.key === " ");
+        },
+      },
+      {
         field: "original",
         headerName: "Original",
         flex: 3,
@@ -137,7 +169,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         valueFormatter: (p) => (p.value == null ? "" : `${Math.round(p.value * 100)}%`),
       },
     ],
-    [hasRun],
+    [hasRun, pairs, onSelect],
   );
 
   const onGridReady = useCallback((event: GridReadyEvent<Row>) => {
@@ -149,6 +181,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
     // person expects from a grid button; the Export stage is the place for the full dataset.
     api.current?.exportDataAsCsv({
       fileName: "records-view.csv",
+      columnKeys: ["original", "processed", "label", "confidence"],
       processCellCallback: (cell) => spreadsheetText(cell.formatValue(cell.value) ?? String(cell.value ?? "")),
     });
   }, []);
@@ -159,7 +192,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         <div>
           <h3 className="font-semibold">Records</h3>
           <p className="text-xs text-muted">
-            Click a row to see which words changed. Sort and filter from the column menus.
+            Use View changes or click a row to inspect changed words. Sort and filter from the column menus.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -195,8 +228,15 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
           rowSelection={{ mode: "singleRow", checkboxes: false, enableClickSelection: true }}
           onGridReady={onGridReady}
           onRowClicked={(e) => {
+            // AG Grid's native listener can run before React's stopPropagation.
+            const target = e.event?.target;
+            if (target instanceof HTMLElement && target.closest(".record-diff-action")) return;
             const pair = pairs.find((p) => p.original.id === e.data?.id);
-            if (pair) onSelect(pair);
+            if (pair) {
+              const row = target instanceof HTMLElement ? target.closest(".ag-row") : null;
+              const trigger = row?.querySelector<HTMLElement>("button") ?? undefined;
+              onSelect(pair, trigger);
+            }
           }}
           overlayNoRowsTemplate="No records match."
         />

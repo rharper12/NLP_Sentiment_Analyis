@@ -208,3 +208,49 @@ def test_unrecognised_failures_are_left_alone():
 
     with pytest.raises(_FakeBotoError), translated("Amazon Comprehend"):
         raise _FakeBotoError("SomethingNewAndUnmapped")
+
+
+def test_agreement_uses_all_unique_manual_machine_pairs_across_review_selections():
+    from sentiment_prep.labeling.service import (
+        ManualLabel,
+        apply_manual_labels,
+        choose_review,
+        summary,
+    )
+    from sentiment_prep.models import DatasetBundle
+    from sentiment_prep.report import render_report
+    from tests.conftest import make_dataset
+
+    bundle = DatasetBundle(dataset_id="cohort", original=make_dataset(["a", "b", "c", "d"]))
+    for record in bundle.original.records[:3]:
+        record.comprehend_label = "positive"
+    bundle = apply_manual_labels(
+        bundle,
+        [
+            ManualLabel(id="r0", label="positive"),
+            ManualLabel(id="r1", label="negative"),
+            ManualLabel(id="r3", label="neutral"),
+        ],
+    )
+    bundle = choose_review(bundle, "none", 1, "count", 7)
+    counts = summary(bundle)
+    assert counts.reviewed == 0
+    assert (
+        counts.manually_reviewed,
+        counts.machine_scored,
+        counts.comparable_records,
+        counts.agreements,
+    ) == (3, 3, 2, 1)
+    assert counts.manual_vs_comprehend_agreement == 0.5
+    assert "over 2 comparable records" in render_report(bundle)
+    corrected = apply_manual_labels(bundle, [ManualLabel(id="r1", label="positive")])
+    counts = summary(choose_review(corrected, "all", 1, "count", 7))
+    assert counts.reviewed == 3 and counts.comparable_records == 2
+    assert counts.agreements == 2 and counts.manual_vs_comprehend_agreement == 1
+    only_manual = apply_manual_labels(
+        DatasetBundle(dataset_id="manual", original=make_dataset(["a"])),
+        [ManualLabel(id="r0", label="neutral")],
+    )
+    assert summary(only_manual).comparable_records == 0
+    assert summary(only_manual).manual_vs_comprehend_agreement is None
+    assert "agreement:" not in render_report(only_manual)

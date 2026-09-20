@@ -46,15 +46,23 @@ OpenAPI type: the types say what the backend claims, the schemas check what it s
 loose so a newer API cannot break an older UI, and a mismatch raises `ApiContractError` naming the
 field. Cost: ~200 lines of schema to keep in step, enforced by the compiler rather than by memory.
 
-## ADR-19: An optional shared-secret API key, required in any deployment
+## ADR-19: Operator sessions for browsers; direct API keys for scripts
 The API spends money on someone's behalf: an X search bills the operator's credits, Comprehend
 labelling bills their AWS account. An unauthenticated internet-facing URL is therefore an open
-wallet, which no amount of spend-capping fixes. Every endpoint except `/health` now requires
-`X-API-Key` when `API_KEY` (or `API_KEY_SSM_PATH`) is set; the comparison is constant-time.
-It is optional so local development stays frictionless, and `/health` reports `auth_required` so
-an operator can see at a glance whether a deployment is open. Cost: one more secret to manage,
-and the browser build embeds the key, so it gates the operator's budget rather than
-authenticating individual users — a real multi-user deployment wants a proper identity provider.
+wallet, which no amount of spend-capping fixes. The operator enters the permanent API key through
+the sign-in form, which exchanges it at `POST /auth/session` for a one-hour bearer session.
+The session token is held only in browser memory and sent in the `Authorization` header;
+reloading requires sign-in again. The permanent key is not embedded in Vite output, JavaScript
+bundles or public S3 assets, persisted in browser storage, or placed in query strings.
+This session flow replaces the earlier decision to embed the permanent key in the browser build.
+
+Scripts and direct operator tooling may separately send the permanent key in `X-API-Key`.
+Configured authentication protects application routes; `/health` and the session exchange are
+public, and the exchange validates the operator key using a constant-time comparison.
+Authentication is optional locally, but Lambda fails closed without `API_KEY` or a resolved
+`API_KEY_SSM_PATH`. `/health` reports `auth_required`. Cost: one more secret to manage and periodic
+browser sign-in; this shared operator identity gates the budget rather than authenticating
+individual users. A multi-user deployment still needs a proper identity provider.
 
 ## ADR-18: React 19 APIs adopted only where they fit
 The upgrade to React 19 made `useActionState`, `useOptimistic`, `use`, `<Context>` as a provider
@@ -101,8 +109,9 @@ operator reads CloudWatch for those facts instead of the page, which is where th
 
 ## ADR-13: Live Comprehend price from the Price List API, no hard-coded fallback
 The estimate shown before spending uses `pricing:GetProducts` filtered by region, cached 24 h in
-the history database, served stale if a refresh fails, and reported as *unavailable* if nothing
-was ever fetched. A hard-coded rate would eventually be wrong and look authoritative; an honest
+the history database, served stale for at most an additional 48 h if refresh fails, and
+reported as *unavailable* when absent, expired, invalid, or future-dated. Both cache TTL and
+stale grace are nonnegative configurable durations. A hard-coded rate would eventually be wrong and look authoritative; an honest
 "estimate unavailable, check AWS pricing" cannot mislead. Labelling itself is never blocked by a
 missing price. Cost: one extra IAM action and a first-call latency of a few hundred ms.
 
@@ -111,7 +120,8 @@ Task 2 needs labels. Comprehend labels everything for cents, a person reviews a 
 (default 150) and the app reports agreement, so Task 2 can train on Comprehend labels and evaluate
 on the reviewed subset. `label_source` and `comprehend_label` are stored per record so provenance is
 never lost. Spending is estimated from the published rate, confirmed in a dialog, done in resumable
-slices and checkpointed to CSV after each, so a crash cannot lose paid work. Cost: Comprehend's
+slices with incremental durable progress and CSV snapshots. Provider success immediately before
+persistence remains ambiguous; checkpoint replacement failures retain older files with explicit status. Cost: Comprehend's
 biases become the training signal; the reviewed sample is what keeps that honest.
 
 ## ADR-11: Remove Django; SQLAlchemy for the two history tables

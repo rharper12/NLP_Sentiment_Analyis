@@ -8,12 +8,14 @@ data exists: after collect, after preprocessing, and after every labelling call.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from decimal import Decimal
+from typing import Annotated
 
 import anyio
 from botocore.exceptions import BotoCoreError
@@ -68,8 +70,14 @@ from sentiment_prep.history import services as history
 from sentiment_prep.labeling import service as labeling
 from sentiment_prep.labeling.service import LabelEstimate, LabelProgress, ManualLabel
 from sentiment_prep.logging_config import bind_context, get_logger
-from sentiment_prep.models import CollectionProgress, Dataset, DatasetBundle, LabelSummary
-from sentiment_prep.preprocessing import DEFAULT_ORDER
+from sentiment_prep.models import (
+    CheckpointState,
+    CollectionProgress,
+    Dataset,
+    DatasetBundle,
+    LabelSummary,
+)
+from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_GROUPS
 from sentiment_prep.presentation import public_report
 from sentiment_prep.report import load_rationale, render_report
 from sentiment_prep.sources.base import DataSource
@@ -80,6 +88,9 @@ from sentiment_prep.storage.checkpoints import (
     CheckpointStore,
     Stage,
     checkpoint_bundle,
+    checkpoint_info,
+    checkpoint_warnings,
+    invalidate_checkpoints,
 )
 from sentiment_prep.storage.repository import BundleRepository
 
@@ -136,6 +147,7 @@ def health(settings: SettingsDep, request: Request) -> HealthResponse:
         status="ok",
         version=__version__,
         diagnostics=diagnostics,
+        x_cost_per_read_usd=settings.x_cost_per_read_usd,
         x_configured=bool(settings.x_bearer_token or settings.x_bearer_token_ssm_path),
         auth_required=bool(
             settings.api_key or settings.api_key_ssm_path or settings.runtime == "lambda"
@@ -210,15 +222,8 @@ async def load_dataset(
     if summary is not None:
         return summary
     assert dataset is not None
-    cost = (
-        round(len(dataset.records) * settings.x_cost_per_read_usd, 4)
-        if body.source == "x"
-        else None
-    )
     # Database and checkpoint writes are synchronous; keep them off the event loop.
-    return await anyio.to_thread.run_sync(
-        lambda: _store(dataset, repo, checkpoints, estimated_cost_usd=cost)
-    )
+    return await anyio.to_thread.run_sync(lambda: _store(dataset, repo, checkpoints))
 
 
 @router.post(
@@ -290,7 +295,9 @@ def get_records(
 def list_steps() -> list[StepInfo]:
     """Catalogue of steps with their human-written rationale, in the recommended order."""
     rationale = load_rationale()
-    return [StepInfo(name=name, **rationale[name]) for name in DEFAULT_ORDER]
+    return [
+        StepInfo(name=name, group=STEP_GROUPS[name], **rationale[name]) for name in DEFAULT_ORDER
+    ]
 
 
 @router.post(
@@ -334,6 +341,7 @@ def preprocess(
         dataset_id=dataset_id,
         applied_steps=updated.applied_steps,
         partial=updated.analysis.partial,
+        warnings=checkpoint_warnings(updated),
         record_count=len(updated.processed.records),
         metrics_before=before,
         metrics_after=after,
@@ -429,6 +437,7 @@ def label_comprehend(
         if progress.labelled_in_call and can_start():
             bundle = checkpoint_bundle(checkpoints, bundle, "labelled")
             edit.save(bundle)
+    progress.warnings = checkpoint_warnings(bundle)
     return progress
 
 
@@ -501,8 +510,11 @@ def manual_labels(
 )
 def list_checkpoints(dataset_id: str, repo: RepoDep, checkpoints: CheckpointDep) -> CheckpointList:
     """CSV (and any converted Parquet) snapshots for collected, processed and labelled stages."""
-    repo.get(dataset_id)  # 404 if unknown
-    return CheckpointList(location=deps.checkpoint_location(), items=checkpoints.list(dataset_id))
+    bundle = repo.get(dataset_id)
+    return CheckpointList(
+        location=deps.checkpoint_location(),
+        items=[checkpoint_info(info, bundle) for info in checkpoints.list(dataset_id)],
+    )
 
 
 @router.post(
@@ -516,11 +528,30 @@ def convert_checkpoint(
     dataset_id: str, stage: Stage, repo: RepoDep, checkpoints: CheckpointDep
 ) -> CheckpointInfo:
     """Read the stage's CSV snapshot and write a Parquet twin next to it."""
-    with repo.edit(dataset_id):
+    with repo.edit(dataset_id) as edit:
+        bundle = edit.bundle
+        source = bundle.checkpoint_status.get(f"{stage}:csv")
+        if source and source.status != "current":
+            raise ConflictError("Regenerate the outdated CSV checkpoint before converting it.")
         csv_bytes = checkpoints.read(dataset_id, stage, "csv")
         if csv_bytes is None:
             raise NotFoundError(f"no {stage} checkpoint for dataset {dataset_id}")
-        return checkpoints.save(dataset_id, stage, "parquet", csv_to_parquet(csv_bytes))
+        key = f"{stage}:parquet"
+        try:
+            info = checkpoints.save(dataset_id, stage, "parquet", csv_to_parquet(csv_bytes))
+        except Exception as exc:
+            previous = bundle.checkpoint_status.get(key, CheckpointState())
+            bundle.checkpoint_status[key] = previous.model_copy(update={"status": "failed"})
+            edit.save(bundle)
+            raise AppError(
+                "Checkpoint conversion failed. Retry; any previous snapshot has been retained."
+            ) from exc
+        bundle.checkpoint_status[key] = CheckpointState(
+            revision=hashlib.sha256(csv_bytes).hexdigest(),
+            status="current" if source else "stale",
+        )
+        edit.save(bundle)
+        return checkpoint_info(info, bundle)
 
 
 # --- export -----------------------------------------------------------------------------------
@@ -674,7 +705,9 @@ def _collect_x(
                 window_start=body.start_time,
                 window_end=body.end_time,
             ),
-            collection=CollectionProgress(request=identity),
+            collection=CollectionProgress(
+                request=identity, billed_reads=0, committed_cost_usd=Decimal("0")
+            ),
         )
         with suppress(ConflictError):  # Another creator may win; edit arbitrates ownership.
             repo.save(bundle)
@@ -686,6 +719,9 @@ def _collect_x(
 
             def persist(dataset: Dataset, progress: CollectionProgress) -> None:
                 nonlocal bundle
+                # Cursor/accounting/stop-reason updates alone do not change source rows.
+                if dataset.records != bundle.original.records:
+                    invalidate_checkpoints(bundle, "collected")
                 bundle = bundle.model_copy(
                     update={"original": dataset, "collection": progress.model_copy(deep=True)}
                 )
@@ -702,6 +738,7 @@ def _collect_x(
         if bundle.collection and bundle.collection.complete and settings.dedupe_enabled:
             kept, removed = deduplicate(bundle.original.records, settings.dedupe_similarity)
             if removed:
+                invalidate_checkpoints(bundle, "collected")
                 bundle = bundle.model_copy(
                     update={
                         "original": bundle.original.model_copy(
@@ -717,16 +754,11 @@ def _collect_x(
             bundle = checkpoint_bundle(checkpoints, bundle, "collected")
             edit.save(bundle)
             history.record_dataset(bundle)
-    return _summary(
-        bundle,
-        estimated_cost_usd=round(bundle.collection.reads * settings.x_cost_per_read_usd, 4)
-        if bundle.collection
-        else None,
-    )
+    return _summary(bundle)
 
 
 def _store(
-    dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore, **extra: Any
+    dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore
 ) -> DatasetSummary:
     """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
 
@@ -749,12 +781,12 @@ def _store(
     repo.save(bundle)
     history.record_dataset(bundle)
     logger.info("dataset_stored", records=len(dataset.records), source=dataset.source_type)
-    return _summary(bundle, **extra)
+    return _summary(bundle)
 
 
-def _summary(bundle: DatasetBundle, estimated_cost_usd: float | None = None) -> DatasetSummary:
+def _summary(bundle: DatasetBundle) -> DatasetSummary:
     dataset = bundle.original
-    warnings: list[str] = []
+    warnings: list[str] = checkpoint_warnings(bundle)
     if len(dataset.records) < MIN_RECORDS_FOR_TASK:
         warnings.append(
             f"only {len(dataset.records)} records; Task 1 needs at least {MIN_RECORDS_FOR_TASK}. "
@@ -770,7 +802,10 @@ def _summary(bundle: DatasetBundle, estimated_cost_usd: float | None = None) -> 
         labelled_count=sum(1 for r in dataset.records if r.label),
         filtered_out=dataset.filtered_out,
         truncated_reason=dataset.truncated_reason,
-        estimated_cost_usd=estimated_cost_usd,
+        billed_reads=bundle.collection.billed_reads if bundle.collection else None,
+        committed_cost_usd=float(bundle.collection.committed_cost_usd)
+        if bundle.collection and bundle.collection.committed_cost_usd is not None
+        else None,
         partial=bundle.collection is not None and not bundle.collection.complete,
         resume_request_id=bundle.dataset_id.removeprefix("x-") if bundle.collection else None,
         retry_at=bundle.collection.retry_at or None if bundle.collection else None,

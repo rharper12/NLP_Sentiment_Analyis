@@ -128,3 +128,15 @@ def test_missing_data_fill_value_is_configurable_and_validated():
             MissingDataStep("fill", fill_value=bad)
     # The value is irrelevant when dropping, so it is not validated there.
     assert MissingDataStep("drop", fill_value="").transform(rec("ok")) is not None
+
+
+def test_shared_frontend_catalogue_fixture_matches_real_backend_order():
+    import json
+    from pathlib import Path
+
+    from sentiment_prep.api.routes import list_steps
+
+    expected = json.loads((Path(__file__).parents[1] / "fixtures" / "steps.json").read_text())
+    actual = [step.model_dump() for step in list_steps()]
+    assert actual == expected
+    assert actual[-1]["name"] == "missing_data" and actual[-1]["group"] == "final"

@@ -5,13 +5,9 @@ import { useReducer } from "react";
 
 import type { StepInfo, StepOptions } from "../api/types";
 
-export const GROUP_OF: { [step: string]: "clean" | "normalise" } = {
-  missing_data: "clean", lowercase: "clean", punctuation: "clean",
-  tokenize: "normalise", stopwords: "normalise", lemmatize: "normalise",
-};
-
 export interface PipelineConfig {
   order: string[];
+  groups: { [name: string]: StepInfo["group"] };
   enabled: { [name: string]: boolean };
   options: StepOptions;
   explain: boolean;
@@ -24,12 +20,20 @@ type Action =
   | { type: "options"; options: Partial<StepOptions> }
   | { type: "explain"; value: boolean };
 
+/** Shared by the controls and reducer; movement stays within the server-provided group. */
+export function canMove(state: PipelineConfig, name: string, direction: -1 | 1): boolean {
+  const index = state.order.indexOf(name), target = index + direction;
+  return index >= 0 && target >= 0 && target < state.order.length
+    && state.groups[name] === state.groups[state.order[target]];
+}
+
 function reduce(state: PipelineConfig, action: Action): PipelineConfig {
   switch (action.type) {
     case "init":
       return {
         ...state,
         order: action.steps.map((s) => s.name),
+        groups: Object.fromEntries(action.steps.map((s) => [s.name, s.group])),
         enabled: Object.fromEntries(action.steps.map((s) => [s.name, true])),
       };
     case "toggle":
@@ -38,8 +42,7 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
       // Cleaning steps always run before normalisation steps, so moves stay within a group.
       const index = state.order.indexOf(action.name);
       const target = index + action.direction;
-      if (index < 0 || target < 0 || target >= state.order.length) return state;
-      if (GROUP_OF[action.name] !== GROUP_OF[state.order[target]]) return state;
+      if (!canMove(state, action.name, action.direction)) return state;
       const order = [...state.order];
       [order[index], order[target]] = [order[target], order[index]];
       return { ...state, order };
@@ -53,6 +56,7 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
 
 const initialConfig: PipelineConfig = {
   order: [],
+  groups: {},
   enabled: {},
   options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: true },
   explain: true,

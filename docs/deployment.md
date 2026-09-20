@@ -1,8 +1,8 @@
 # Deployment
 
 Everything is one SAM/CloudFormation stack in `infrastructure/stack_request/`. The Lambda is a
-container image because NLTK corpora, pyarrow and  exceed the zip limit; the
-Dockerfile at the repo root bakes all of them in so nothing downloads at runtime.
+container image because NLTK corpora and pyarrow exceed the zip limit; the
+`backend/Dockerfile` bakes all of them in so nothing downloads at runtime.
 
 ## Prerequisites
 
@@ -13,13 +13,14 @@ Dockerfile at the repo root bakes all of them in so nothing downloads at runtime
 ## Secrets
 
 Nothing secret is in the repository or in CloudFormation parameters. The function reads
-SecureStrings from SSM at startup:
+SecureStrings from SSM on first use and caches values for at most five minutes. Rotation is
+visible after cache expiry; environment variables take precedence:
 
 | SSM path (default, per stage) | Used for | Required |
 |---|---|---|
-| `/sentiment-prep/{stage}/api-key` | the `X-API-Key` every request must carry | **yes, for any internet-facing deployment** |
+| `/sentiment-prep/{stage}/api-key` | operator login secret; scripts may send `X-API-Key` | **yes, for any internet-facing deployment** |
 | `/sentiment-prep/{stage}/x-bearer-token` | X API | only for X fetches |
-| custom, set via `DatabaseUrlSsmPath` | Postgres URL for durable history | optional |
+| custom, set via `DatabaseUrlSsmPath` | Postgres URL for durable history | required for paid X collection in Lambda |
 
 ```bash
 make put-secret NAME=api-key VALUE="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')" STAGE=dev
@@ -41,17 +42,16 @@ a checkout under a path containing spaces working.
 ```bash
 make validate                    # cfn-lint on the template
 make deploy                      # builds first, then deploys from .aws-sam/build
-make deploy-site STAGE=dev       # build the UI against ApiUrl, sync to the site bucket
+make deploy-web STAGE=dev       # build the UI against ApiUrl, sync to the site bucket
 make deploy CONFIG_ENV=prod      # uses the [prod] block in samconfig.toml
 ```
 
-Build the UI with the same key (`VITE_API_KEY=… npm run build`, which `make deploy-site` passes
-through) or the deployed site cannot call its own API. Check `/health` after deploying: if
-`auth_required` is false, the deployment is open to anyone who finds the URL and can spend your X
-credits — fix that before sharing the link.
+The production UI contains no operator secret. Open the site and sign in with the operator key;
+the browser exchanges it at `POST /auth/session` for a one-hour in-memory bearer token. Reloading
+requires sign-in again. Scripts may send `X-API-Key`. Lambda refuses an unset operator key.
 
-After the first deploy, copy the `SiteUrl` output into the `CorsOrigins` override and deploy
-again so the browser can call the API. 
+The template adds the HTTPS CloudFront site origin to CORS automatically. Configure additional
+origins through `CorsOrigins`; a second deployment to add the site URL is unnecessary.
 
 ## Least privilege
 
@@ -79,16 +79,14 @@ If you add a service call to the code, add exactly one statement here, in the sa
 
 ## Database
 
-**Upgrading an existing deployment:** a `spend_day` table was added (created automatically) and
-the cached-price column changed from `Float` to `Numeric(12, 6)`. `create_all` does not alter existing tables, so on SQLite delete the file (it is
-a cache; it rebuilds) and on Postgres run
-`ALTER TABLE price_quote ALTER COLUMN price_per_unit_usd TYPE numeric(12,6);` before deploying.
+The image includes `psycopg[binary]`. Paid X collection in Lambda requires a reachable shared
+PostgreSQL database with a `postgresql+psycopg://` URL supplied through `DatabaseUrlSsmPath`.
+No connection or durable ledger means no paid X request. SQLite under `/tmp` remains available
+for unpaid demos/history and is ephemeral; it cannot enforce a shared paid budget.
 
-
-Default is SQLite on `/tmp`: fine for demos, resets on cold start. For durable history, provision Postgres (RDS, Aurora Serverless v2, Neon, Supabase), store the URL as a
-SecureString, set `DatabaseUrlSsmPath`, and add `psycopg[binary]` to `pyproject.toml`
-dependencies before building the image. Tables are created on first use (`create_all`); the schema is small and additive. Adopt Alembic if
-you ever need a destructive change.
+Tables are created on first use. `create_all` does not migrate existing column types. For an
+older deployment using a floating cached-price column, back up the database and migrate that
+column to `numeric(12,6)`. Do not delete a database containing spend history to refresh prices.
 
 ## Running against AWS from your machine
 
@@ -110,7 +108,7 @@ COMPREHEND_ENABLED=true
 this project's `.env` is parsed by pydantic-settings and never reaches boto3's own environment
 lookup, so exporting it in the shell also works but is not required.
 
-Check it took effect: `GET /health` reports `comprehend_enabled`, and the first AWS call logs
+With diagnostics enabled and valid authentication, `GET /health` reports `comprehend_enabled`, and the first AWS call logs
 `boto_session_created` with the profile name. When the SSO session lapses, requests fail with a
 503 saying to run `aws sso login` rather than a generic error.
 
@@ -131,7 +129,7 @@ export DOCKER_HOST="unix://$HOME/.docker/run/docker.sock"
 
 Also worth updating the CLI: 1.122 predates several Docker Desktop socket fixes.
 
-**`uvicorn: command not found` from `make local-api`.** Make's recipes run in `/bin/sh`, which does
+**`uvicorn: command not found` from `make dev-api`.** Make's recipes run in `/bin/sh`, which does
 not inherit an activated virtualenv. The Makefile puts `.venv/bin` first on `PATH`, so this works
 without activation once `make setup` has run — if it still fails, the virtualenv is somewhere other
 than `.venv/` at the repository root.
@@ -141,7 +139,7 @@ than `.venv/` at the repository root.
 ## Operating
 
 - `/health` returns operator details only when `DIAGNOSTICS` is true; it defaults to false in
-  Lambda. Leave it that way on a public URL.
+  Lambda, and configured authentication is still required for operator details.
 
 - `make logs` tails structured logs. See [logging-and-debugging.md](logging-and-debugging.md) for
   Logs Insights queries.

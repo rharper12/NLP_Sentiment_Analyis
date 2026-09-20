@@ -170,6 +170,7 @@ def _lambda_request_id(request: Request) -> str | None:
 
 
 app = create_app()
-# "auto" runs the lifespan handler on cold start and at container shutdown, which is where the
-# schema is created and the pooled clients are closed.
-handler = Mangum(app, lifespan="auto")
+# Mangum enters/exits ASGI lifespan per invocation, not per process. Lambda uses lazy
+# schema/client initialization and keeps owned clients for warm invocations. Real ASGI servers
+# use lifespan above for teardown; Lambda process termination releases its resources.
+handler = Mangum(app, lifespan="off")

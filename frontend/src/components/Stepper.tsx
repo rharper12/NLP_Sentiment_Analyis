@@ -20,7 +20,8 @@ export function Stepper({ current, reached, onSelect, disabled = false }: Props)
   const currentIndex = STAGES.findIndex((s) => s.id === current);
   return (
     <nav aria-label="Progress" className="glass-bar border-b border-rule">
-      <ol className="mx-auto flex max-w-6xl justify-between overflow-x-auto px-4 sm:px-6">
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- The scroll region needs keyboard access while review disables its buttons. */}
+      <ol tabIndex={0} aria-label="Progress steps" className="focus-visible:-outline-offset-4 mx-auto flex max-w-6xl justify-between overflow-x-auto px-4 sm:px-6">
         {STAGES.map((s, i) => {
           const done = i < currentIndex;
           const enabled = !disabled && i <= reachedIndex;
@@ -32,7 +33,7 @@ export function Stepper({ current, reached, onSelect, disabled = false }: Props)
                 disabled={!enabled}
                 onClick={() => onSelect(s.id)}
                 aria-current={active ? "step" : undefined}
-                className={`group flex items-center gap-3 border-b-2 px-3 py-3 text-left sm:px-4 ${
+                className={`focus-visible:-outline-offset-4 group flex items-center gap-3 border-b-2 px-3 py-3 text-left sm:px-4 ${
                   active ? "border-accent" : "border-transparent"
                 } disabled:cursor-default`}
               >

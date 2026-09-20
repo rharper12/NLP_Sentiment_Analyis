@@ -45,7 +45,7 @@ export default function App() {
   const [xRequest, setXRequest] = useState<{ id: string; query: string; limit: number; window: { start?: string; end?: string } } | null>(null);
   const [labelled, setLabelled] = useState(false);
   const [reviewActive, setReviewActive] = useState(false);
-  const reached: Stage = labelled ? "export" : run.data ? "label" : dataset.data ? "clean" : "collect";
+  const reached: Stage = dataset.loading ? "collect" : run.loading ? "analyze" : labelled ? "export" : run.data ? "label" : dataset.data ? "clean" : "collect";
   const go = (s: Stage) => { if (!reviewActive && order(s) <= order(reached)) setStage(s); };
 
   const collect = async (task: (signal: AbortSignal) => Promise<DatasetSummary>) => {
@@ -69,7 +69,7 @@ export default function App() {
     if (result) setRunVersion((v) => v + 1);
   };
 
-  const startOver = () => { run.reset(); dataset.reset(); setLabelled(false); setStage("collect"); };
+  const startOver = () => { run.reset(); dataset.reset(); setXRequest(null); setLabelled(false); setStage("collect"); };
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -81,6 +81,7 @@ export default function App() {
           {stage === "collect" && (
             <CollectStep
               busy={dataset.loading} error={dataset.error} dataset={dataset.data}
+              costPerRead={health.data?.x_cost_per_read_usd}
               xConfigured={health.data?.x_configured ?? true}
               onSearch={(q, n, window) => {
                 const id = crypto.randomUUID();
@@ -107,6 +108,7 @@ export default function App() {
           )}
           {stage === "analyze" && dataset.data && (
             <AnalyzeStep
+              key={dataset.data.dataset_id}
               diagnostics={health.data?.diagnostics ?? false}
               datasetId={dataset.data.dataset_id} recordCount={dataset.data.record_count} theme={theme}
               run={run.data} busy={run.loading} error={run.error} runVersion={runVersion}
@@ -126,7 +128,7 @@ export default function App() {
             />
           )}
           {stage === "export" && dataset.data && (
-            <ExportStep dataset={dataset.data} run={run.data} diagnostics={health.data?.diagnostics ?? false} onBack={() => setStage("label")} onStartOver={startOver} />
+            <ExportStep key={dataset.data.dataset_id} dataset={dataset.data} run={run.data} diagnostics={health.data?.diagnostics ?? false} onBack={() => setStage("label")} onStartOver={startOver} />
           )}
         </ErrorBoundary>
       </main>

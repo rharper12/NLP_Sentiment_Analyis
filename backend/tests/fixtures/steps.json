@@ -1,0 +1,50 @@
+[
+  {
+    "name": "lowercase",
+    "group": "clean",
+    "title": "Lowercase",
+    "summary": "Fold case so the same word maps to one vocabulary entry.",
+    "strengths": "Shrinks the vocabulary and merges sparse capitalised variants, which helps bag-of-words and TF-IDF models generalise from small datasets.\n",
+    "limitations": "Destroys the emphasis signal in ALL CAPS (\"this is AMAZING\"), which correlates with strong sentiment. Transformer models with cased tokenizers do not need this step.\n"
+  },
+  {
+    "name": "punctuation",
+    "group": "clean",
+    "title": "Remove punctuation and special characters",
+    "summary": "Strip URLs, mentions, symbols, and stray characters; keep hashtag words.",
+    "strengths": "URLs and usernames carry no sentiment and inflate the vocabulary with one-off tokens. Removing them cuts noise sharply on social media text.\n",
+    "limitations": "Exclamation marks, question marks and emoticons like \":(\" are sentiment cues that this step discards. Contractions can also be damaged if the apostrophe handling is wrong.\n"
+  },
+  {
+    "name": "tokenize",
+    "group": "normalise",
+    "title": "Tokenize",
+    "summary": "Split text into word-level tokens with the Treebank tokenizer.",
+    "strengths": "Produces the unit every downstream model consumes. Treebank splits contractions (\"don't\" to \"do\" and \"n't\") so negation becomes its own token.\n",
+    "limitations": "Rule-based tokenizers handle emoji, hashtags and slang inconsistently. Splitting contractions is helpful for negation handling but changes token counts in ways that make before/after comparisons less intuitive.\n"
+  },
+  {
+    "name": "stopwords",
+    "group": "normalise",
+    "title": "Remove stopwords",
+    "summary": "Drop frequent function words, keeping negations by default.",
+    "strengths": "Reduces token count and sparsity, so simple models spend capacity on content words rather than \"the\" and \"of\".\n",
+    "limitations": "Standard stopword lists contain \"not\", \"no\" and \"never\". Removing those flips the meaning of \"not good\". This implementation keeps negations, but the cost is that the reduction in token count is smaller than a naive stopword pass would show.\n"
+  },
+  {
+    "name": "lemmatize",
+    "group": "normalise",
+    "title": "Lemmatize",
+    "summary": "Reduce words to dictionary form with WordNet.",
+    "strengths": "Merges inflected forms (\"loved\", \"loves\") into one entry, which helps frequency-based models on small datasets.\n",
+    "limitations": "WordNet depends on part-of-speech tags, so tagger mistakes propagate, and its verb rules occasionally over-strip (\"hated\" becomes \"hat\"). Lemmatization also erases tense and number, which occasionally matters for sentiment (\"it was great\" vs \"it is great\").\n"
+  },
+  {
+    "name": "missing_data",
+    "group": "final",
+    "title": "Handle empty records",
+    "summary": "Drop records with no text left, or fill them with a placeholder you choose.",
+    "strengths": "Removes rows that would otherwise produce empty token lists, zero-length embeddings, or Comprehend errors. It runs last by default because posts rarely arrive empty: they become empty. A post that is only a link and a mention has real text on arrival and nothing left once URLs and mentions are stripped, so a sweep at the end catches what a check at the start cannot.\n",
+    "limitations": "Dropping rows can bias the dataset if missingness correlates with a class (for example, image-only posts skew positive). Filling keeps the row count but injects a synthetic token the model must learn to ignore, so the placeholder should be a string the corpus cannot contain. Posts that were *already* empty of content on arrival are filtered at collection instead, so that the record count is identical across every preprocessing configuration and two runs can be compared against the same denominator.\n"
+  }
+]

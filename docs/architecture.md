@@ -3,7 +3,7 @@
 Diagrams for all of this are in [architecture-diagrams.md](architecture-diagrams.md).
 
 ```
-Browser (React 18, Vite)  ──HTTPS──►  API Gateway (HTTP API)  ──►  Lambda container
+Browser (React 19, Vite)  ──HTTPS──►  API Gateway (HTTP API)  ──►  Lambda container
                                                                      │
                                        FastAPI (ASGI root) ──────────┤── history/ (SQLAlchemy)
                                        │                             │      runs, spend ledger
@@ -58,10 +58,12 @@ Record text never enters the database or the logs above DEBUG.
 
 ## Process lifecycle
 
-Importing `api.app` has no side effects. The `lifespan` handler creates the history schema on
-startup and closes the pooled HTTP and AWS clients on shutdown; Mangum runs it with
-`lifespan="auto"`. HTTP clients (`httpx`) and boto3 clients are cached per process in
-`api/deps.py` and injected — nothing constructs a client per request.
+Importing `api.app` constructs the app and configures logging. Local ASGI lifespan initializes
+the history schema and closes owned HTTP/AWS clients on server teardown, clearing repository
+and checkpoint factories that retain them. Lambda uses Mangum with `lifespan="off"`: its
+invocation lifecycle is not process shutdown. The database initializes lazily and warm invocations
+reuse process-owned clients. SSM values have a five-minute cache; temporary SSM clients close
+after each lookup. SQLAlchemy sessions close per transaction; the engine pool lives per process.
 
 ## Request lifecycle
 

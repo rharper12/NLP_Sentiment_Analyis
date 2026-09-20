@@ -5,14 +5,14 @@
 ```bash
 git clone <repo> && cd sentiment-prep
 make setup          # Python deps, NLTK corpora, npm packages, .env from .env.example
-make test           # 40 tests, no AWS credentials needed
+make test           # backend/frontend regression suites; no AWS credentials needed
 make dev            # API on :8000 and UI on :5173, together
-make frontend       # http://localhost:5173 (proxies /api to :8000)
+make dev-web       # http://localhost:5173 (proxies /api to :8000)
 ```
 
-With the default `.env`, Comprehend and Bedrock are off and no X token is set. Load the Hugging
-Face dataset or upload a CSV and the whole pipeline works offline. Turn services on one at a time
-as you get credentials.
+With the default `.env`, Comprehend and Bedrock are off and no X token is set. CSV processing
+works offline; loading the Hugging Face dataset requires internet access. Turn services on one
+at a time as you get credentials.
 
 ## Repository map
 
@@ -25,9 +25,9 @@ backend/
     preprocessing/  one module per step, pipeline.py, STEP_REGISTRY in __init__.py
     analysis/       metrics, Comprehend (shared scorer), Titan embeddings, Bedrock explainer
     labeling/       estimate, Comprehend slices, review sampling, manual labels, summary
-    pricing/        Price List lookup with a 24 h cache
+    pricing/        Price List lookup with a 24 h cache and 48 h stale grace
     export/         csv, xlsx, parquet; rows.py is the shared row shape
-    storage/        repository (in-memory | S3), checkpoints (local | S3), s3_store (saves)
+    storage/        repository (local journal | S3; in-memory test adapter), checkpoints (local | S3), s3_store (saves)
     history/        SQLAlchemy models, db (engine/session), services (incl. DbLedger)
     resources/      rationale.yaml, explain_prompt.txt
     config.py       every env var; logging_config.py: structlog; models.py; report.py
@@ -66,10 +66,8 @@ exc_info=True)` is intentional; `.exception()` would duplicate the message).
 
 **Types.** `mypy --strict` passes. AWS clients are typed with `boto3-stubs`
 (`ComprehendClient`, `S3Client`, `BedrockRuntimeClient`, `PricingClient`) imported under
-`TYPE_CHECKING`, so the stubs cost nothing at runtime. `Any` survives in four places only, each
-with a comment saying why: the generic `_boto_client` factory (boto3's overloads are keyed on
-literal service names), `**extra` kwargs, structlog's renderer, and the raw JSON dicts from the
-Price List API. Nothing else should need it.
+`TYPE_CHECKING`, so stubs cost nothing at runtime. External payloads require runtime validation;
+SDK/ORM boundary casts alone do not validate provider responses.
 
 **Logging.** `log.info("event_name", key=value)`. Event names are snake_case identifiers, not
 sentences. Never log record text above DEBUG. See [logging-and-debugging.md](logging-and-debugging.md).
@@ -88,7 +86,7 @@ UI, but a missing or wrong-typed field throws `ApiContractError` naming the fiel
 letting `undefined` surface three components deep.
 
 **Frontend types are generated, never hand-written.** `src/api/schema.d.ts` comes from the
-backend's OpenAPI document (`make gen-api` with the API running) and `src/api/types.ts` derives
+backend's OpenAPI document (`make api-types` with the API running) and `src/api/types.ts` derives
 every exported type from it. If you change a Pydantic schema, regenerate: a field that became
 optional shows up as a type error instead of `undefined` at runtime.
 
@@ -109,8 +107,9 @@ they do not reach into global state.
 3. Add an entry to `resources/rationale.yaml` with `title`, `summary`, `strengths`, `limitations`.
    Be honest in `limitations`; that text ends up in the report a grader reads.
 4. If the step needs options, add them to `StepOptions` in `api/schemas.py` and wire them in
-   `service.py::build_steps`, then expose the control in `components/stages/CleanStep.tsx` and add the step to a group in
-   `GROUPS` there and `GROUP_OF` in `hooks/usePipelineConfig.ts`.
+   `service.py::build_steps`, then expose the control in `components/stages/CleanStep.tsx`. Assign its group in backend
+   `STEP_GROUPS`; the frontend reads that metadata from `/steps`. Update the shared catalogue
+   fixture in `backend/tests/fixtures/steps.json`, which both test suites verify.
 5. Tests in `tests/unit/test_preprocessing.py`: normal text, empty string, non-ASCII, text that is
    entirely removed. The UI needs no changes for a plain step; it reads the catalogue from `/steps`.
 
@@ -128,7 +127,7 @@ they do not reach into global state.
 
 ## Testing
 
-- `make test` runs both suites; `cd backend && pytest -q` takes about seven seconds. Wall-clock
+- `make test` runs both suites; `cd backend && pytest -q` runs the backend suite. Wall-clock
   assertions are marked `slow` and can be skipped with `pytest -m "not slow"`. S3 uses `moto`; Comprehend and Bedrock use
   the fakes in `tests/conftest.py`; history uses a fresh SQLite file under `/tmp` each session.
 - Integration tests build the app with `create_app()` and monkeypatch `api.deps` functions. Do the

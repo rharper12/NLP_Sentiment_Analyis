@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sentiment_prep.analysis.metrics import DatasetMetrics
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
 from sentiment_prep.models import Record, SentimentLabel, SourceType
+from sentiment_prep.preprocessing import StepGroup
 from sentiment_prep.preprocessing.missing_data import DEFAULT_FILL_VALUE, MAX_FILL_VALUE_CHARS
 from sentiment_prep.presentation import PublicImpactReport
 from sentiment_prep.storage.checkpoints import CheckpointInfo
@@ -51,7 +52,8 @@ class DatasetSummary(BaseModel):
         description="Posts the source returned but that were not kept, by reason.",
     )
     truncated_reason: str | None
-    estimated_cost_usd: float | None = None
+    billed_reads: int | None = None
+    committed_cost_usd: float | None = None
     partial: bool = False
     resume_request_id: str | None = None
     retry_at: float | None = None
@@ -89,6 +91,7 @@ class PreprocessResponse(BaseModel):
     applied_steps: list[str]
     record_count: int
     partial: bool = False
+    warnings: list[str] = Field(default_factory=list)
     metrics_before: DatasetMetrics
     metrics_after: DatasetMetrics
     report: PublicImpactReport
@@ -114,6 +117,7 @@ class StepInfo(BaseModel):
     """Step catalogue entry for the UI toggle list."""
 
     name: str
+    group: StepGroup
     title: str
     summary: str
     strengths: str
@@ -222,6 +226,7 @@ class HealthResponse(BaseModel):
     version: str
     diagnostics: bool
     x_configured: bool
+    x_cost_per_read_usd: float | None = None
     auth_required: bool
     runtime: str | None = None
     database: str | None = None

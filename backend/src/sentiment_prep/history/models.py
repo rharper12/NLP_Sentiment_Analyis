@@ -1,6 +1,7 @@
 """What we keep about each dataset, pipeline run and paid API call.
 
-Metadata only: record text stays in the working repository (S3/in-memory), never in the database.
+Metadata only: record text stays in the working repository (local journal/S3),
+never in the database.
 """
 
 from __future__ import annotations

@@ -30,6 +30,8 @@ from sentiment_prep.pricing.comprehend_price import PriceQuote, PriceStatus
 if TYPE_CHECKING:
     from mypy_boto3_comprehend.client import ComprehendClient
 
+from sentiment_prep.storage.checkpoints import checkpoint_warnings, invalidate_checkpoints
+
 logger = get_logger(__name__)
 
 ReviewMode = Literal["none", "all", "sample"]
@@ -76,6 +78,7 @@ class LabelProgress(BaseModel):
     done: bool
     partial: bool = False
     stop_reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ManualLabel(BaseModel):
@@ -317,6 +320,11 @@ def summary(bundle: DatasetBundle) -> LabelSummary:
         reviewed=sum(1 for r in records if r.id in review and r.label_source == "manual"),
         manual_vs_comprehend_agreement=round(agreed / len(both), 4) if both else None,
         disagreements=len(both) - agreed,
+        manually_reviewed=sum(r.label_source == "manual" for r in records),
+        machine_scored=sum(r.comprehend_label is not None for r in records),
+        comparable_records=len(both),
+        agreements=agreed,
+        warnings=checkpoint_warnings(bundle),
     )
 
 
@@ -344,6 +352,7 @@ def _progress(
 
 
 def _with_records(bundle: DatasetBundle, records: list[Record]) -> DatasetBundle:
-    return bundle.model_copy(
-        update={"original": bundle.original.model_copy(update={"records": records})}
-    )
+    updated = bundle.model_copy(deep=True)
+    updated.original = bundle.original.model_copy(update={"records": records})
+    invalidate_checkpoints(updated, "labelled")
+    return updated

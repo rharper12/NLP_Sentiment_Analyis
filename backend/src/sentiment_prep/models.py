@@ -7,6 +7,7 @@ Changing a field here is an architectural decision, not a local edit.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -139,6 +140,11 @@ class LabelSummary(BaseModel):
     reviewed: int
     manual_vs_comprehend_agreement: float | None
     disagreements: int
+    manually_reviewed: int = 0
+    machine_scored: int = 0
+    comparable_records: int = 0
+    agreements: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 class LabelFailure(BaseModel):
@@ -179,9 +185,19 @@ class CollectionProgress(BaseModel):
     request: dict[str, str | int | None]
     next_token: str | None = None
     reads: int = 0
+    # Missing historical accounting is unknown, never silently reported as zero.
+    billed_reads: int | None = None
+    committed_cost_usd: Decimal | None = None
     complete: bool = False
     stop_reason: str | None = None
     retry_at: float = 0
+
+
+class CheckpointState(BaseModel):
+    """Content fingerprint of the stored snapshot, with explicit replacement/freshness state."""
+
+    revision: str | None = None
+    status: Literal["current", "stale", "failed"] = "stale"
 
 
 class DatasetBundle(BaseModel):
@@ -199,5 +215,6 @@ class DatasetBundle(BaseModel):
     review_ids: list[str] = Field(default_factory=list)
     label_failures: dict[str, LabelFailure] = Field(default_factory=dict)
     checkpoints: dict[CheckpointStage, str] = Field(default_factory=dict)
+    checkpoint_status: dict[str, CheckpointState] = Field(default_factory=dict)
     collection: CollectionProgress | None = None
     analysis: AnalysisProgress = Field(default_factory=AnalysisProgress)

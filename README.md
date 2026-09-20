@@ -10,8 +10,8 @@ A guided five-stage flow:
 
 1. **Collect.** Search any topic on X (last 7 days, spend-capped), load a labelled sample dataset,
    or upload a CSV.
-2. **Clean.** Choose cleaning steps (missing data, case, punctuation) and NLP normalisation steps
-   (tokenize, stopwords, lemmatize), each with its trade-offs stated inline.
+2. **Clean.** Choose cleaning steps (case, punctuation), NLP normalisation steps
+   (tokenize, stopwords, lemmatize), and a final empty-record sweep, each with its trade-offs stated inline.
 3. **Analyze.** Run it and read the impact in a sortable, filterable AG Grid table: vocabulary and token changes, a per-step waterfall,
    baseline sentiment agreement (Amazon Comprehend), embedding drift (Titan Embed v2), a generated
    explanation (Bedrock), and a word-level diff for any post.
@@ -38,11 +38,11 @@ make dev          # API on :8000 (Swagger at /docs) and UI on :5173, together
 plainly if it cannot reach it. See [docs/deployment.md](docs/deployment.md#troubleshooting) if a `make` target
 cannot find `uvicorn` or Docker.
 
-Defaults run fully offline: Comprehend and Bedrock are off and no X token is set. Load the
-Hugging Face dataset or a CSV and everything works; AWS-backed fields are null with a stated reason.
+Local CSV processing needs no paid services: Comprehend and Bedrock are off and no X token is set. Upload a CSV, or load the
+Hugging Face dataset over the internet; AWS-backed fields are null with a stated reason.
 
 ```bash
-make check        # lint, types and both test suites (59 backend + 12 frontend); S3 via moto, AWS ML services via fakes, history on SQLite
+make check        # lint, types and both test suites; S3 via moto, AWS ML services via fakes, history on SQLite
 ```
 
 ## Configuration
@@ -57,11 +57,11 @@ change:
 | `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | hard caps on billed reads (defaults 1000 / 3000) |
 | `AWS_PROFILE` | named profile from `~/.aws/config`, including SSO; blank uses the default chain |
 | `COMPREHEND_ENABLED`, `BEDROCK_ENABLED` | turn paid services on |
-| `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (cached 24 h; no hard-coded fallback) |
-| `API_KEY` | shared secret required on every request except `/health`; unset locally, **required for any internet-facing deployment** |
+| `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (24 h fresh + 48 h stale grace; no hard-coded fallback) |
+| `API_KEY` | operator secret exchanged for a temporary browser session; scripts may use `X-API-Key`; required for internet-facing deployments |
 | `DIAGNOSTICS` | expose operator-only details in `/health` and the UI (defaults on locally, off in Lambda) |
 | `CHECKPOINT_DIR` | local folder for stage snapshots when no bucket is set (gitignored) |
-| `DATABASE_URL` | Postgres for durable history; default SQLite |
+| `DATABASE_URL` | shared PostgreSQL required for paid X collection in Lambda; local default SQLite |
 | `DATA_BUCKET` | S3 bucket for saves and Lambda working state |
 
 ## Documentation
@@ -79,9 +79,10 @@ The [`docs/`](docs/README.md) folder is written so a new engineer can contribute
 ## Deploying
 
 ```bash
+make put-secret NAME=api-key VALUE='<operator-secret>'
 make put-secret NAME=x-bearer-token VALUE='AAAA…'
 make deploy                  # infrastructure/stack_request/template.yaml
-make deploy-site             # build UI against ApiUrl, sync to the site bucket
+make deploy-web             # build UI against ApiUrl, sync to the site bucket
 ```
 
 Full details, including the IAM statement list and the Postgres option, in
@@ -90,10 +91,10 @@ Full details, including the IAM statement list and the Postgres option, in
 ## Project layout
 
 ```
-src/sentiment_prep/    api · sources · preprocessing · analysis · labeling · export · storage · history
-frontend/src/          React 18 + TypeScript + Vite + Tailwind; api/ hooks/ components/stages/
+backend/src/sentiment_prep/ api · sources · preprocessing · analysis · labeling · export · storage · history
+frontend/src/          React 19 + TypeScript + Vite + Tailwind; api/ hooks/ components/stages/
 infrastructure/        stack_request/ (template.yaml, samconfig.toml)
-tests/                 unit/ and integration/
+backend/tests/         unit/ and integration/
 docs/                  guides and screenshots
 ```
 

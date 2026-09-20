@@ -3,8 +3,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { StrictMode } from "react";
+
 import { api } from "../../api/client";
-import type { LabelSummary } from "../../api/types";
+import type { LabelSummary, ReviewPage } from "../../api/types";
 import { Reviewer } from "./Reviewer";
 
 vi.mock("../../api/client", async (original) => ({
@@ -12,7 +14,7 @@ vi.mock("../../api/client", async (original) => ({
   api: { reviewPage: vi.fn(), manualLabels: vi.fn() },
 }));
 
-const saved: LabelSummary = { total: 11, labelled: 11, by_source: {}, by_label: {}, review_sample_size: 11, reviewed: 11, manual_vs_comprehend_agreement: null, disagreements: 0 };
+const saved: LabelSummary = { total: 11, labelled: 11, by_source: {}, by_label: {}, review_sample_size: 11, reviewed: 11, manual_vs_comprehend_agreement: null, disagreements: 0, manually_reviewed: 0, machine_scored: 0, comparable_records: 0, agreements: 0 };
 const onDone = vi.fn();
 const onError = vi.fn();
 
@@ -123,4 +125,60 @@ it("a failed in-flight automatic save cannot be bypassed by Finish", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Finish" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(vi.mocked(api.manualLabels).mock.calls[1][1]).toHaveLength(10);
+});
+
+it("replaces the request aborted by Strict Mode and accepts only its replacement", async () => {
+  const pages: { signal: AbortSignal; resolve: (page: import("../../api/types").ReviewPage) => void }[] = [];
+  vi.mocked(api.reviewPage).mockImplementation((_id, _offset, _limit, signal) => new Promise((resolve) => pages.push({ signal: signal!, resolve })));
+  render(<StrictMode><Reviewer datasetId="dataset" onError={onError} onDone={onDone} /></StrictMode>);
+  expect(pages).toHaveLength(2);
+  expect(pages[0].signal.aborted).toBe(true);
+  expect(pages[1].signal.aborted).toBe(false);
+  await act(async () => { pages[0].resolve({ total: 1, offset: 0, items: [{ id: "old", text: "Obsolete post", source_type: "csv" }] }); });
+  expect(screen.queryByText("Obsolete post")).toBeNull();
+  await act(async () => { pages[1].resolve({ total: 1, offset: 0, items: [{ id: "new", text: "Replacement post", source_type: "csv" }] }); });
+  expect(screen.getByText("Replacement post")).toBeTruthy();
+  expect(api.reviewPage).toHaveBeenCalledTimes(2);
+});
+
+it.each([0, 2])("retries a failed page at offset %i without refetching successful pages", async (offset) => {
+  const page = (start: number, count: number): ReviewPage => ({ total: offset + 1, offset: start, items: Array.from({ length: count }, (_, i) => ({ id: `r${start + i}`, text: `Post ${start + i}`, source_type: "csv" })) });
+  if (offset) vi.mocked(api.reviewPage).mockResolvedValueOnce(page(0, offset));
+  vi.mocked(api.reviewPage).mockRejectedValueOnce(new Error("page offline")).mockResolvedValueOnce(page(offset, 1));
+  render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
+  if (offset) { await screen.findByText("Post 0"); choose(offset); }
+  await screen.findByText(/page offline/);
+  expect(api.reviewPage).toHaveBeenCalledTimes(offset ? 2 : 1);
+  fireEvent.click(screen.getByRole("button", { name: "Retry loading posts" }));
+  await screen.findByText(`Post ${offset}`);
+  choose(1);
+  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.reviewPage).mock.calls.map((call) => call[1])).toEqual(offset ? [0, offset, offset] : [0, 0]);
+  expect(vi.mocked(api.manualLabels).mock.calls.flatMap((call) => call[1])).toHaveLength(offset + 1);
+});
+
+it("aborts an outstanding page on unmount and ignores late failure", async () => {
+  let reject!: (error: Error) => void;
+  vi.mocked(api.reviewPage).mockReturnValue(new Promise((_resolve, no) => { reject = no; }));
+  const view = render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
+  const signal = vi.mocked(api.reviewPage).mock.calls[0][3]!;
+  view.unmount();
+  expect(signal.aborted).toBe(true);
+  await act(async () => reject(new Error("late failure")));
+  expect(onError).not.toHaveBeenCalled();
+  expect(onDone).not.toHaveBeenCalled();
+  expect(api.reviewPage).toHaveBeenCalledTimes(1);
+});
+
+it("counts final unique decisions, not repeated corrections, for live agreement", async () => {
+  vi.mocked(api.reviewPage).mockResolvedValue({ total: 2, offset: 0, items: [{ id: "a", text: "Machine scored", source_type: "csv", comprehend_label: "positive" }, { id: "b", text: "Manual only", source_type: "csv" }] });
+  render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
+  await screen.findByText("Machine scored");
+  fireEvent.click(screen.getByRole("button", { name: /^positive/i }));
+  fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^negative/i }));
+  expect(screen.getByText(/agree with Comprehend/).textContent).toContain("0%");
+  fireEvent.click(screen.getByRole("button", { name: /^positive/i }));
+  expect(screen.getByText(/agree with Comprehend/).textContent).toContain("0%");
 });

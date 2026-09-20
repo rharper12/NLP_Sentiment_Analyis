@@ -37,7 +37,7 @@ it("exports spreadsheet-safe grid text while keeping source IDs and row values u
   await waitFor(() => expect(container.querySelector('[row-id="00123"]')).not.toBeNull());
   expect(container.querySelector('[row-id="99999999999999999999999999"]')).not.toBeNull();
   fireEvent.click(container.querySelector('[row-id="00123"] [col-id="original"]')!);
-  await waitFor(() => expect(select).toHaveBeenCalledWith(pairs[0]));
+  await waitFor(() => expect(select).toHaveBeenCalledWith(pairs[0], screen.getByRole("button", { name: "View changes for record 00123" })));
   fireEvent.click(screen.getByRole("button", { name: "Export view" }));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   const csv = await readBlob(create.mock.calls[0][0]);
@@ -46,4 +46,16 @@ it("exports spreadsheet-safe grid text while keeping source IDs and row values u
   expect(csv).toContain("85%");
   expect(csv).toContain("' @SUM(A1)");
   expect(pairs[0].original.text).toBe("\t=1+1");
+});
+
+it("native actions preserve identity for multiple rows without also firing the row action", async () => {
+  const pairs: RecordPair[] = ["first", "second"].map((id) => ({ original: { id, text: id, source_type: "csv" }, processed: null }));
+  const select = vi.fn();
+  render(<RecordsGrid pairs={pairs} theme="dark" hasRun onSelect={select} />);
+  for (const pair of pairs) {
+    const action = await screen.findByRole("button", { name: `View changes for record ${pair.original.id}` });
+    fireEvent.click(action);
+    expect(select).toHaveBeenLastCalledWith(pair, action);
+  }
+  expect(select).toHaveBeenCalledTimes(2);
 });

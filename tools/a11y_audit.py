@@ -18,7 +18,7 @@ import random
 import sys
 from typing import Any
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page, async_playwright, expect
 
 AXE = pathlib.Path(__file__).resolve().parents[1] / "frontend/node_modules/axe-core/axe.min.js"
 # Audit against the WCAG 2.0/2.1 A and AA rule sets rather than a hand-picked list, so a new
@@ -40,12 +40,67 @@ Finding = tuple[str, str, str, str]
 
 async def run_axe(page: Page, screen: str, findings: list[Finding]) -> None:
     """Inject axe and record every violation node for this screen."""
+    # Sample settled rendered colors, rather than different frames of an entrance animation.
+    await page.evaluate(
+        "Promise.all(document.getAnimations()"
+        ".filter(a => a.effect?.getTiming().iterations !== Infinity)"
+        ".map(a => a.finished.catch(() => {})))"
+    )
     await page.add_script_tag(path=str(AXE))
     options = json.dumps({"runOnly": {"type": "tag", "values": TAGS}})
     result: dict[str, Any] = await page.evaluate(f"async () => axe.run(document, {options})")
     for violation in result["violations"]:
         for node in violation["nodes"]:
             findings.append((screen, violation["id"], violation["impact"], node["html"][:120]))
+
+
+async def keyboard_diff(page: Page, findings: list[Finding], theme: str) -> None:
+    """Reach a real grid action with Tab, activate two rows, and verify native focus return."""
+    for _ in range(100):
+        await page.keyboard.press("Tab")
+        if await page.evaluate("document.activeElement?.classList.contains('record-diff-action')"):
+            break
+    else:
+        raise AssertionError("Record action was unreachable with Tab")
+
+    first_id = await page.locator(".record-diff-action:focus").get_attribute("aria-label")
+    for row in range(2):
+        action = page.locator(".record-diff-action:focus")
+        name = await action.get_attribute("aria-label")
+        assert name and name.startswith("View changes for record ")
+        if row:
+            assert name != first_id, "ArrowDown must preserve the next row's identity"
+        trigger = await action.element_handle()
+        assert trigger
+        focus = await action.evaluate("""element => {
+            const style = getComputedStyle(element);
+            return {visible: element.matches(':focus-visible'), style: style.outlineStyle,
+                    width: parseFloat(style.outlineWidth), offset: parseFloat(style.outlineOffset)};
+        }""")
+        assert focus["visible"] and focus["style"] == "solid" and focus["width"] >= 2
+        assert focus["offset"] < 0, "Grid focus must be drawn inside its clipping cell"
+        for key in ("Enter", "Space"):
+            await page.keyboard.press(key)
+            dialog = page.get_by_role("dialog")
+            await expect(dialog).to_be_visible()
+            await expect(
+                dialog.get_by_role(
+                    "heading",
+                    name="Record " + name.removeprefix("View changes for record "),
+                    exact=True,
+                )
+            ).to_be_visible()
+            await run_axe(page, f"{theme}/diff-{row}-{key}", findings)
+            await page.keyboard.press("Escape")
+            await expect(dialog).to_have_count(0)
+            assert await trigger.evaluate("element => document.activeElement === element")
+        if row == 0:
+            await page.keyboard.press("Shift+Tab")
+            await page.keyboard.press("ArrowDown")
+            await page.keyboard.press("Tab")
+    await page.keyboard.press("Tab")
+    assert await page.evaluate("document.activeElement?.getAttribute('col-id') === 'original'")
+    print(f"{theme}: keyboard diff, Enter/Space, Escape, focus return and grid navigation passed")
 
 
 def sample_csv() -> bytes:
@@ -64,6 +119,17 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
 
     async def audit(screen: str) -> None:
         await run_axe(page, f"{theme}/{screen}", findings)
+        # Opaque surfaces guarantee the same contrast without browser filter support.
+        assert await page.locator(".glass-panel, .glass-bar").evaluate_all(
+            "elements => elements.every(e => /^rgb\\(/.test(getComputedStyle(e).backgroundColor))"
+        )
+        fallback = await page.add_style_tag(
+            content=(
+                "* { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }"
+            )
+        )
+        await run_axe(page, f"{theme}/{screen}-fallback", findings)
+        await fallback.evaluate("element => element.remove()")
         if shots:
             await page.screenshot(path=f"/tmp/a11y_{theme}_{screen}.png")
 
@@ -85,12 +151,19 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.click("text=Continue to Clean")
     await page.wait_for_selector("text=Normalise for NLP")
     await audit("clean")
+    step = page.locator("li input[type=checkbox]").first
+    await step.uncheck()
+    await audit("clean-off-step")
+    await step.check()
+    await page.locator("details").first.locator("summary").click()
+    await audit("clean-explanation")
 
     await page.click("text=Run pipeline and measure")
     await page.wait_for_selector(".ag-row", timeout=40000)
     await page.wait_for_timeout(500)
     await page.evaluate("window.scrollTo(0,0)")
     await audit("analyze")
+    await keyboard_diff(page, findings, theme)
 
     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     await page.click("text=Continue to Label")
@@ -126,7 +199,7 @@ async def main() -> int:
         browser = await pw.chromium.launch()
         for theme in ("light", "dark"):
             page = await browser.new_page(viewport={"width": 1440, "height": 900})
-            await walk_stages(page, theme, findings, shots=True)
+            await walk_stages(page, theme, findings, shots="--screenshots" in sys.argv)
             await page.close()
         phone = await browser.new_page(
             viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True

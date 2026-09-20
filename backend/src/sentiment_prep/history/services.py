@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
     from sentiment_prep.pricing.comprehend_price import PriceQuote
 
-SERVICE_CODE_COMPREHEND = "AmazonComprehend"
 # Queries are stored for traceability, not for replay; truncated so one pathological search
 # cannot bloat the audit table.
 MAX_STORED_QUERY_CHARS = 500
@@ -166,15 +165,17 @@ def get_price_quote(service: str, region: str) -> PriceQuote | None:
 
 def put_price_quote(quote: PriceQuote) -> None:
     """Upsert the cached rate."""
+    from sentiment_prep.pricing.comprehend_price import SERVICE_CODE
+
     with session() as s:
         row = s.scalar(
             select(PriceQuoteRow).where(
-                PriceQuoteRow.service == SERVICE_CODE_COMPREHEND,
+                PriceQuoteRow.service == SERVICE_CODE,
                 PriceQuoteRow.region == quote.region,
             )
         )
         if row is None:
-            row = PriceQuoteRow(service=SERVICE_CODE_COMPREHEND, region=quote.region)
+            row = PriceQuoteRow(service=SERVICE_CODE, region=quote.region)
             s.add(row)
         row.price_per_unit_usd = quote.price_per_unit
         row.unit = quote.unit

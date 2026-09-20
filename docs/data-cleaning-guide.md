@@ -80,15 +80,15 @@ transformers. Watch for tense loss: "was great" vs "is great" can matter in revi
 ## Recipes
 
 **Tweets about a live topic, logistic regression on TF-IDF (Task 2 baseline).**
-missing_data(drop) → lowercase → punctuation → tokenize → stopwords(keep negations) → lemmatize.
-Expect vocabulary to fall 30–60%, sentiment agreement to stay above 90%.
+lowercase → punctuation → tokenize → stopwords(keep negations) → lemmatize → missing_data(drop).
+Measure vocabulary and sentiment changes on your own dataset; these are not guaranteed outcomes.
 
 **Same tweets, fine-tuning a transformer.**
 missing_data(drop) → dedupe → *stop*. Let the model's tokenizer do the rest. Run this app's
 pipeline only to *inspect* the data, not to feed the model.
 
 **Product reviews (longer, better spelled).**
-missing_data → lowercase → punctuation → tokenize → stopwords → lemmatize. Consider keeping
+lowercase → punctuation → tokenize → stopwords → lemmatize → missing_data. Consider keeping
 intensity words ("very", "too") by removing them from the stopword list.
 
 **Comparing techniques for a write-up (Task 1).**

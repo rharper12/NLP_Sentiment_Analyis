@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 
 import { api } from "../../api/client";
 import type { PreprocessResponse, RecordPair } from "../../api/types";
@@ -32,12 +32,13 @@ const pct = (a: number, b: number) => (a === 0 ? null : ((b - a) / a) * 100);
 
 /** Stage 3. The numbers first, then a chart, then the prose, then the evidence (records). */
 export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
-  const [selected, setSelected] = useState<RecordPair | null>(null);
+  const [selected, setSelected] = useState<{ pair: RecordPair; trigger?: HTMLElement } | null>(null);
+  const selectRecord = useCallback((pair: RecordPair, trigger?: HTMLElement) => setSelected({ pair, trigger }), []);
   const records = useAsync<RecordPair[]>();
   const { run: loadRecords } = records;
   const [copied, setCopied] = useState(false);
   // `warnings` is optional in the schema (it has a server-side default), so normalise once.
-  const allWarnings = run?.report.warnings ?? [];
+  const allWarnings = [...(run?.report.warnings ?? []), ...(run?.warnings ?? [])];
   const warnings = allWarnings.filter((w) => !w.includes("disabled"));
   const disabledNote = allWarnings.filter((w) => w.includes("disabled"));
 
@@ -135,7 +136,7 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
 
       <div className="glass-panel p-5">
         {records.data ? (
-          <RecordsGrid pairs={records.data} theme={theme} hasRun={!!run} onSelect={setSelected} />
+          <RecordsGrid pairs={records.data} theme={theme} hasRun={!!run} onSelect={selectRecord} />
         ) : (
           <SkeletonLines lines={6} />
         )}
@@ -145,11 +146,11 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
       {run && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">
           <p className="text-sm text-muted">Happy with the result? Next, give every post a label.</p>
-          <button type="button" className="btn-primary" onClick={onContinue}>Continue to Label →</button>
+          <button type="button" className="btn-primary" disabled={busy} onClick={onContinue}>Continue to Label →</button>
         </div>
       )}
 
-      <Suspense fallback={null}>{selected && <DiffDialog pair={selected} onClose={() => setSelected(null)} />}</Suspense>
+      <Suspense fallback={null}>{selected && <DiffDialog pair={selected.pair} trigger={selected.trigger} onClose={() => setSelected(null)} />}</Suspense>
     </section>
   );
 }

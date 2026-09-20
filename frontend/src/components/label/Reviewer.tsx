@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, isAbort } from "../../api/client";
-import { SENTIMENT_LABELS, type PostRecord, type SentimentLabel } from "../../api/types";
-import { toError } from "../../hooks/useAsync";
+import { api } from "../../api/client";
+import { SENTIMENT_LABELS, type PostRecord, type ReviewPage, type SentimentLabel } from "../../api/types";
+import { toError, useAsync } from "../../hooks/useAsync";
 import { SkeletonLines } from "../ui/Skeleton";
 
 import { InfoIcon } from "./InfoIcon";
@@ -24,39 +24,31 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   const [index, setIndex] = useState(0);
   const [decisions, setDecisions] = useState<{ [id: string]: SentimentLabel }>({});
   const pending = useRef<{ id: string; label: SentimentLabel }[]>([]);
-  const [agree, setAgree] = useState({ agreed: 0, compared: 0 });
+  const comparable = items.filter((item) => decisions[item.id] && item.comprehend_label);
+  const agree = { compared: comparable.length, agreed: comparable.filter((item) => decisions[item.id] === item.comprehend_label).length };
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<Error | null>(null);
   const [finishing, setFinishing] = useState(false);
   const finishingRef = useRef(false);
   const inFlight = useRef<Promise<boolean> | null>(null);
 
-  // Highest offset already requested. Without this, any re-render while a page is in flight
-  // (a save toggling `saving`, for instance) re-runs the effect and appends the same page twice.
-  const requestedTo = useRef(-1);
+  const page = useAsync<ReviewPage>();
+  const { run: loadPage, cancel: cancelPage } = page;
+  const completedPages = useRef(new Set<number>());
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
-    const needsPage = index >= items.length && items.length < total;
-    const firstLoad = items.length === 0 && total === 0;
-    if (!firstLoad && !needsPage) return;
     const offset = items.length;
-    if (requestedTo.current >= offset) return;
-    requestedTo.current = offset;
-
-    const controller = new AbortController();
-    api
-      .reviewPage(datasetId, offset, REVIEW_PAGE, controller.signal)
-      .then((page) => {
-        setTotal(page.total);
-        setItems((prev) => (prev.length === offset ? [...prev, ...page.items] : prev));
-      })
-      .catch((error) => {
-        if (isAbort(error)) return;
-        requestedTo.current = offset - 1; // allow a retry
-        onError(toError(error));
-      });
-    return () => controller.abort();
-  }, [index, items.length, total, datasetId, onError]);
+    const needsPage = offset === 0 || (index >= offset && offset < total);
+    if (!needsPage || completedPages.current.has(offset)) return;
+    void loadPage((signal) => api.reviewPage(datasetId, offset, REVIEW_PAGE, signal)).then((result) => {
+      if (!result) return;
+      completedPages.current.add(offset);
+      setTotal(result.total);
+      setItems((prev) => (prev.length === offset ? [...prev, ...result.items] : prev));
+    });
+    return cancelPage;
+  }, [index, items.length, total, datasetId, loadPage, cancelPage, retry]);
 
   const flush = useCallback((): Promise<boolean> => {
     if (inFlight.current) return inFlight.current;
@@ -87,7 +79,6 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   const decide = useCallback((label: SentimentLabel) => {
     const item = items[index]; if (!item || finishingRef.current) return;
     setDecisions((d) => ({ ...d, [item.id]: label }));
-    if (item.comprehend_label) setAgree((a) => ({ agreed: a.agreed + (item.comprehend_label === label ? 1 : 0), compared: a.compared + 1 }));
     pending.current.push({ id: item.id, label });
     if (pending.current.length >= FLUSH_EVERY) void flush();
     setIndex((i) => i + 1);
@@ -120,7 +111,11 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
       </div>}
       <div className="h-1.5 w-full overflow-hidden rounded bg-surface-2"><div className="h-full bg-accent" style={{ width: `${total ? (100 * Math.min(index, total)) / total : 0}%` }} /></div>
 
-      {!finished && !item && <SkeletonLines lines={3} />}
+      {page.error && <div role="alert" className="text-sm text-error-ink">
+        Could not load review posts. {page.error.message}
+        <button type="button" className="btn ml-2" onClick={() => setRetry((value) => value + 1)}>Retry loading posts</button>
+      </div>}
+      {!finished && !item && !page.error && <SkeletonLines lines={3} />}
       {!finished && item && (
         <>
           <blockquote className="rounded-lg bg-surface-2 p-4 text-lg leading-relaxed">{item.text}</blockquote>

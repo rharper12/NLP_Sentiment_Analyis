@@ -7,7 +7,8 @@ share one lookup a day. The Price List endpoint lives in a few regions only (``u
 
 There is deliberately no hard-coded fallback price. If the lookup fails and nothing has ever
 been cached, the estimate is reported as unavailable and the UI tells the person to price the
-job by hand on AWS's pricing page. A stale cache is served rather than nothing, flagged as such.
+job by hand on AWS's pricing page. A stale quote is usable only within the configured grace
+period, flagged as such.
 """
 
 from __future__ import annotations
@@ -157,8 +158,12 @@ def fetch_rate(client: PricingClient, region: str) -> PriceQuote | None:
     return None
 
 
-def current_rate(client: PricingClient | None, region: str, cache_hours: int) -> PriceQuote | None:
-    """Cached rate if fresh; else a live lookup; else the stale cache; else ``None``."""
+def current_rate(
+    client: PricingClient | None, region: str, cache_hours: int, stale_grace_hours: int = 48
+) -> PriceQuote | None:
+    """Fresh cache, live lookup, bounded stale cache, then unavailable. Future dates are invalid."""
+    if cache_hours < 0 or stale_grace_hours < 0:
+        raise ValueError("Pricing durations must be nonnegative")
     cached = None
     now = dt.datetime.now(dt.UTC)
     try:
@@ -166,7 +171,9 @@ def current_rate(client: PricingClient | None, region: str, cache_hours: int) ->
         if stored is not None:
             candidate = PriceQuote.model_validate(stored)
             age = now - candidate.fetched_at
-            if candidate.region == region and age >= dt.timedelta(0):
+            if candidate.region == region and dt.timedelta(0) <= age < dt.timedelta(
+                hours=cache_hours + stale_grace_hours
+            ):
                 cached = candidate
                 if age < dt.timedelta(hours=cache_hours):
                     return cached.model_copy(update={"status": "cached"})

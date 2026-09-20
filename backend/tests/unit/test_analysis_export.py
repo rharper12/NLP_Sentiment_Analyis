@@ -85,6 +85,9 @@ def test_exports_and_report(s3_bucket):
     assert wb["impact"].max_row >= len(DEFAULT_ORDER) + 1
 
     md = render_report(b)
+    assert "reviewed by the author" not in md
+    if b.report and b.report.explanation:
+        assert "review this interpretation before quoting it" in md
     assert "## Strengths and limitations" in md and "Remove stopwords" in md
     assert b"label_source" in csv_bytes
 

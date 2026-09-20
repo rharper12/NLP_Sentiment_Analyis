@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
     from mypy_boto3_comprehend.client import ComprehendClient
 
+from sentiment_prep.storage.checkpoints import invalidate_checkpoints
+
 logger = get_logger(__name__)
 
 
@@ -87,6 +89,7 @@ def run_preprocessing(
     ).hexdigest()
     if state.signature != signature or updated.processed is None or updated.report is None:
         processed, step_results = Pipeline(build_steps(request)).run(updated.original)
+        invalidate_checkpoints(updated, "processed", "labelled")
         updated.processed = processed
         updated.applied_steps = list(request.steps)
         updated.report = ImpactReport(steps=step_results)

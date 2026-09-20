@@ -7,9 +7,11 @@ Operator credentials, X tokens and database URLs can resolve from SSM Parameter 
 from __future__ import annotations
 
 from functools import lru_cache
+from threading import Lock
+from time import monotonic
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from sentiment_prep.aws import create_aws_session
@@ -54,7 +56,7 @@ class Settings(BaseSettings):
     x_api_base_url: str = "https://api.x.com/2"
     x_max_reads_per_fetch: int = Field(default=1000, ge=1)
     x_max_reads_per_day: int = Field(default=3000, ge=1)
-    x_cost_per_read_usd: float = 0.005
+    x_cost_per_read_usd: float = Field(default=0.005, ge=0, allow_inf_nan=False)
 
     # Hugging Face datasets-server (no auth needed for public datasets).
     hf_api_base_url: str = "https://datasets-server.huggingface.co"
@@ -82,7 +84,8 @@ class Settings(BaseSettings):
     comprehend_unit_chars: int = 100
     comprehend_min_units: int = 3
     pricing_enabled: bool = True
-    pricing_cache_hours: int = 24
+    pricing_cache_hours: int = Field(default=24, ge=0)
+    pricing_stale_grace_hours: int = Field(default=48, ge=0)
 
     # Operator-only details (checkpoint paths, which services are enabled) are returned by
     # /health only when this is true. Defaults to local runtime; deployed builds hide them.
@@ -122,22 +125,36 @@ class Settings(BaseSettings):
             return None
         return self._ssm_value(self.database_url_ssm_path)
 
+    # Values expire after five minutes; failures are never cached and secrets never logged.
+    _secret_cache: dict[str, tuple[float, str]] = PrivateAttr(default_factory=dict)
+    _secret_lock: Lock = PrivateAttr(default_factory=Lock)
+
     def _ssm_value(self, path: str) -> str:
-        try:
-            client = create_aws_session(self).client(
-                "ssm", region_name=self.aws_region, config=AWS_CONFIG
-            )
-            response = client.get_parameter(Name=path, WithDecryption=True)
-        except Exception:  # noqa: BLE001 - never expose provider exceptions containing secrets
-            raise ConfigurationError(
-                "Cannot read SSM configuration. Check AWS credentials, region "
-                "and parameter permissions."
-            ) from None
-        parameter = response.get("Parameter") if isinstance(response, dict) else None
-        value = parameter.get("Value") if isinstance(parameter, dict) else None
-        if not isinstance(value, str) or not value.strip():
-            raise ConfigurationError("SSM configuration must contain a nonempty string value")
-        return value
+        with self._secret_lock:
+            cached = self._secret_cache.get(path)
+            if cached and monotonic() < cached[0]:
+                return cached[1]
+            try:
+                client = create_aws_session(self).client(
+                    "ssm", region_name=self.aws_region, config=AWS_CONFIG
+                )
+                try:
+                    response = client.get_parameter(Name=path, WithDecryption=True)
+                finally:
+                    close = getattr(client, "close", None)
+                    if close is not None:
+                        close()
+            except Exception:  # noqa: BLE001 - never expose provider exceptions containing secrets
+                raise ConfigurationError(
+                    "Cannot read SSM configuration. Check AWS credentials, region "
+                    "and parameter permissions."
+                ) from None
+            parameter = response.get("Parameter") if isinstance(response, dict) else None
+            value = parameter.get("Value") if isinstance(parameter, dict) else None
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError("SSM configuration must contain a nonempty string value")
+            self._secret_cache[path] = (monotonic() + 300, value)
+            return value
 
     def resolve_x_bearer_token(self) -> str | None:
         """Return the X token from the environment, else from SSM, else ``None``.

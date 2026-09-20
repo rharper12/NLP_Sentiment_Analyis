@@ -508,6 +508,14 @@ export interface components {
              * Format: date-time
              */
             written_at: string;
+            /** Revision */
+            revision?: string | null;
+            /**
+             * Status
+             * @default stale
+             * @enum {string}
+             */
+            status: "current" | "stale" | "failed";
         };
         /**
          * CheckpointList
@@ -595,8 +603,10 @@ export interface components {
             };
             /** Truncated Reason */
             truncated_reason: string | null;
-            /** Estimated Cost Usd */
-            estimated_cost_usd?: number | null;
+            /** Billed Reads */
+            billed_reads?: number | null;
+            /** Committed Cost Usd */
+            committed_cost_usd?: number | null;
             /**
              * Partial
              * @default false
@@ -637,6 +647,8 @@ export interface components {
             diagnostics: boolean;
             /** X Configured */
             x_configured: boolean;
+            /** X Cost Per Read Usd */
+            x_cost_per_read_usd?: number | null;
             /** Auth Required */
             auth_required: boolean;
             /** Runtime */
@@ -794,6 +806,8 @@ export interface components {
             partial: boolean;
             /** Stop Reason */
             stop_reason?: string | null;
+            /** Warnings */
+            warnings?: string[];
         };
         /**
          * LabelSummary
@@ -820,6 +834,28 @@ export interface components {
             manual_vs_comprehend_agreement: number | null;
             /** Disagreements */
             disagreements: number;
+            /**
+             * Manually Reviewed
+             * @default 0
+             */
+            manually_reviewed: number;
+            /**
+             * Machine Scored
+             * @default 0
+             */
+            machine_scored: number;
+            /**
+             * Comparable Records
+             * @default 0
+             */
+            comparable_records: number;
+            /**
+             * Agreements
+             * @default 0
+             */
+            agreements: number;
+            /** Warnings */
+            warnings?: string[];
         };
         /**
          * LoadRequest
@@ -910,6 +946,8 @@ export interface components {
              * @default false
              */
             partial: boolean;
+            /** Warnings */
+            warnings?: string[];
             metrics_before: components["schemas"]["DatasetMetrics"];
             metrics_after: components["schemas"]["DatasetMetrics"];
             report: components["schemas"]["PublicImpactReport"];
@@ -1144,6 +1182,11 @@ export interface components {
         StepInfo: {
             /** Name */
             name: string;
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "clean" | "normalise" | "final";
             /** Title */
             title: string;
             /** Summary */

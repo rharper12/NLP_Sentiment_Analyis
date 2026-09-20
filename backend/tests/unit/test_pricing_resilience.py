@@ -75,7 +75,7 @@ def test_failed_lookup_retains_valid_stale_cache(monkeypatch):
     monkeypatch.setattr(
         history,
         "get_price_quote",
-        lambda *args: quote(fetched_at=dt.datetime(2000, 1, 1, tzinfo=dt.UTC)),
+        lambda *args: quote(fetched_at=dt.datetime.now(dt.UTC) - dt.timedelta(hours=25)),
     )
     result = current_rate(FakePricing(fail=True), "us-east-1", 24)
     assert result.status == "stale" and result.price_per_unit == Decimal("0.0001")
@@ -145,3 +145,64 @@ def test_unrepresentable_cost_does_not_block_labeling():
         bundle, FakeComprehend(), Settings(_env_file=None), 25, rate
     )
     assert progress.labelled_in_call == 1 and progress.cost_usd is None
+
+
+@pytest.mark.parametrize(
+    "hours,status",
+    [(1, "cached"), (24, "stale"), (71, "stale"), (72, None), (1000, None), (-1, None)],
+)
+@pytest.mark.parametrize("enabled", [True, False])
+def test_quote_age_is_bounded_even_when_lookup_is_disabled(monkeypatch, hours, status, enabled):
+    from types import SimpleNamespace
+
+    from sentiment_prep.pricing import comprehend_price as pricing
+
+    now = dt.datetime(2026, 9, 20, tzinfo=dt.UTC)
+
+    class Clock(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(
+        pricing, "dt", SimpleNamespace(datetime=Clock, UTC=dt.UTC, timedelta=dt.timedelta)
+    )
+    monkeypatch.setattr(
+        history, "get_price_quote", lambda *args: quote(fetched_at=now - dt.timedelta(hours=hours))
+    )
+    result = current_rate(FakePricing(fail=True) if enabled else None, "us-east-1", 24, 48)
+    assert (result.status if result else None) == status
+
+
+def test_expired_quote_can_refresh_or_label_without_dollars(monkeypatch):
+    from sentiment_prep.config import Settings
+    from sentiment_prep.labeling.service import label_with_comprehend
+    from sentiment_prep.models import DatasetBundle
+    from tests.conftest import FakeComprehend, make_dataset
+
+    monkeypatch.setattr(
+        history,
+        "get_price_quote",
+        lambda *args: quote(fetched_at=dt.datetime(2000, 1, 1, tzinfo=dt.UTC)),
+    )
+    monkeypatch.setattr(history, "put_price_quote", lambda *args: None)
+    assert current_rate(FakePricing(), "us-east-1", 24, 48).status == "live"
+    rate = current_rate(FakePricing(fail=True), "us-east-1", 24, 48)
+    _, result = label_with_comprehend(
+        DatasetBundle(dataset_id="expired", original=make_dataset(["text"])),
+        FakeComprehend(),
+        Settings(_env_file=None),
+        25,
+        rate,
+    )
+    assert result.labelled_in_call == 1 and result.cost_usd is None
+
+
+@pytest.mark.parametrize("field", ["pricing_cache_hours", "pricing_stale_grace_hours"])
+def test_price_durations_reject_negative_configuration(field):
+    from pydantic import ValidationError
+
+    from sentiment_prep.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{field: -1})

@@ -1,4 +1,5 @@
-// One in-flight async action with cancellation. `run` hands the task an AbortSignal; calling
+// One in-flight async action with cancellation. Obsolete runs resolve to null so callers
+// cannot apply their results to configuration, navigation or downstream versions. `run` hands the task an AbortSignal; calling
 // `run` again or `cancel` aborts the previous request. Aborts are not reported as errors.
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,36 +21,47 @@ export function useAsync<T>() {
   const [state, setState] = useState<AsyncState<T>>({ data: null, loading: false, error: null });
   const controller = useRef<AbortController | null>(null);
 
-  const cancel = useCallback(() => {
-    controller.current?.abort();
+  const mounted = useRef(true);
+  const invalidate = useCallback(() => {
+    const previous = controller.current;
     controller.current = null;
-    setState((s) => ({ ...s, loading: false }));
+    previous?.abort();
   }, []);
 
+  const cancel = useCallback(() => {
+    invalidate();
+    setState((s) => ({ ...s, loading: false }));
+  }, [invalidate]);
+
   const run = useCallback(async (task: (signal: AbortSignal) => Promise<T>): Promise<T | null> => {
-    controller.current?.abort();
+    if (!mounted.current) return null;
+    invalidate();
     const own = new AbortController();
     controller.current = own;
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const data = await task(own.signal);
-      if (controller.current === own) setState({ data, loading: false, error: null });
+      if (controller.current !== own || own.signal.aborted) return null;
+      setState({ data, loading: false, error: null });
       return data;
     } catch (error) {
       // `catch` gives `unknown`; a thrown non-Error (a string, a rejected value) must not become
       // a fake Error whose `.message` is undefined at render time.
-      if (controller.current === own && !isAbort(error))
+      if (controller.current === own && !own.signal.aborted && !isAbort(error))
         setState((s) => ({ ...s, loading: false, error: toError(error) }));
       return null;
     }
-  }, []);
+  }, [invalidate]);
 
   const reset = useCallback(() => {
-    controller.current?.abort();
+    invalidate();
     setState({ data: null, loading: false, error: null });
-  }, []);
+  }, [invalidate]);
 
-  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; invalidate(); };
+  }, [invalidate]);
 
   return { ...state, run, cancel, reset };
 }

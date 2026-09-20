@@ -12,7 +12,6 @@ import { Notice } from "../ui/Notice";
 import { Skeleton } from "../ui/Skeleton";
 
 type Source = "x" | "huggingface" | "csv";
-const COST_PER_READ = 0.005;
 const MIN_RECORDS = 500;
 
 interface Props {
@@ -20,6 +19,7 @@ interface Props {
   error: Error | null;
   dataset: DatasetSummary | null;
   xConfigured: boolean;
+  costPerRead?: number | null;
   onSearch: (query: string, limit: number, window: { start?: string; end?: string }) => void;
   onLoadSample: (limit: number) => void;
   onUpload: (file: File) => void;
@@ -32,7 +32,7 @@ interface Props {
  * Stage 1. The search box is the hero: type a topic, get posts. Sample dataset and CSV upload are
  * offered as secondary paths so the flow works without an X account.
  */
-export function CollectStep({ busy, error, dataset, xConfigured, onSearch, onLoadSample, onUpload, onResume, onCancel, onContinue }: Props) {
+export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, onSearch, onLoadSample, onUpload, onResume, onCancel, onContinue }: Props) {
   const [source, setSource] = useState<Source>("x");
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(600);
@@ -99,7 +99,7 @@ export function CollectStep({ busy, error, dataset, xConfigured, onSearch, onLoa
               <input id={ids.n} type="number" min={MIN_RECORDS} max={5000} step={50} value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="field tnum w-36" />
             </div>
             <p className="text-xs text-muted sm:pb-2.5">
-              {source === "x" ? <>About <strong className="tnum text-ink">${(limit * COST_PER_READ).toFixed(2)}</strong> in X read credits. Fewer may return if the topic is quiet this week.</> : "The assignment needs at least 500."}
+              {source === "x" ? <>Preflight estimate: <strong className="tnum text-ink">{costPerRead == null ? "unavailable" : `$${(limit * costPerRead).toFixed(2)}`}</strong> for {limit.toLocaleString()} reads. Filtering can require more billed reads than retained posts.</> : "The assignment needs at least 500."}
             </p>
           </div>
         )}
@@ -133,7 +133,8 @@ export function CollectStep({ busy, error, dataset, xConfigured, onSearch, onLoa
             <h3 className="text-lg font-semibold"><span className="tnum">{dataset.record_count.toLocaleString()}</span> posts collected</h3>
             <span className="text-xs text-muted">
               from {dataset.source_type === "x" ? "X" : dataset.source_type === "huggingface" ? "Hugging Face" : "your CSV"}
-              {dataset.estimated_cost_usd != null && <> · spent ${dataset.estimated_cost_usd.toFixed(2)}</>}
+              {dataset.billed_reads != null && <> · {dataset.billed_reads.toLocaleString()} billed reads</>}
+              {dataset.committed_cost_usd != null && <> · committed spend ${dataset.committed_cost_usd.toFixed(2)}</>}
             </span>
           </div>
           {dataset.query && <p className="tnum truncate text-sm text-muted">Query: {dataset.query}</p>}

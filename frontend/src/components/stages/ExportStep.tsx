@@ -15,6 +15,7 @@ const STAGE_BLURB: { [k in CheckpointStage]: string } = { collected: "raw posts 
 export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: Props) {
   const save = useAsync<{ uri?: string | null }>();
   const download = useAsync<void>();
+  const conversion = useAsync<CheckpointInfo>();
   const checkpoints = useAsync<CheckpointList>();
   const { run: loadCheckpoints } = checkpoints;
   const [uri, setUri] = useState<string | null>(null);
@@ -27,14 +28,15 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
 
   const convert = async (stage: CheckpointStage) => {
     setConverting(stage);
-    try { await api.convertCheckpoint(id, stage); await checkpoints.run((s) => api.checkpoints(id, s)); } finally { setConverting(null); }
+    const result = await conversion.run((signal) => api.convertCheckpoint(id, stage, signal));
+    if (result) await loadCheckpoints((signal) => api.checkpoints(id, signal));
   };
 
   const downloads = [
-    { title: "Parquet", body: "Typed, compressed, one line to load in pandas. Use this for Task 2.", kind: "parquet" as const, name: `${id}.parquet` },
-    { title: "CSV", body: "Original and processed text, labels and provenance, one row per post. Opens anywhere.", kind: "csv" as const, name: `${id}.csv` },
-    { title: "Excel", body: "Same data plus an impact sheet with the per-step statistics.", kind: "xlsx" as const, name: `${id}.xlsx` },
-    { title: "Report (Markdown)", body: "Provenance, steps applied, measured impact, labelling summary, and the strengths and limitations of each technique. Paste into your write-up.", kind: "md" as const, name: `${id}-report.md`, needsRun: true },
+    { title: "Parquet", body: "Typed, compressed, one line to load in pandas. Use this for Task 2.", kind: "parquet" as const },
+    { title: "CSV", body: "Original and processed text, labels and provenance, one row per post. Opens anywhere.", kind: "csv" as const },
+    { title: "Excel", body: "Same data plus an impact sheet with the per-step statistics.", kind: "xlsx" as const },
+    { title: "Report (Markdown)", body: "Provenance, steps applied, measured impact, labelling summary, and the strengths and limitations of each technique. Paste into your write-up.", kind: "md" as const, needsRun: true },
   ];
   const byStage = new Map<string, CheckpointInfo[]>();
   for (const c of checkpoints.data?.items ?? []) byStage.set(c.stage, [...(byStage.get(c.stage) ?? []), c]);
@@ -58,12 +60,12 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
           <button type="button" className="btn shrink-0" disabled={save.loading} onClick={async () => { const r = await save.run((s) => api.save(id, s)); if (r) setUri(r.uri ?? "Saved successfully"); }}>{save.loading ? "Saving…" : "Save"}</button>
         </li>
       </ul>
-      <Notice error={download.error ?? save.error ?? checkpoints.error} />
+      <Notice error={conversion.error ?? download.error ?? save.error ?? checkpoints.error} />
 
       {diagnostics && <div className="glass-panel p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-semibold">Checkpoints</h3>
-          <span className="text-xs text-muted">Written automatically to {checkpoints.data?.location === "s3" ? "S3" : "data/checkpoints (gitignored)"} as each stage completes.</span>
+          <span className="text-xs text-muted">Snapshot destination: {checkpoints.data?.location === "s3" ? "S3" : "data/checkpoints (gitignored)"}. Freshness is shown for each file.</span>
         </div>
         {checkpoints.loading && !checkpoints.data && <div className="mt-3"><SkeletonLines lines={3} /></div>}
         {checkpoints.data && (
@@ -75,9 +77,9 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
                 <li key={stage} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <span className="font-medium capitalize">{stage}</span> <span className="text-muted">· {STAGE_BLURB[stage]}</span>
-                    {files.length === 0 ? <p className="text-xs text-muted">not yet written</p> : files.map((f) => <p key={f.format} className="tnum break-all text-xs text-muted">{f.format} · {kb(f.bytes)} · {f.uri}</p>)}
+                    {files.length === 0 ? <p className="text-xs text-muted">not yet written</p> : files.map((f) => <p key={f.format} className="tnum break-all text-xs text-muted">{f.format} · {f.status ?? "stale"} · {kb(f.bytes)} · {f.uri}</p>)}
                   </div>
-                  {hasCsv && <button type="button" className="btn shrink-0" disabled={converting !== null} onClick={() => void convert(stage)}>{converting === stage ? "Converting…" : hasParquet ? "Re-convert to Parquet" : "Convert to Parquet"}</button>}
+                  {hasCsv && <button type="button" className="btn shrink-0" disabled={conversion.loading} onClick={() => void convert(stage)}>{conversion.loading && converting === stage ? "Converting…" : hasParquet ? "Re-convert to Parquet" : "Convert to Parquet"}</button>}
                 </li>
               );
             })}

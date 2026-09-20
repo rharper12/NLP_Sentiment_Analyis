@@ -21,8 +21,8 @@ flowchart LR
         ssm["SSM Parameter Store<br/>API key · X token"]
     end
 
-    x["X API v2<br/>$0.005 per post read"]
-    comp["Amazon Comprehend<br/>$0.0001 per 100 chars"]
+    x["X API v2<br/>configured cost per billed read"]
+    comp["Amazon Comprehend<br/>live price / nullable estimate"]
     bed["Amazon Bedrock<br/>Titan embed · Claude"]
     price["AWS Price List API<br/>free"]
     hf["Hugging Face<br/>datasets-server, free"]
@@ -41,7 +41,8 @@ flowchart LR
     class x,comp,bed paid
 ```
 
-Red edges cost money. Everything red is capped, estimated before it runs, and checkpointed after.
+Red edges cost money. Paid requests are budgeted; estimates can be unavailable. Committed progress is persisted
+and checkpoint failures are reported.
 
 ## 2. The five stages, and what each one persists
 

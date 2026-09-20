@@ -1,7 +1,7 @@
 # How the app works
 
 This follows one complete run from a click in the browser to the files that come out, naming the
-module responsible at each step. Open the files as you read; every one is under 200 lines.
+module responsible at each step. Open the files as you read.
 
 The UI is a five-stage flow: Collect → Clean → Analyze → Label → Export (`frontend/src/App.tsx` owns the
 stage state; each stage is a component under `components/stages/`).
@@ -19,21 +19,21 @@ On the server, `api/routes.py::load_dataset` picks an adapter from `sources/`:
 - `x_search.py` calls X's recent-search endpoint page by page. Before each page it asks the
   `SpendGuard` (`sources/spend_guard.py`) whether the reads fit under the per-fetch and per-day
   caps; after each page it records what was billed in the SQLAlchemy ledger
-  (`history/services.py::SQLAlchemyLedger`). It also polls `should_stop()`, which the route sets when
+  (`history/services.py::DbLedger`). It also polls `should_stop()`, which the route sets when
   the browser disconnects, so cancelling stops the spend at the next page.
 - `huggingface.py` pages through the public datasets-server API. No credentials, no cost.
 - `csv_upload.py` parses bytes from the multipart upload.
 
 Each adapter returns a `Dataset` (`models.py`). The route stores it in a `DatasetBundle` through
-the repository (`storage/repository.py`: in-memory locally, S3 in Lambda), writes a `DatasetRun`
+the repository (`storage/repository.py`: a local journal locally, S3 in Lambda), writes a `DatasetRun`
 row for the history tab, and returns a `DatasetSummary` with a 20-row preview and any warnings
 (fewer than 500 records, truncated fetch).
 
 ## 2. Choosing steps
 
 `GET /steps` returns the six steps in recommended order with their rationale, read from
-`resources/rationale.yaml`. The **Clean** stage (`CleanStep.tsx`) shows them in two groups, cleaning
-then normalisation, because cleaning must run first; reordering is allowed within a group.
+`resources/rationale.yaml`. The **Clean** stage (`CleanStep.tsx`) shows server-provided cleaning and normalization groups, followed by the final empty-record
+sweep; display and movement eligibility use the same group metadata.
 Each step expands to show what it helps and what it costs: the reducer in `hooks/usePipelineConfig.ts` tracks order, on/off state, and the
 two per-step options (negation handling, missing-data strategy). Nothing runs until **Run
 pipeline** is pressed, because a run may call paid services.
@@ -65,7 +65,7 @@ the records.
 
 The records section of Analyze uses AG Grid Community (`RecordsGrid.tsx`), fetching all records
 once via `GET /dataset/{id}/records`, which joins original and processed
-records by id (dropped records show as "dropped"). Sorting, filtering and pagination happen in the browser. Clicking a row opens `DiffDialog.tsx`, which
+records by id (dropped records show as "dropped"). Sorting, filtering and pagination happen in the browser. Activating a native View changes button with Enter/Space, or clicking a row, opens `DiffDialog.tsx`, which
 strikes through words that disappeared and underlines words that were introduced (lemmas,
 split contractions).
 
@@ -75,11 +75,11 @@ Sentiment classification (Task 2) needs a label per post. The **Label** stage
 (`components/stages/LabelStep.tsx`, backend `labeling/service.py`) offers two routes and lets you
 combine them:
 
-- **Comprehend.** `GET …/labels/estimate` prices the job from the configured rate ($0.0001 per
-  100-character unit, 3-unit minimum) and the UI shows it as a chip. A confirmation dialog repeats
+- **Comprehend.** `GET …/labels/estimate` prices the job from a live AWS Price List quote (100-character units,
+  3-unit minimum; unavailable when no usable quote exists) and the UI shows it as a chip. A confirmation dialog repeats
   the figure; only then does the UI loop `POST …/labels/comprehend` in slices of 250. Each slice
-  is saved server-side and the `labelled` checkpoint rewritten before the next starts, so a crash
-  or a cancel keeps everything already paid for, and re-running skips records that already have a
+  is saved server-side and the `labelled` checkpoint rewritten before the next starts, so committed results survive a crash
+  or cancel; provider success immediately before persistence remains ambiguous, and re-running skips records that already have a
   Comprehend label. Records with a label from the source keep it; Comprehend's opinion is stored
   beside it as `comprehend_label`.
 - **Manual review.** Choose none, everything, or a random sample (count or percent, fixed seed).
@@ -97,11 +97,13 @@ a fetch or upload, `processed` after each pipeline run, `labelled` after every l
 Locally they land in `data/checkpoints/<dataset_id>/` (gitignored); with a bucket configured they go
 to `s3://<bucket>/checkpoints/<dataset_id>/` via `upload_fileobj`, which boto3 turns into a multipart
 upload above 8 MB. A checkpoint failure is logged and never fails the request that just spent
-money. The Export stage lists them and converts any CSV to Parquet in place.
+money. Public-safe warnings disclose write failures. The Export stage shows revision status;
+old files are retained but marked stale/failed when appropriate. CSV rewrites invalidate older
+Parquet revisions, and preprocessing reruns invalidate labelled snapshots.
 
 ## 7. Exporting
 
-The **Export** stage (`ExportStep.tsx`) offers three downloads and the S3 save.
+The **Export** stage (`ExportStep.tsx`) offers CSV, Excel, Parquet, and Markdown downloads plus the S3 save.
 
 ![Export](images/5-export.png)
 

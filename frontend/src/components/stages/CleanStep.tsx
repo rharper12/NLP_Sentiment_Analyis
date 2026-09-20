@@ -1,5 +1,5 @@
 import type { StepInfo } from "../../api/types";
-import type { PipelineConfig } from "../../hooks/usePipelineConfig";
+import { canMove, type PipelineConfig } from "../../hooks/usePipelineConfig";
 import { Skeleton } from "../ui/Skeleton";
 
 /** Mirrors MAX_FILL_VALUE_CHARS in preprocessing/missing_data.py. */
@@ -17,11 +17,10 @@ interface Props {
   onBack: () => void;
 }
 
-/* Two families of steps. Cleaning fixes the raw text; normalisation reshapes it into tokens a
-   model can count. Cleaning always runs first, which is why the groups are fixed in this order. */
-const GROUPS: { title: string; blurb: string; steps: string[] }[] = [
-  { title: "Clean the text", blurb: "Remove what carries no sentiment and fix broken rows.", steps: ["missing_data", "lowercase", "punctuation"] },
-  { title: "Normalise for NLP", blurb: "Turn text into tokens and reduce variants to one form.", steps: ["tokenize", "stopwords", "lemmatize"] },
+const GROUPS: { id: StepInfo["group"]; title: string; blurb: string }[] = [
+  { id: "clean", title: "Clean the text", blurb: "Remove what carries no sentiment." },
+  { id: "normalise", title: "Normalise for NLP", blurb: "Turn text into tokens and reduce variants to one form." },
+  { id: "final", title: "Handle empty results", blurb: "Finally, drop or fill records emptied by earlier steps." },
 ];
 
 /** Stage 2. Pick steps, see their trade-offs, then run. */
@@ -45,7 +44,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
         <div className="flex flex-col gap-6">
           {steps.length === 0 && <div className="glass-panel p-5"><Skeleton className="w-40" /><div className="mt-4 flex flex-col gap-3">{Array.from({ length: 3 }, (_, i) => <Skeleton key={i} />)}</div></div>}
           {steps.length > 0 && GROUPS.map((g) => {
-            const ordered = config.order.filter((n) => g.steps.includes(n));
+            const ordered = config.order.filter((n) => config.groups[n] === g.id);
             return (
               <div key={g.title} className="glass-panel overflow-hidden">
                 <div className="border-b border-rule px-5 py-4">
@@ -53,11 +52,11 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                   <p className="text-sm text-muted">{g.blurb}</p>
                 </div>
                 <ol className="divide-y divide-rule">
-                  {ordered.map((name, i) => {
+                  {ordered.map((name) => {
                     const info = byName.get(name); if (!info) return null;
                     const on = config.enabled[name];
                     return (
-                      <li key={name} className={`grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-2 px-5 py-4 ${on ? "" : "opacity-60"}`}>
+                      <li key={name} className="grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-2 px-5 py-4">
                         <label className="contents cursor-pointer" aria-label={info.title}>
                           <input type="checkbox" className="mt-1 size-4 accent-accent" checked={on} onChange={() => onToggle(name)} />
                           <span className="min-w-0">
@@ -66,8 +65,8 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                           </span>
                         </label>
                         <span className="flex flex-col gap-0.5 text-muted">
-                          <button type="button" aria-label={`Move ${info.title} up`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={i === 0} onClick={() => onMove(name, -1)}>↑</button>
-                          <button type="button" aria-label={`Move ${info.title} down`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={i === ordered.length - 1} onClick={() => onMove(name, 1)}>↓</button>
+                          <button type="button" aria-label={`Move ${info.title} up`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, -1)} onClick={() => onMove(name, -1)}>↑</button>
+                          <button type="button" aria-label={`Move ${info.title} down`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, 1)} onClick={() => onMove(name, 1)}>↓</button>
                         </span>
                         {on && (
                           <details className="col-start-2 col-span-2 text-sm">
@@ -149,7 +148,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
         </aside>
       </div>
 
-      <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-3 border-t border-rule bg-surface/95 px-4 py-3 backdrop-blur lg:hidden">
+      <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-3 border-t border-rule bg-surface px-4 py-3 lg:hidden">
         <span className="tnum text-sm text-muted">{active.length} of {steps.length} steps on</span>
         <button type="button" className="btn-primary" disabled={busy || active.length === 0 || !fillValid} onClick={onRun}>{busy ? "Running…" : "Run and measure →"}</button>
       </div>

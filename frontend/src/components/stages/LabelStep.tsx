@@ -31,20 +31,31 @@ type Phase = "method" | "labelling" | "review-choice" | "reviewing" | "summary";
  * slice is saved server-side before the next starts, and reviewer decisions are flushed in
  * small batches, so a crash or a closed tab never loses more than a few seconds of work.
  */
-export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpointLocation, onReviewActiveChange, onBack, onContinue }: Props) {
+export function LabelStep(props: Props) {
+  // A different dataset owns a fresh review queue, progress state and request lifetime.
+  return <LabelSession key={props.datasetId} {...props} />;
+}
+
+function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLocation, onReviewActiveChange, onBack, onContinue }: Props) {
   const summary = useAsync<LabelSummary>();
   const estimate = useAsync<LabelEstimate>();
   const { run: loadSummary } = summary;
   const { run: loadEstimate } = estimate;
   const [phase, setPhase] = useState<Phase>("method");
   const [error, setError] = useState<Error | null>(null);
+  const [persistenceWarnings, setPersistenceWarnings] = useState<string[]>([]);
   const [failed, setFailed] = useState(0);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; spent: number | null } | null>(null);
   const labelling = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    const previous = labelling.current;
+    labelling.current = null;
+    previous?.abort();
+  }, []);
 
   const refresh = useCallback(async () => {
-    await Promise.all([
+    return Promise.all([
       loadSummary((signal) => api.labelSummary(datasetId, signal)),
       loadEstimate((signal) => api.labelEstimate(datasetId, signal)),
     ]);
@@ -53,30 +64,46 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
   useEffect(() => { void refresh(); }, [refresh]);
 
   const runComprehend = async () => {
+    if (labelling.current) return;
     setConfirmOpen(false);
     setPhase("labelling");
     setError(null);
     const controller = new AbortController();
     labelling.current = controller;
+    const owns = () => labelling.current === controller && !controller.signal.aborted;
     const total = estimate.data?.records_to_send ?? 0;
     let done = 0, spent: number | null = 0;
     setProgress({ done, total, spent });
     try {
-      for (;;) {
+      while (owns()) {
         const p = await api.labelComprehend(datasetId, SLICE, controller.signal);
+        if (!owns()) return;
         done = Math.min(total, done + p.labelled_in_call);
         setFailed(p.failed_total ?? 0);
+        setPersistenceWarnings(p.warnings ?? []);
         spent = p.cost_usd == null || spent == null ? null : spent + p.cost_usd;
         setProgress({ done, total, spent });
         if (p.done || p.labelled_in_call === 0) break;
       }
     } catch (e) {
-      if (!isAbort(e)) setError(toError(e));
+      if (owns() && !isAbort(e)) setError(toError(e));
     } finally {
-      labelling.current = null;
-      await refresh();
-      setPhase("review-choice");
+      if (owns()) {
+        await refresh();
+        if (owns()) {
+          labelling.current = null;
+          setPhase("review-choice");
+        }
+      }
     }
+  };
+
+  const cancelLabelling = () => {
+    const previous = labelling.current;
+    labelling.current = null;
+    previous?.abort();
+    setPhase("review-choice");
+    void refresh();
   };
 
   const est = estimate.data, sum = summary.data;
@@ -89,7 +116,7 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
         <p className="mt-1 text-muted">Task 2 trains and scores a model against known labels. Comprehend gives every post a label in seconds; reviewing a sample by hand tells you how far to trust it.</p>
       </div>
 
-      <Notice error={error ?? summary.error ?? estimate.error} />
+      <Notice error={error ?? summary.error ?? estimate.error} warnings={summary.error ? persistenceWarnings : summary.data?.warnings ?? persistenceWarnings} />
       {Math.max(failed, estimate.data?.failed_total ?? 0) > 0 && <p role="status" className="text-sm text-warn-ink">
         {Math.max(failed, estimate.data?.failed_total ?? 0)} posts have no successful Comprehend result. Successful labels were saved.
         Permanently rejected posts are skipped; temporary failures can be retried up to three attempts. You can label these posts manually.
@@ -103,7 +130,7 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <span className="tnum rounded-full border border-rule px-3 py-1"><strong>{sum.labelled.toLocaleString()}</strong> of {sum.total.toLocaleString()} labelled</span>
           {Object.entries(sum.by_source).map(([k, v]) => <span key={k} className="tnum rounded-full bg-surface-2 px-3 py-1 text-muted">{v.toLocaleString()} {k}</span>)}
-          {diagnostics && checkpointLocation && <span className="text-xs text-muted">Snapshots saved to {checkpointLocation === "s3" ? "S3" : "data/checkpoints"} after every paid step.</span>}
+          {diagnostics && checkpointLocation && <span className="text-xs text-muted">Snapshot destination: {checkpointLocation === "s3" ? "S3" : "data/checkpoints"}. Check Export for persistence status.</span>}
         </div>
       )}
 
@@ -136,7 +163,7 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
 
       {phase === "labelling" && progress && (
         <div className="glass-panel flex flex-col gap-3 p-5" aria-live="polite">
-          <div className="flex items-center justify-between"><h3 className="font-semibold">Labelling with Comprehend…</h3><button type="button" className="btn" onClick={() => labelling.current?.abort()}>Cancel</button></div>
+          <div className="flex items-center justify-between"><h3 className="font-semibold">Labelling with Comprehend…</h3><button type="button" className="btn" onClick={cancelLabelling}>Cancel</button></div>
           <div className="h-2 w-full overflow-hidden rounded bg-surface-2"><div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${progress.total ? Math.min(100, (100 * progress.done) / progress.total) : 100}%` }} /></div>
           <p className="tnum text-sm text-muted">{progress.done.toLocaleString()} of {progress.total.toLocaleString()} posts{progress.spent != null && ` · ${usd(progress.spent)} so far`}. Each batch is saved before the next starts; cancelling keeps what is done.</p>
         </div>
@@ -144,15 +171,13 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
 
       {phase === "review-choice" && <ReviewChoice total={sum?.total ?? 0} onChoose={async (mode, size, unit) => {
         setError(null);
-        try {
-          const s = await api.chooseReview(datasetId, mode, size, unit);
-          summary.run(() => Promise.resolve(s));
-          onReviewActiveChange?.(mode !== "none");
-          setPhase(mode === "none" ? "summary" : "reviewing");
-        } catch (e) { setError(toError(e)); }
+        const s = await summary.run((signal) => api.chooseReview(datasetId, mode, size, unit, signal));
+        if (!s) return;
+        onReviewActiveChange?.(mode !== "none");
+        setPhase(mode === "none" ? "summary" : "reviewing");
       }} onBack={() => setPhase("method")} />}
 
-      {phase === "reviewing" && <Reviewer datasetId={datasetId} onError={setError} onDone={async () => { await refresh(); onReviewActiveChange?.(false); setPhase("summary"); }} />}
+      {phase === "reviewing" && <Reviewer datasetId={datasetId} onError={setError} onDone={async () => { const [s] = await refresh(); if (!s) return; onReviewActiveChange?.(false); setPhase("summary"); }} />}
 
       {phase === "summary" && (
         <div className="glass-panel flex flex-col gap-4 p-5">

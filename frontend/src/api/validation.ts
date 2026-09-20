@@ -62,16 +62,18 @@ export const datasetSummarySchema: z.ZodType<DatasetSummary> = z.looseObject({
   record_count: z.number(),
   labelled_count: z.number(),
   truncated_reason: z.string().nullable(),
-  estimated_cost_usd: maybe(z.number()),
+  billed_reads: maybe(z.number().int().nonnegative()),
+  committed_cost_usd: maybe(z.number().nonnegative()),
   partial: z.boolean(),
+  warnings: z.array(z.string()).optional(),
   resume_request_id: maybe(z.string()),
   retry_at: maybe(z.number()),
-  warnings: z.array(z.string()).optional(),
   preview: z.array(recordSchema),
 });
 
 export const stepInfoSchema: z.ZodType<StepInfo> = z.looseObject({
   name: z.string(),
+  group: z.enum(["clean", "normalise", "final"]),
   title: z.string(),
   summary: z.string(),
   strengths: z.string(),
@@ -121,6 +123,7 @@ export const preprocessResponseSchema: z.ZodType<PreprocessResponse> = z.looseOb
   applied_steps: z.array(z.string()),
   record_count: z.number(),
   partial: z.boolean(),
+  warnings: z.array(z.string()).optional(),
   metrics_before: metricsSchema,
   metrics_after: metricsSchema,
   report: impactReportSchema,
@@ -172,6 +175,7 @@ export const labelProgressSchema: z.ZodType<LabelProgress> = z.looseObject({
   cost_usd: z.union([z.number(), z.null()]),
   done: z.boolean(),
   partial: z.boolean(),
+  warnings: z.array(z.string()).optional(),
   stop_reason: maybe(z.string()),
 });
 
@@ -184,6 +188,11 @@ export const labelSummarySchema: z.ZodType<LabelSummary> = z.looseObject({
   reviewed: z.number(),
   manual_vs_comprehend_agreement: z.union([z.number(), z.null()]),
   disagreements: z.number(),
+  manually_reviewed: z.number().int().nonnegative(),
+  machine_scored: z.number().int().nonnegative(),
+  comparable_records: z.number().int().nonnegative(),
+  agreements: z.number().int().nonnegative(),
+  warnings: z.array(z.string()).optional(),
 });
 
 export const reviewPageSchema: z.ZodType<ReviewPage> = z.looseObject({
@@ -198,6 +207,8 @@ const checkpointInfoSchema: z.ZodType<CheckpointInfo> = z.looseObject({
   uri: z.string(),
   bytes: z.number(),
   written_at: z.string(),
+  revision: maybe(z.string()),
+  status: z.enum(["current", "stale", "failed"]),
 });
 
 export const checkpointListSchema: z.ZodType<CheckpointList> = z.looseObject({
@@ -241,6 +252,7 @@ export const healthSchema: z.ZodType<HealthResponse> = z.looseObject({
   diagnostics: z.boolean(),
   x_configured: z.boolean(),
   auth_required: z.boolean(),
+  x_cost_per_read_usd: maybe(z.number().nonnegative()),
   runtime: maybe(z.string()),
   database: maybe(z.string()),
   database_ephemeral: maybe(z.boolean()),

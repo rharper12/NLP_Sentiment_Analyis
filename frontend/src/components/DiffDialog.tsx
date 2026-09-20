@@ -6,9 +6,14 @@ import type { RecordPair } from "../api/types";
 const normalise = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
 
 /** Word-level diff: struck = removed by the pipeline, underlined = introduced (lemma, split contraction). */
-export default function DiffDialog({ pair, onClose }: { pair: RecordPair; onClose: () => void }) {
+export default function DiffDialog({ pair, trigger, onClose }: { pair: RecordPair; trigger?: HTMLElement; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal(); }, []);
+  useEffect(() => {
+    const d = ref.current;
+    const previous = trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    if (d && !d.open) d.showModal();
+    return () => { d?.close(); if (previous?.isConnected) previous.focus(); };
+  }, [trigger]);
 
   const originalWords = pair.original.text.split(/\s+/).filter(Boolean);
   const processedWords = pair.processed?.tokens ?? pair.processed?.text.split(/\s+/).filter(Boolean) ?? [];
@@ -19,7 +24,13 @@ export default function DiffDialog({ pair, onClose }: { pair: RecordPair; onClos
   const introduced = new Set(processedWords.filter((w) => !originalKeys.has(normalise(w))));
 
   return (
-    <dialog ref={ref} onClose={onClose} aria-labelledby="diff-heading"
+    <dialog ref={ref} onCancel={(event) => {
+      // Remove the selection synchronously, before another keyboard activation can reopen it.
+      event.preventDefault(); onClose();
+    }} onClose={(event) => {
+      // Native close events can arrive after this dialog was removed and another opened.
+      if (ref.current === event.currentTarget && !event.currentTarget.open) onClose();
+    }} aria-labelledby="diff-heading"
       className="glass-panel m-auto w-[min(720px,92vw)] p-5 text-ink shadow-2xl backdrop:bg-transparent sm:p-6">
       <div className="flex items-center justify-between gap-3">
         <h3 id="diff-heading" className="font-semibold">Record {pair.original.id}</h3>
