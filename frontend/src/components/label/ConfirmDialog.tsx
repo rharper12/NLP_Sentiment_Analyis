@@ -15,6 +15,9 @@ export function ConfirmDialog({ est, onCancel, onConfirm }: { est: LabelEstimate
         <dt className="text-muted">Rate</dt><dd>{est.cost_per_unit_usd != null ? `$${est.cost_per_unit_usd} per unit (${est.unit_chars} chars, min ${est.min_units_per_document})` : "unavailable right now"}</dd>
         <dt className="text-muted">Estimated charge</dt><dd className="text-lg font-semibold">{est.estimated_cost_usd != null ? usd(est.estimated_cost_usd) : "—"}</dd>
       </dl>
+      {(est.truncated_records ?? 0) > 0 && (
+        <p className="mt-3 text-sm text-warn-ink">{est.truncated_records} oversized documents will be labeled using only the first 5,000 UTF-8 bytes. Complete text is retained; labels describe the submitted prefixes.</p>
+      )}
       {est.estimated_cost_usd == null && (
         <p className="mt-3 text-sm text-warn-ink">No current price could be fetched. Check <a className="underline" href={PRICING_URL} target="_blank" rel="noreferrer">AWS's Comprehend pricing</a> and estimate the charge yourself ({est.billable_units.toLocaleString()} units) before confirming.</p>
       )}

@@ -7,6 +7,7 @@ const summary = {
   source_type: "x",
   query: "\"lindsay clancy\" lang:en",
   record_count: 512,
+  partial: false,
   labelled_count: 0,
   truncated_reason: null,
   preview: [],
@@ -40,7 +41,7 @@ describe("response validation", () => {
     // `estimated_cost_usd: null` means "no current price", which the UI must show as
     // "estimate unavailable" rather than $0.00 — so null has to parse, and be preserved.
     const estimate = {
-      records_total: 600, records_unlabelled: 600, records_to_send: 600, billable_units: 1800,
+      records_total: 600, records_unlabelled: 600, records_to_send: 600, failed_total: 0, billable_units: 1800,
       unit_chars: 100, min_units_per_document: 3, estimated_cost_usd: null,
       cost_per_unit_usd: null, price_status: "unavailable", price_fetched_at: null,
       price_region: "us-east-1",

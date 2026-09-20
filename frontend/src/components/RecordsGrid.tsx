@@ -12,6 +12,8 @@ import {
 import { AgGridReact } from "ag-grid-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { spreadsheetText } from "../export/spreadsheet";
+
 import type { LabelSource, RecordPair } from "../api/types";
 import type { Theme } from "../hooks/useTheme";
 
@@ -145,7 +147,10 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
   const exportCsv = useCallback(() => {
     // Exports exactly what is on screen (current sort, filter and columns), which is what a
     // person expects from a grid button; the Export stage is the place for the full dataset.
-    api.current?.exportDataAsCsv({ fileName: "records-view.csv" });
+    api.current?.exportDataAsCsv({
+      fileName: "records-view.csv",
+      processCellCallback: (cell) => spreadsheetText(cell.formatValue(cell.value) ?? String(cell.value ?? "")),
+    });
   }, []);
 
   return (

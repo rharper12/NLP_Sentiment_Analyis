@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
@@ -68,9 +69,13 @@ class LocalCheckpointStore:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / _name(stage, fmt)
         # Write to a temp name then rename so a crash mid-write never leaves a half file.
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+        with NamedTemporaryFile(dir=folder, suffix=".tmp", delete=False) as temporary:
+            tmp = Path(temporary.name)
+            temporary.write(data)
+        try:
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
         info = CheckpointInfo(
             stage=stage, format=fmt, uri=str(path), bytes=len(data), written_at=datetime.now(UTC)
         )
@@ -197,10 +202,10 @@ def checkpoint_bundle(store: CheckpointStore, bundle: DatasetBundle, stage: Stag
     Failures are logged and swallowed: a checkpoint is a safety net, and losing it must not fail
     the request that just spent money.
     """
-    from sentiment_prep.export.csv_export import to_csv
+    from sentiment_prep.export.csv_export import to_checkpoint_csv
 
     try:
-        info = store.save(bundle.dataset_id, stage, "csv", to_csv(bundle))
+        info = store.save(bundle.dataset_id, stage, "csv", to_checkpoint_csv(bundle))
     # Broad by design: a checkpoint is a safety net. Losing one must not fail the request that
     # just spent money, which is the very request the checkpoint exists to protect.
     except Exception:

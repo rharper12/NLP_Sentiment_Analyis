@@ -10,6 +10,11 @@ from sentiment_prep.sources.huggingface import HuggingFaceSource
 from sentiment_prep.storage.repository import InMemoryRepository
 from tests.conftest import FakeBedrock, FakeComprehend
 
+REPOSITORY_DEPENDENCY = deps.get_repository
+REAL_COMPREHEND_GETTER = deps.get_comprehend_client
+REAL_BEDROCK_GETTER = deps.get_bedrock_client
+REAL_RATE_GETTER = deps.get_comprehend_rate
+
 
 def fake_hf() -> HuggingFaceSource:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -43,7 +48,7 @@ def client(monkeypatch):
     monkeypatch.setattr(deps, "get_bedrock_client", lambda: FakeBedrock())
     monkeypatch.setattr(deps, "get_comprehend_rate", lambda: None)  # offline: no price known
     app = create_app()
-    app.dependency_overrides[deps.get_repository] = lambda: repo
+    app.dependency_overrides[REPOSITORY_DEPENDENCY] = lambda: repo
     return TestClient(app)
 
 
@@ -72,7 +77,7 @@ def test_health_hides_operator_fields_without_diagnostics(client, monkeypatch):
             "comprehend_enabled",
             "bedrock_enabled",
         )
-        assert all(body[k] is None for k in hidden)
+        assert all(k not in body for k in hidden)
     finally:
         monkeypatch.delenv("DIAGNOSTICS")
         get_settings.cache_clear()
@@ -93,6 +98,17 @@ def test_load_preprocess_export_flow(client):
     )
     assert run.status_code == 200
     body = run.json()
+    # Production-sized vectors may exhaust a request slice while progress is persisted.
+    for _ in range(5):
+        if not body["partial"]:
+            break
+        run = client.post(
+            f"/dataset/{dataset_id}/preprocess",
+            json={"steps": ["lowercase", "tokenize", "stopwords"]},
+        )
+        assert run.status_code == 200
+        body = run.json()
+    assert not body["partial"]
     assert body["applied_steps"] == ["lowercase", "tokenize", "stopwords"]
     assert body["report"]["sentiment"]["agreement"] is not None
     assert body["report"]["explanation"] == "Vocabulary shrank; negations kept."
@@ -234,3 +250,347 @@ def test_duplicate_posts_are_removed_at_collection_and_reported(client):
     assert summary["filtered_out"] == {"duplicate": 4}
     report = client.get(f"/dataset/{summary['dataset_id']}/report.md").text
     assert "dropped at collection (duplicate): 4" in report
+
+
+@pytest.fixture
+def operator(client, monkeypatch):
+    from sentiment_prep.config import get_settings
+
+    monkeypatch.setenv("API_KEY", "test-only-operator-key")
+    get_settings.cache_clear()
+    response = client.post("/auth/session", json={"key": "test-only-operator-key"})
+    assert response.status_code == 200 and response.headers["Cache-Control"] == "no-store"
+    client.headers["Authorization"] = f"Bearer {response.json()['token']}"
+    yield client
+    client.headers.pop("Authorization", None)
+    get_settings.cache_clear()
+
+
+def test_operator_session_rejects_anonymous_wrong_tampered_and_expired(operator, monkeypatch):
+    from sentiment_prep.api import security
+
+    assert operator.get("/steps").status_code == 200
+    assert operator.post("/auth/session", json={"key": "wrong"}).status_code == 401
+    assert operator.get("/steps", headers={"Authorization": "Bearer modified"}).status_code == 401
+    token = operator.headers["Authorization"]
+    assert (
+        operator.get(
+            "/steps", headers={"Authorization": token[:-1] + ("a" if token[-1] != "a" else "b")}
+        ).status_code
+        == 401
+    )
+    assert operator.get("/steps", headers={"Authorization": ""}).status_code == 401
+    assert operator.get("/health", headers={"Authorization": ""}).json()["diagnostics"] is False
+    expiry = int(token.removeprefix("Bearer ").split(".")[0])
+    monkeypatch.setattr(security.time, "time", lambda: expiry + 1)
+    assert operator.get("/steps").status_code == 401
+
+
+def test_invalid_login_never_reflects_credential(operator):
+    sentinel = "credential-validation-sentinel-" * 200
+    response = operator.post("/auth/session", json={"key": sentinel})
+    assert response.status_code == 422 and sentinel not in response.text
+
+
+def test_lambda_without_configured_authorization_fails_closed(client, monkeypatch):
+    from sentiment_prep.config import get_settings
+
+    monkeypatch.setenv("RUNTIME", "lambda")
+    monkeypatch.setenv("API_KEY", "")
+    monkeypatch.setenv("API_KEY_SSM_PATH", "")
+    get_settings.cache_clear()
+    try:
+        assert client.get("/health").json()["auth_required"] is True
+        assert client.get("/steps").status_code == 401
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_diagnostics_policy_covers_json_routes_and_exports(
+    operator, monkeypatch, diagnostics, s3_bucket
+):
+    import json
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from sentiment_prep.config import get_settings
+    from sentiment_prep.storage.s3_store import S3Store
+
+    monkeypatch.setenv("DIAGNOSTICS", str(diagnostics).lower())
+    get_settings.cache_clear()
+    monkeypatch.setattr(deps, "get_comprehend_client", lambda: None)
+    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
+    s3, bucket = s3_bucket
+    monkeypatch.setattr(deps, "get_s3_store", lambda: S3Store(bucket, "datasets", s3))
+    try:
+        dataset_id = operator.post(
+            "/dataset/upload", files={"file": ("sample.csv", b"text\nA useful opinion here\n")}
+        ).json()["dataset_id"]
+        root = f"/dataset/{dataset_id}"
+        run = operator.post(f"{root}/preprocess", json={"steps": ["lowercase"]})
+        assert run.status_code == 200
+        assert ("duration_ms" in run.json()["report"]["steps"][0]) is diagnostics
+        assert ("COMPREHEND_ENABLED" in run.text) is diagnostics
+        assert ("BEDROCK_ENABLED" in run.text) is diagnostics
+        assert ("runtime" in operator.get("/health").json()) is diagnostics
+        history = operator.get("/history").json()
+        assert history and all(("duration_ms" in row) is diagnostics for row in history)
+        assert history[0]["sentiment_agreement"] is None
+        assert history[0]["embedding_drift"] is None
+        listed = operator.get(f"{root}/checkpoints")
+        converted = operator.post(f"{root}/checkpoints/processed/parquet")
+        assert listed.status_code == converted.status_code == (200 if diagnostics else 404)
+        markdown = operator.get(f"{root}/report.md")
+        assert markdown.status_code == 200
+        assert ("Checkpoint `" in markdown.text) is diagnostics
+        assert ("COMPREHEND_ENABLED" in markdown.text) is diagnostics
+        workbook = load_workbook(BytesIO(operator.get(f"{root}/export.xlsx").content))
+        columns = [cell.value for cell in workbook["impact"][1]]
+        assert ("duration_ms" in columns) is diagnostics
+        saved = operator.post(f"{root}/save")
+        assert saved.status_code == 200 and ("uri" in saved.json()) is diagnostics
+        keys = s3.list_objects_v2(Bucket=bucket)["Contents"]
+        impact_key = next(k["Key"] for k in keys if k["Key"].endswith("impact.json"))
+        impact = json.loads(s3.get_object(Bucket=bucket, Key=impact_key)["Body"].read())
+        assert ("duration_ms" in impact["steps"][0]) is diagnostics
+        assert ("COMPREHEND_ENABLED" in str(impact)) is diagnostics
+        failure = operator.post(f"{root}/labels/comprehend", json={"confirm_cost": True})
+        assert failure.status_code == 503
+        assert ("COMPREHEND_ENABLED" in failure.text) is diagnostics
+        # JSON projection must not erase stored operator facts or prevent ordinary data exports.
+        bundle = deps.get_repository().get(dataset_id)
+        assert bundle.report.steps[0].duration_ms >= 0
+        assert bundle.checkpoints and "COMPREHEND_ENABLED" in str(bundle.report.warnings)
+        for suffix in ("csv", "xlsx", "parquet"):
+            result = operator.get(f"{root}/export.{suffix}")
+            assert result.status_code == 200
+            assert f"{dataset_id}.{suffix}" in result.headers["Content-Disposition"]
+        assert f"{dataset_id}-report.md" in markdown.headers["Content-Disposition"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_session_authentication_applies_to_every_download(operator, monkeypatch):
+    from sentiment_prep.api import security
+
+    dataset_id = operator.post(
+        "/dataset/upload", files={"file": ("s.csv", b"text\nhello there\n")}
+    ).json()["dataset_id"]
+    token = operator.headers["Authorization"]
+    for export in ("export.csv", "export.xlsx", "export.parquet", "report.md"):
+        path = f"/dataset/{dataset_id}/{export}"
+        assert operator.get(path, headers={"Authorization": ""}).status_code == 401
+        assert operator.get(path).status_code == 200
+    expiry = int(token.removeprefix("Bearer ").split(".")[0])
+    monkeypatch.setattr(security.time, "time", lambda: expiry + 1)
+    for export in ("export.csv", "export.xlsx", "export.parquet", "report.md"):
+        assert operator.get(f"/dataset/{dataset_id}/{export}").status_code == 401
+
+
+@pytest.mark.parametrize("successful", [False, True])
+def test_failed_labels_are_persisted_between_requests(operator, monkeypatch, successful):
+    from tests.unit.test_comprehend_failures import FailingComprehend
+
+    fake = FailingComprehend()
+    monkeypatch.setattr(deps, "get_comprehend_client", lambda: fake)
+    dataset_id = operator.post(
+        "/dataset/upload",
+        files={
+            "file": (
+                "s.csv",
+                b"text\n"
+                + (b"good usable document\n" if successful else b"")
+                + b"bad rejected document\n",
+            )
+        },
+    ).json()["dataset_id"]
+    for index in range(5):
+        result = operator.post(
+            f"/dataset/{dataset_id}/labels/comprehend", json={"confirm_cost": True}
+        ).json()
+        assert result["labelled_in_call"] == (1 if index == 0 and successful else 0)
+        assert (
+            result["labelled_total"] == int(successful)
+            and result["failed_total"] == 1
+            and result["done"]
+        )
+    assert fake.calls == 1
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_failed_comparison_remains_unavailable_in_json_and_report(
+    operator, monkeypatch, diagnostics
+):
+    from sentiment_prep.config import get_settings
+    from tests.unit.test_comprehend_failures import FailingComprehend
+
+    fake = FailingComprehend()
+    monkeypatch.setenv("DIAGNOSTICS", str(diagnostics).lower())
+    get_settings.cache_clear()
+    monkeypatch.setattr(deps, "get_comprehend_client", lambda: fake)
+    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
+    try:
+        dataset_id = operator.post(
+            "/dataset/upload", files={"file": ("s.csv", b"text\nbad rejected document\n")}
+        ).json()["dataset_id"]
+        result = operator.post(
+            f"/dataset/{dataset_id}/preprocess", json={"steps": ["lowercase"]}
+        ).json()
+        assert result["report"]["sentiment"]["agreement"] is None
+        assert result["report"]["sentiment"]["comparable_records"] == 0
+        assert result["report"]["sentiment"]["shared_records"] == 1
+        markdown = operator.get(f"/dataset/{dataset_id}/report.md").text
+        assert (
+            "**unavailable** over 0 successful comparable records of 1 shared records" in markdown
+        )
+        assert fake.calls == 1
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_raw_service_usage_is_operator_only(operator, monkeypatch, diagnostics):
+    from unittest.mock import Mock
+
+    from sentiment_prep.config import get_settings
+
+    source = Mock()
+    source.usage.return_value = {"operator_account": "test-only-account"}
+    monkeypatch.setenv("X_BEARER_TOKEN", "test-only-token")
+    monkeypatch.setenv("DIAGNOSTICS", str(diagnostics).lower())
+    get_settings.cache_clear()
+    monkeypatch.setattr(deps, "get_x_source", lambda: source)
+    try:
+        response = operator.get("/spend?include_x_usage=true")
+        assert response.status_code == 200
+        assert ("test-only-account" in response.text) is diagnostics
+        assert source.usage.call_count == int(diagnostics)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_duplicate_uploaded_ids_are_rejected_before_collection(client):
+    response = client.post(
+        "/dataset/upload",
+        files={"file": ("duplicate.csv", b"id,text\nsame,one opinion\nsame,a different opinion\n")},
+    )
+    assert response.status_code == 400
+    assert "duplicate record id 'same' at CSV row 3" in response.json()["error"]
+
+
+@pytest.mark.parametrize("failure", ["profile", "credentials", "session", "client", "region"])
+@pytest.mark.parametrize("stage", ["sentiment", "embedding", "explanation"])
+def test_optional_aws_initialization_keeps_cleaning_and_local_metrics(
+    client, monkeypatch, failure, stage
+):
+    from botocore.exceptions import (
+        CredentialRetrievalError,
+        InvalidRegionError,
+        NoCredentialsError,
+        ProfileNotFound,
+    )
+
+    from sentiment_prep.config import Settings
+
+    errors = {
+        "profile": ProfileNotFound(profile="missing"),
+        "credentials": NoCredentialsError(),
+        "session": CredentialRetrievalError(provider="test", error_msg="failure"),
+        "client": RuntimeError("client factory failed"),
+        "region": InvalidRegionError(region_name="invalid region"),
+    }
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(args)
+        raise errors[failure]
+
+    monkeypatch.setattr(
+        deps,
+        "get_settings",
+        lambda: Settings(_env_file=None, comprehend_enabled=True, bedrock_enabled=True),
+    )
+    if failure in ("profile", "session"):
+        monkeypatch.setattr(deps, "boto_session", fail)
+    else:
+        monkeypatch.setattr(deps, "_boto_client", fail)
+    # Restore the real getter for the failing service, so initialization itself is exercised.
+    if stage == "sentiment":
+        monkeypatch.setattr(deps, "get_comprehend_client", REAL_COMPREHEND_GETTER)
+    else:
+        real = REAL_BEDROCK_GETTER
+        attempts = [0]
+
+        def bedrock():
+            attempts[0] += 1
+            return FakeBedrock() if stage == "explanation" and attempts[0] == 1 else real()
+
+        monkeypatch.setattr(deps, "get_bedrock_client", bedrock)
+    loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 1}).json()
+    result = client.post(
+        f"/dataset/{loaded['dataset_id']}/preprocess", json={"steps": ["lowercase"]}
+    )
+    assert result.status_code == 200 and calls
+    body = result.json()
+    assert body["record_count"] == body["metrics_after"]["record_count"] == 1
+    assert any(f"{stage} unavailable" in w for w in body["report"]["warnings"])
+    assert (
+        body["report"][
+            {
+                "sentiment": "sentiment",
+                "embedding": "embedding_drift",
+                "explanation": "explanation",
+            }[stage]
+        ]
+        is None
+    )
+    assert (
+        client.get(f"/dataset/{loaded['dataset_id']}/records")
+        .json()["items"][0]["processed"]["text"]
+        .islower()
+    )
+
+
+@pytest.mark.parametrize("failure", ["profile", "credentials", "region", "client"])
+def test_required_label_client_init_returns_controlled_failure(client, monkeypatch, failure):
+    from botocore.exceptions import InvalidRegionError, NoCredentialsError, ProfileNotFound
+
+    errors = {
+        "profile": ProfileNotFound(profile="missing"),
+        "credentials": NoCredentialsError(),
+        "region": InvalidRegionError(region_name="invalid"),
+        "client": RuntimeError("client failed"),
+    }
+
+    def fail():
+        raise errors[failure]
+
+    monkeypatch.setattr(deps, "get_comprehend_client", fail)
+    loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 1}).json()
+    root = f"/dataset/{loaded['dataset_id']}"
+    result = client.post(f"{root}/labels/comprehend", json={"confirm_cost": True})
+    assert result.status_code == 503 and "AWS" in result.text
+    records = client.get(f"{root}/records").json()["items"]
+    assert records[0]["original"]["comprehend_label"] is None
+
+
+def test_complete_pricing_failure_does_not_block_labeling(client, monkeypatch):
+    from sentiment_prep.history import services as history
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("pricing unavailable")
+
+    monkeypatch.setattr(history, "get_price_quote", fail)
+    monkeypatch.setattr(deps, "_boto_client", fail)
+    monkeypatch.setattr(deps, "get_comprehend_rate", REAL_RATE_GETTER)
+    loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 1}).json()
+    root = f"/dataset/{loaded['dataset_id']}"
+    quoted = client.get(f"{root}/labels/estimate")
+    assert quoted.status_code == 200
+    assert quoted.json()["price_status"] == "unavailable"
+    assert quoted.json()["estimated_cost_usd"] is quoted.json()["cost_per_unit_usd"] is None
+    result = client.post(f"{root}/labels/comprehend", json={"confirm_cost": True})
+    assert result.status_code == 200
+    assert result.json()["labelled_in_call"] == 1 and result.json()["cost_usd"] is None

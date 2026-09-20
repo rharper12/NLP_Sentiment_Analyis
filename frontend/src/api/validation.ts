@@ -40,7 +40,7 @@ const maybe = <T extends z.ZodTypeAny>(inner: T) => inner.nullish();
 
 const counts = z.record(z.string(), z.number());
 
-export const recordSchema: z.ZodType<PostRecord> = z.looseObject({
+const recordSchema: z.ZodType<PostRecord> = z.looseObject({
   id: z.string(),
   text: z.string(),
   source_type: z.enum(["x", "huggingface", "csv"]),
@@ -57,10 +57,15 @@ export const datasetSummarySchema: z.ZodType<DatasetSummary> = z.looseObject({
   dataset_id: z.string(),
   source_type: z.enum(["x", "huggingface", "csv"]),
   query: z.string().nullable(),
+  window_start: maybe(z.string()),
+  window_end: maybe(z.string()),
   record_count: z.number(),
   labelled_count: z.number(),
   truncated_reason: z.string().nullable(),
   estimated_cost_usd: maybe(z.number()),
+  partial: z.boolean(),
+  resume_request_id: maybe(z.string()),
+  retry_at: maybe(z.number()),
   warnings: z.array(z.string()).optional(),
   preview: z.array(recordSchema),
 });
@@ -81,12 +86,14 @@ const stepResultSchema: z.ZodType<StepResult> = z.looseObject({
   vocab_after: z.number(),
   avg_tokens_before: z.number(),
   avg_tokens_after: z.number(),
-  duration_ms: z.number(),
+  duration_ms: maybe(z.number()),
   sample_diffs: z.array(z.tuple([z.string(), z.string()])).optional(),
 });
 
 const sentimentComparisonSchema: z.ZodType<SentimentComparison> = z.looseObject({
-  agreement: z.number(),
+  agreement: maybe(z.number()),
+  comparable_records: z.number(),
+  shared_records: z.number(),
   distribution_before: counts,
   distribution_after: counts,
 });
@@ -113,6 +120,7 @@ export const preprocessResponseSchema: z.ZodType<PreprocessResponse> = z.looseOb
   dataset_id: z.string(),
   applied_steps: z.array(z.string()),
   record_count: z.number(),
+  partial: z.boolean(),
   metrics_before: metricsSchema,
   metrics_after: metricsSchema,
   report: impactReportSchema,
@@ -131,9 +139,12 @@ export const recordPageSchema: z.ZodType<RecordPage> = z.looseObject({
 });
 
 export const labelEstimateSchema: z.ZodType<LabelEstimate> = z.looseObject({
+  prefix_labels: z.number().int().nonnegative().default(0),
+  truncated_records: z.number().int().nonnegative().default(0),
   records_total: z.number(),
   records_unlabelled: z.number(),
   records_to_send: z.number(),
+  failed_total: z.number(),
   billable_units: z.number(),
   unit_chars: z.number(),
   min_units_per_document: z.number(),
@@ -141,16 +152,27 @@ export const labelEstimateSchema: z.ZodType<LabelEstimate> = z.looseObject({
   cost_per_unit_usd: z.union([z.number(), z.null()]),
   price_status: z.enum(["live", "cached", "stale", "unavailable"]),
   price_fetched_at: z.union([z.string(), z.null()]),
-  price_region: z.string(),
+  price_region: maybe(z.string()),
 });
 
 export const labelProgressSchema: z.ZodType<LabelProgress> = z.looseObject({
+  truncated_records: z.number().int().nonnegative().default(0),
   labelled_in_call: z.number(),
+  attempted_in_call: z.number(),
+  failed_in_call: z.number(),
+  failed_total: z.number(),
+  failures: z.array(z.object({
+    record_id: z.string(),
+    code: z.enum(["document_rejected", "temporarily_unavailable", "missing_result"]),
+    retryable: z.boolean(), attempts: z.number(),
+  })).optional(),
   labelled_total: z.number(),
   remaining: z.number(),
   units_billed: z.number(),
   cost_usd: z.union([z.number(), z.null()]),
   done: z.boolean(),
+  partial: z.boolean(),
+  stop_reason: maybe(z.string()),
 });
 
 export const labelSummarySchema: z.ZodType<LabelSummary> = z.looseObject({
@@ -209,7 +231,7 @@ export const historyRunSchema: z.ZodType<HistoryRun> = z.looseObject({
   vocab_after: z.number(),
   sentiment_agreement: z.union([z.number(), z.null()]),
   embedding_drift: z.union([z.number(), z.null()]),
-  duration_ms: z.number(),
+  duration_ms: maybe(z.number()),
   created_at: z.string(),
 });
 
@@ -227,4 +249,4 @@ export const healthSchema: z.ZodType<HealthResponse> = z.looseObject({
   bedrock_enabled: maybe(z.boolean()),
 });
 
-export const saveResponseSchema = z.looseObject({ uri: z.string() });
+export const saveResponseSchema = z.looseObject({ uri: maybe(z.string()) });

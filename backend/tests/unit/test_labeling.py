@@ -171,3 +171,40 @@ def test_in_memory_repository_evicts_oldest_bundle():
     assert repo.get("c") and repo.get("b")
     with pytest.raises(NotFoundError):
         repo.get("a")
+
+
+class _FakeBotoError(Exception):
+    """Stand-in for a botocore error, which carries its code in a response dict."""
+
+    def __init__(self, code: str = "") -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+def test_expired_sso_session_is_reported_as_something_the_operator_can_fix():
+    """An expired SSO token is the likeliest AWS failure; a bare 500 would hide the remedy."""
+    from sentiment_prep.api.aws_errors import translated
+    from sentiment_prep.errors import CredentialsError
+
+    expired = type("UnauthorizedSSOTokenError", (Exception,), {})
+    with pytest.raises(CredentialsError) as caught, translated("Amazon Comprehend"):
+        raise expired()
+    assert "aws sso login" in str(caught.value)
+
+
+def test_permission_and_throttling_failures_name_the_cause():
+    from sentiment_prep.api.aws_errors import translated
+    from sentiment_prep.errors import ExternalServiceError
+
+    with pytest.raises(ExternalServiceError, match="not allowed"), translated("Amazon Comprehend"):
+        raise _FakeBotoError("AccessDeniedException")
+    with pytest.raises(ExternalServiceError, match="throttling"), translated("Amazon Comprehend"):
+        raise _FakeBotoError("ThrottlingException")
+
+
+def test_unrecognised_failures_are_left_alone():
+    """Only failures with a known remedy are rewritten; anything else keeps its own traceback."""
+    from sentiment_prep.api.aws_errors import translated
+
+    with pytest.raises(_FakeBotoError), translated("Amazon Comprehend"):
+        raise _FakeBotoError("SomethingNewAndUnmapped")

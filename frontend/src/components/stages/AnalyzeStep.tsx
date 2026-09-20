@@ -14,6 +14,7 @@ const DiffDialog = lazy(() => import("../DiffDialog"));
 
 interface Props {
   datasetId: string;
+  diagnostics: boolean;
   recordCount: number;
   theme: Theme;
   run: PreprocessResponse | null;
@@ -30,7 +31,7 @@ const fmt = (n: number) => n.toLocaleString();
 const pct = (a: number, b: number) => (a === 0 ? null : ((b - a) / a) * 100);
 
 /** Stage 3. The numbers first, then a chart, then the prose, then the evidence (records). */
-export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
+export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
   const [selected, setSelected] = useState<RecordPair | null>(null);
   const records = useAsync<RecordPair[]>();
   const { run: loadRecords } = records;
@@ -63,7 +64,7 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
         </div>
         <div className="flex gap-2">
           <button type="button" className="btn" onClick={onBack}>← Adjust steps</button>
-          {busy ? <button type="button" className="btn" onClick={onCancel}>Cancel</button> : <button type="button" className="btn" onClick={onRerun}>Run again</button>}
+          {busy ? <button type="button" className="btn" onClick={onCancel}>Cancel</button> : <button type="button" className="btn" onClick={onRerun}>{run?.partial ? "Resume analysis" : "Run again"}</button>}
         </div>
       </div>
 
@@ -95,8 +96,8 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
             <dl className="flex flex-col gap-3 text-sm">
               <div>
                 <dt className="text-muted">Baseline classifier agreement <span className="text-xs">(Amazon Comprehend, before vs after)</span></dt>
-                <dd className="tnum text-2xl font-semibold">{run.report.sentiment ? `${(run.report.sentiment.agreement * 100).toFixed(1)}%` : <span className="text-base font-normal text-muted">not measured</span>}</dd>
-                {run.report.sentiment && <dd className="text-xs text-muted">Share of posts whose sentiment label did not change. High is good: the cleaning kept the meaning.</dd>}
+                <dd className="tnum text-2xl font-semibold">{run.report.sentiment?.agreement != null ? `${(run.report.sentiment.agreement * 100).toFixed(1)}%` : <span className="text-base font-normal text-muted">not measured</span>}</dd>
+                {run.report.sentiment && <dd className="text-xs text-muted">{run.report.sentiment.comparable_records ?? 0} successfully scored comparable posts of {run.report.sentiment.shared_records ?? 0} shared posts. Agreement is unavailable when none were scored successfully.</dd>}
               </div>
               <div>
                 <dt className="text-muted">Embedding drift <span className="text-xs">(Titan Embed v2, cosine distance)</span></dt>
@@ -104,7 +105,7 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
                 {run.report.embedding_drift != null && <dd className="text-xs text-muted">0 = identical to an embedding model; above ~0.3 means materially different text.</dd>}
               </div>
             </dl>
-            {disabledNote.length > 0 && (
+            {diagnostics && disabledNote.length > 0 && (
               <p className="mt-3 text-xs text-muted">{disabledNote.join(" ")} Enable in .env to measure.</p>
             )}
             </>
@@ -116,7 +117,7 @@ export function AnalyzeStep({ datasetId, recordCount, theme, run, busy, error, r
         <div className="glass-panel p-5">
           <h3 className="mb-3 font-semibold">Step by step</h3>
           <StepWaterfall steps={run.report.steps} />
-          <p className="tnum mt-3 text-xs text-muted">{run.report.steps.length} steps in {run.report.steps.reduce((s, x) => s + x.duration_ms, 0).toFixed(0)} ms.</p>
+          {diagnostics && <p className="tnum mt-3 text-xs text-muted">{run.report.steps.length} steps in {run.report.steps.reduce((s, x) => s + (x.duration_ms ?? 0), 0).toFixed(0)} ms.</p>}
         </div>
       )}
 

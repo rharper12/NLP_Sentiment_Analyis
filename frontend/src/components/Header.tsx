@@ -5,9 +5,10 @@ interface Props {
   onToggleTheme: () => void;
   onOpenHistory: () => void;
   spendVersion: number;
+  diagnostics: boolean;
 }
 
-export function Header({ theme, onToggleTheme, onOpenHistory, spendVersion }: Props) {
+export function Header({ diagnostics, theme, onToggleTheme, onOpenHistory, spendVersion }: Props) {
   const next = theme === "dark" ? "light" : "dark";
   return (
     <header className="glass-bar sticky top-0 z-30 border-b border-rule">
@@ -17,7 +18,7 @@ export function Header({ theme, onToggleTheme, onOpenHistory, spendVersion }: Pr
           <p className="hidden text-sm text-muted lg:block">Collect posts on any topic, clean them for NLP, measure what changed.</p>
         </div>
         <div className="flex items-center gap-2">
-          <SpendChip refreshKey={spendVersion} />
+          <SpendChip refreshKey={spendVersion} diagnostics={diagnostics} />
           <button type="button" className="btn hidden sm:inline-flex" onClick={onOpenHistory}>History</button>
           <button type="button" onClick={onToggleTheme} aria-label={`Switch to ${next} mode`} title={`Switch to ${next} mode`}
             className="grid size-9 place-items-center rounded-full border border-rule bg-surface hover:bg-surface-2">

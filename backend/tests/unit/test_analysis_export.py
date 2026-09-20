@@ -99,3 +99,15 @@ def test_exports_and_report(s3_bucket):
     )
     assert manifest["record_count_original"] == 8
     assert uri.startswith(f"s3://{bucket}/datasets/abc/")
+
+
+def test_generated_explanations_never_receive_operator_timings_or_hints():
+    from sentiment_prep.analysis.bedrock_explainer import BedrockExplainer
+
+    bundle = processed_bundle()
+    bundle.report.warnings = ["internal-only-configuration-hint"]
+    fake = FakeBedrock()
+    BedrockExplainer(fake, "model").explain(bundle.report, bundle.applied_steps)
+    assert "duration_ms" not in fake.last_prompt
+    assert "internal-only-configuration-hint" not in fake.last_prompt
+    assert "sample_diffs" not in fake.last_prompt

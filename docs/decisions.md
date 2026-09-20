@@ -2,6 +2,16 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
+## ADR-23: A search window that clamps rather than refuses
+X's recent search accepts `start_time` and `end_time` inside a seven-day horizon, so the UI offers
+presets and a custom date pair. Bounds outside the horizon are clamped, not rejected: the "last 7
+days" preset computes `now - 168h` in the browser and the server checks it milliseconds later, so a
+strict comparison would fail the most common path on clock skew alone. A range that runs backwards
+is a different thing — no clamping repairs it, and sending it draws a 400 from X that our error
+mapping would misattribute to the query syntax — so that is refused with a message naming the
+problem. The window is recorded on the dataset and printed in the report, because "posts about the
+launch" means nothing without the days it covers.
+
 ## ADR-22: Deduplicate at collection, with a prefix filter and a deliberately high threshold
 Duplicates that straddle a train/test split let a model score itself on memorised text, which on a
 600-row corpus can move accuracy several points. X is full of copypasta and quote-tweets that

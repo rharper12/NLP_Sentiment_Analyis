@@ -8,13 +8,14 @@ export const STAGES: { id: Stage; label: string; blurb: string }[] = [
 ];
 
 interface Props {
+  disabled?: boolean;
   current: Stage;
   reached: Stage; // furthest stage the person may jump to
   onSelect: (stage: Stage) => void;
 }
 
 /** Four stages, in order. Completed stages stay clickable; future ones are visible but locked. */
-export function Stepper({ current, reached, onSelect }: Props) {
+export function Stepper({ current, reached, onSelect, disabled = false }: Props) {
   const reachedIndex = STAGES.findIndex((s) => s.id === reached);
   const currentIndex = STAGES.findIndex((s) => s.id === current);
   return (
@@ -22,7 +23,7 @@ export function Stepper({ current, reached, onSelect }: Props) {
       <ol className="mx-auto flex max-w-6xl justify-between overflow-x-auto px-4 sm:px-6">
         {STAGES.map((s, i) => {
           const done = i < currentIndex;
-          const enabled = i <= reachedIndex;
+          const enabled = !disabled && i <= reachedIndex;
           const active = i === currentIndex;
           return (
             <li key={s.id} className="flex shrink-0 items-center">

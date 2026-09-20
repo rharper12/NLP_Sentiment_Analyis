@@ -15,6 +15,7 @@ from sentiment_prep import __version__
 from sentiment_prep.export.parquet_export import to_parquet
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
+from sentiment_prep.presentation import public_report
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
@@ -37,14 +38,21 @@ class S3Store:
         self._prefix = prefix.strip("/")
         self._client = client
 
-    def save(self, bundle: DatasetBundle) -> str:
+    def save(self, bundle: DatasetBundle, *, diagnostics: bool = False) -> str:
         """Write the three files and return the folder URI."""
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         folder = f"{self._prefix}/{bundle.dataset_id}/{stamp}"
 
         self._put(f"{folder}/dataset.parquet", to_parquet(bundle), "application/octet-stream")
 
-        report = bundle.report.model_dump_json(indent=2) if bundle.report else "{}"
+        report = (
+            public_report(bundle.report, diagnostics=diagnostics).model_dump_json(
+                indent=2,
+                exclude={} if diagnostics else {"steps": {"__all__": {"duration_ms"}}},
+            )
+            if bundle.report
+            else "{}"
+        )
         self._put(f"{folder}/impact.json", report.encode(), "application/json")
 
         manifest = {

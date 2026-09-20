@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
 
 import httpx
 
+from sentiment_prep.budget import can_start
+from sentiment_prep.errors import ExternalServiceError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import Dataset, Record
+from sentiment_prep.sources.payloads import HFPage
 
 logger = get_logger(__name__)
 
@@ -69,11 +71,15 @@ class HuggingFaceSource:
         truncated_reason: str | None = None
 
         while len(records) < limit:
+            if not can_start():
+                truncated_reason = "request budget reached"
+                break
             if should_stop and should_stop():
                 truncated_reason = "cancelled by client"
                 break
             response = self._client.get(
                 "/rows",
+                timeout=3.0,
                 params={
                     "dataset": self._dataset,
                     "config": self._config,
@@ -83,19 +89,28 @@ class HuggingFaceSource:
                 },
             )
             response.raise_for_status()
-            rows = response.json().get("rows", [])
+            try:
+                rows = HFPage.model_validate(response.json()).rows
+            except ValueError:
+                raise ExternalServiceError("Hugging Face returned malformed dataset rows") from None
             if not rows:
                 truncated_reason = "dataset exhausted"
                 break
             for item in rows:
-                row = item["row"]
-                text = str(row.get(self._text_column, "")).strip()
+                row = item.row
+                raw_text = row.get(self._text_column)
+                if raw_text is None:
+                    skipped += 1
+                    continue
+                if not isinstance(raw_text, str):
+                    raise ExternalServiceError("Hugging Face text must be a string")
+                text = raw_text.strip()
                 if not text:
                     skipped += 1
                     continue
                 records.append(
                     Record(
-                        id=f"hf-{item['row_idx']}",
+                        id=f"hf-{item.row_idx}",
                         text=text,
                         label=(label := self._label_for(row)),
                         label_source="source" if label is not None else None,
@@ -119,10 +134,16 @@ class HuggingFaceSource:
             filtered_out={"empty_text": skipped} if skipped else {},
         )
 
-    def _label_for(self, row: dict[str, Any]) -> str | None:
+    def _label_for(self, row: dict[str, object]) -> str | None:
         if not self._label_column or self._label_column not in row:
             return None
         raw = row[self._label_column]
+        if raw is None:
+            return None
+        if type(raw) not in (str, int):
+            raise ExternalServiceError("Hugging Face label must be a string or integer")
         if isinstance(raw, int) and self._dataset.endswith("tweet_eval"):
-            return TWEET_EVAL_LABELS.get(raw, str(raw))
+            if raw not in TWEET_EVAL_LABELS:
+                raise ExternalServiceError("Hugging Face returned an unsupported sentiment label")
+            return TWEET_EVAL_LABELS[raw]
         return str(raw)

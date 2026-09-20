@@ -2,26 +2,37 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from sentiment_prep.analysis.metrics import DatasetMetrics
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
-from sentiment_prep.models import ImpactReport, Record, SentimentLabel, SourceType
+from sentiment_prep.models import Record, SentimentLabel, SourceType
 from sentiment_prep.preprocessing.missing_data import DEFAULT_FILL_VALUE, MAX_FILL_VALUE_CHARS
+from sentiment_prep.presentation import PublicImpactReport
 from sentiment_prep.storage.checkpoints import CheckpointInfo
 
 
 class LoadRequest(BaseModel):
     """Fetch a dataset from a remote source."""
 
+    request_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{8,64}$")
     source: Literal["x", "huggingface"]
     limit: int = Field(
         default=600, ge=1, le=5000, description="Records to fetch. Task 1 needs 500+."
     )
     query: str | None = Field(
         default=None, description="Required for X. Operators like lang:en allowed."
+    )
+    start_time: datetime | None = Field(
+        default=None,
+        description="Oldest post to return (X only). Clamped to seven days ago, the limit of "
+        "recent search.",
+    )
+    end_time: datetime | None = Field(
+        default=None, description="Newest post to return (X only). Clamped to a few seconds ago."
     )
 
 
@@ -31,6 +42,8 @@ class DatasetSummary(BaseModel):
     dataset_id: str
     source_type: SourceType
     query: str | None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
     record_count: int
     labelled_count: int
     filtered_out: dict[str, int] = Field(
@@ -39,6 +52,9 @@ class DatasetSummary(BaseModel):
     )
     truncated_reason: str | None
     estimated_cost_usd: float | None = None
+    partial: bool = False
+    resume_request_id: str | None = None
+    retry_at: float | None = None
     warnings: list[str] = Field(default_factory=list)
     preview: list[Record]
 
@@ -72,9 +88,10 @@ class PreprocessResponse(BaseModel):
     dataset_id: str
     applied_steps: list[str]
     record_count: int
+    partial: bool = False
     metrics_before: DatasetMetrics
     metrics_after: DatasetMetrics
-    report: ImpactReport
+    report: PublicImpactReport
     preview: list[Record]
 
 
@@ -152,7 +169,7 @@ class CheckpointList(BaseModel):
 class SaveResponse(BaseModel):
     """Where the saved folder landed."""
 
-    uri: str
+    uri: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -190,15 +207,15 @@ class HistoryRun(BaseModel):
     vocab_after: int
     sentiment_agreement: float | None
     embedding_drift: float | None
-    duration_ms: float
+    duration_ms: float | None = None
     created_at: str
 
 
 class HealthResponse(BaseModel):
     """Liveness plus, when ``diagnostics`` is true, the facts an operator checks first.
 
-    Every field after ``x_configured`` is null unless diagnostics are enabled (local runtime by
-    default), so a public deployment reveals nothing about its storage or enabled services.
+    Operator fields are omitted unless diagnostics are enabled (local runtime by default)
+    and the caller is authorized. Public liveness reveals no storage or enabled-service details.
     """
 
     status: str

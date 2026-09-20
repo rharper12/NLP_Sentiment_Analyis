@@ -1,10 +1,7 @@
 """All runtime configuration in one place.
 
-Values come from environment variables (locally via ``.env``, in Lambda via the SAM
-template). The X bearer token is the only secret: it may be supplied directly as
-``X_BEARER_TOKEN`` for local work, or indirectly via ``X_BEARER_TOKEN_SSM_PATH`` so the
-deployed function reads it from SSM Parameter Store. Swapping X accounts is therefore a
-one-line change in ``.env`` or ``samconfig.toml``.
+Values come from environment variables (locally via ``.env``, in Lambda via SAM).
+Operator credentials, X tokens and database URLs can resolve from SSM Parameter Store.
 """
 
 from __future__ import annotations
@@ -15,9 +12,9 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from sentiment_prep.logging_config import get_logger
-
-logger = get_logger(__name__)
+from sentiment_prep.aws import create_aws_session
+from sentiment_prep.budget import AWS_CONFIG
+from sentiment_prep.errors import ConfigurationError
 
 
 class Settings(BaseSettings):
@@ -30,6 +27,21 @@ class Settings(BaseSettings):
     runtime: Literal["local", "lambda"] = "local"
     log_level: str = "INFO"
     aws_region: str = "us-east-1"
+    # Named profile from ~/.aws/config, including SSO profiles. Unset uses the default credential
+    # chain, which is what Lambda relies on. Setting it here rather than exporting AWS_PROFILE
+    # keeps every knob in one file, and boto3 never reads this project's .env itself.
+    aws_profile: str | None = None
+    # Static IAM user keys, for a machine with no SSO. A profile is preferred: keys in a file are
+    # long-lived and easy to leak, while an SSO session expires on its own. Whichever is set,
+    # nothing is logged and nothing reaches the browser.
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+
+    @property
+    def has_static_keys(self) -> bool:
+        """True when an access key pair is configured, which takes precedence over a profile."""
+        return bool(self.aws_access_key_id and self.aws_secret_access_key)
 
     # Storage
     data_bucket: str | None = None
@@ -58,10 +70,8 @@ class Settings(BaseSettings):
     dedupe_similarity: float = Field(default=0.9, gt=0.0, le=1.0)
 
     # Checkpoints: CSV snapshots written as soon as data exists (collected, processed, labelled)
-    # so a crash after a paid step never loses what was paid for. Local folder is gitignored.
+    # alongside the working journal. Provider success before persistence can still be ambiguous.
     checkpoint_dir: str = "data/checkpoints"
-    # Bundles kept in memory when running locally; oldest is evicted past this.
-    local_repository_size: int = Field(default=20, ge=1)
     checkpoint_prefix: str = "checkpoints"
 
     # AWS ML services. Any of these can be disabled to run without an AWS account.
@@ -113,11 +123,20 @@ class Settings(BaseSettings):
         return self._ssm_value(self.database_url_ssm_path)
 
     def _ssm_value(self, path: str) -> str:
-        import boto3
-
-        logger.info("secret_from_ssm", path=path)
-        client = boto3.client("ssm", region_name=self.aws_region)
-        value: str = client.get_parameter(Name=path, WithDecryption=True)["Parameter"]["Value"]
+        try:
+            client = create_aws_session(self).client(
+                "ssm", region_name=self.aws_region, config=AWS_CONFIG
+            )
+            response = client.get_parameter(Name=path, WithDecryption=True)
+        except Exception:  # noqa: BLE001 - never expose provider exceptions containing secrets
+            raise ConfigurationError(
+                "Cannot read SSM configuration. Check AWS credentials, region "
+                "and parameter permissions."
+            ) from None
+        parameter = response.get("Parameter") if isinstance(response, dict) else None
+        value = parameter.get("Value") if isinstance(parameter, dict) else None
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigurationError("SSM configuration must contain a nonempty string value")
         return value
 
     def resolve_x_bearer_token(self) -> str | None:

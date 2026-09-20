@@ -14,10 +14,13 @@ from functools import lru_cache
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.engine.interfaces import DBAPIConnection
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from sentiment_prep.config import get_settings
+from sentiment_prep.errors import ConfigurationError
 from sentiment_prep.history.models import Base
 from sentiment_prep.logging_config import get_logger
 
@@ -40,7 +43,7 @@ def get_engine() -> Engine:
     """One engine per process; creates tables on first call."""
     settings = get_settings()
     url = settings.resolve_database_url() or default_sqlite_url(settings.runtime)
-    engine = create_engine(url, pool_pre_ping=True, future=True)
+    engine = build_engine(url)
     if url.startswith("sqlite"):
         # SQLite needs WAL for concurrent readers and a busy timeout for the ledger writes.
         @event.listens_for(engine, "connect")
@@ -60,10 +63,50 @@ def get_engine() -> Engine:
     return engine
 
 
+def build_engine(url: str) -> Engine:
+    """Construct the supported drivers with bounded connection and statement waits."""
+    parsed = make_url(url)
+    if parsed.get_backend_name() == "postgresql":
+        if parsed.drivername != "postgresql+psycopg":
+            raise ConfigurationError("Use a postgresql+psycopg:// DATABASE_URL")
+        return create_engine(
+            url,
+            pool_pre_ping=True,
+            pool_timeout=2,
+            connect_args={
+                "connect_timeout": 2,
+                "options": "-c statement_timeout=2000 -c lock_timeout=1000",
+            },
+        )
+    return create_engine(url, pool_pre_ping=True, future=True)
+
+
+def require_durable_spend_storage() -> None:
+    """Paid Lambda reads require the shared PostgreSQL ledger; never fall back to /tmp."""
+    settings = get_settings()
+    if settings.runtime == "lambda":
+        url = settings.resolve_database_url()
+        if not url or make_url(url).drivername != "postgresql+psycopg":
+            raise ConfigurationError(
+                "Paid X collection in Lambda requires shared PostgreSQL storage"
+            )
+        # Constructing the engine loads the driver and verifies schema/connectivity. A failure
+        # aborts before reserving budget or contacting X; there is no fallback database.
+        try:
+            get_engine()
+        except SQLAlchemyError as exc:
+            raise ConfigurationError(
+                "Shared spend storage is unavailable; X collection refused"
+            ) from exc
+
+
 def is_ephemeral() -> bool:
     """True when history lives on Lambda's ``/tmp`` and will vanish on the next cold start."""
     settings = get_settings()
-    return settings.runtime == "lambda" and not settings.resolve_database_url()
+    url = settings.resolve_database_url()
+    return settings.runtime == "lambda" and (
+        not url or make_url(url).get_backend_name() == "sqlite"
+    )
 
 
 def backend_name() -> str:

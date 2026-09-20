@@ -90,6 +90,33 @@ SecureString, set `DatabaseUrlSsmPath`, and add `psycopg[binary]` to `pyproject.
 dependencies before building the image. Tables are created on first use (`create_all`); the schema is small and additive. Adopt Alembic if
 you ever need a destructive change.
 
+## Running against AWS from your machine
+
+The app uses boto3's normal credential chain, so any working `aws` CLI setup works. For SSO:
+
+```bash
+aws sso login --profile my-profile          # renew the session (expires every few hours)
+```
+
+Then set the profile in `backend/.env` alongside everything else:
+
+```
+AWS_PROFILE=my-profile
+AWS_REGION=us-east-1
+COMPREHEND_ENABLED=true
+```
+
+`AWS_PROFILE` is read as a setting and applied to a `boto3.Session`, not exported to the process:
+this project's `.env` is parsed by pydantic-settings and never reaches boto3's own environment
+lookup, so exporting it in the shell also works but is not required.
+
+Check it took effect: `GET /health` reports `comprehend_enabled`, and the first AWS call logs
+`boto_session_created` with the profile name. When the SSO session lapses, requests fail with a
+503 saying to run `aws sso login` rather than a generic error.
+
+Least privilege for a local run is `comprehend:BatchDetectSentiment`, plus
+`bedrock:InvokeModel` and `pricing:GetProducts` if those are enabled.
+
 ## Troubleshooting
 
 **`sam build` says "requires Docker. is Docker running?" but `docker info` works.** SAM looks for

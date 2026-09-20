@@ -6,15 +6,20 @@ leaves the field ``None``; the user still gets the deterministic results.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from sentiment_prep.analysis.bedrock_explainer import BedrockExplainer
 from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer
+from sentiment_prep.analysis.comprehend_text import TRUNCATION_WARNING, prepare_text
 from sentiment_prep.analysis.embeddings import EmbeddingDrift
 from sentiment_prep.analysis.metrics import DatasetMetrics, compute_metrics
 from sentiment_prep.api.schemas import PreprocessRequest
+from sentiment_prep.budget import BudgetExhaustedError, can_start
 from sentiment_prep.config import Settings
-from sentiment_prep.errors import ValidationError
+from sentiment_prep.errors import AppError, ValidationError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle, ImpactReport
 from sentiment_prep.preprocessing import STEP_REGISTRY, Pipeline
@@ -49,51 +54,132 @@ def build_steps(request: PreprocessRequest) -> list[PreprocessStep]:
     return steps
 
 
+class ProgressPersistenceError(AppError):
+    """A required durable write failed; do not continue optional paid work."""
+
+
 def run_preprocessing(
     bundle: DatasetBundle,
     request: PreprocessRequest,
     settings: Settings,
-    comprehend: ComprehendClient | None,
-    bedrock: BedrockRuntimeClient | None,
+    comprehend: ComprehendClient | Callable[[], ComprehendClient | None] | None,
+    bedrock: BedrockRuntimeClient | Callable[[], BedrockRuntimeClient | None] | None,
+    *,
+    persist: Callable[[DatasetBundle], None] | None = None,
 ) -> tuple[DatasetBundle, DatasetMetrics, DatasetMetrics]:
-    """Return the updated bundle plus before/after metrics."""
-    processed, step_results = Pipeline(build_steps(request)).run(bundle.original)
-    report = ImpactReport(steps=step_results)
+    """Save deterministic output first, then resume cached paid units within this slice.
 
-    if comprehend is not None:
-        try:
-            report.sentiment = ComprehendScorer(comprehend).compare(bundle.original, processed)
-        # Broad by design: this enrichment is optional and its failure must not cost the caller
-        # the deterministic results they already paid for. Logged with a traceback and summarised
-        # in `warnings`, so a degraded run is never silent.
-        except Exception as exc:
-            logger.error("comprehend_comparison_failed", exc_info=True)
-            report.warnings.append(f"sentiment comparison unavailable: {type(exc).__name__}")
-    else:
-        report.warnings.append("sentiment comparison disabled (COMPREHEND_ENABLED=false)")
+    A provider may finish before a process dies without committing the result. Such ambiguous
+    calls cannot promise exactly-once billing; the exclusive storage claim remains for recovery.
+    """
+    updated = bundle.model_copy(deep=True)
+    state = updated.analysis
+    signature = hashlib.sha256(
+        (
+            request.model_dump_json()
+            + json.dumps([(record.id, record.text) for record in updated.original.records])
+            + settings.embed_model_id
+            + settings.bedrock_text_model_id
+            + str(settings.embed_sample_size)
+            + str(settings.comprehend_enabled)
+            + str(settings.bedrock_enabled)
+        ).encode()
+    ).hexdigest()
+    if state.signature != signature or updated.processed is None or updated.report is None:
+        processed, step_results = Pipeline(build_steps(request)).run(updated.original)
+        updated.processed = processed
+        updated.applied_steps = list(request.steps)
+        updated.report = ImpactReport(steps=step_results)
+        state.signature = signature
+        state.completed = []
+    assert updated.processed is not None and updated.report is not None
+    processed, report = updated.processed, updated.report
+    report.warnings = [w for w in report.warnings if not w.startswith("Analysis partially")]
+    state.partial = False
 
-    if bedrock is not None:
-        try:
-            report.embedding_drift = EmbeddingDrift(
-                bedrock, settings.embed_model_id, settings.embed_sample_size
-            ).compute(bundle.original, processed)
-        # Optional enrichment: a failure degrades the report rather than failing the request.
-        except Exception as exc:
-            logger.error("embedding_drift_failed", exc_info=True)
-            report.warnings.append(f"embedding drift unavailable: {type(exc).__name__}")
-        if request.explain:
+    def save() -> None:
+        if persist is not None:
             try:
-                report.explanation = BedrockExplainer(
-                    bedrock, settings.bedrock_text_model_id
-                ).explain(report, request.steps)
-            # Optional enrichment: a failure degrades the report rather than failing the request.
+                persist(updated)
             except Exception as exc:
-                logger.error("explanation_failed", exc_info=True)
-                report.warnings.append(f"explanation unavailable: {type(exc).__name__}")
-    else:
-        report.warnings.append("embedding drift and explanation disabled (BEDROCK_ENABLED=false)")
+                # Persistence is mandatory, unlike enrichments. Never swallow this failure
+                # in an optional provider handler or start another paid call after it.
+                raise ProgressPersistenceError("Could not save analysis progress") from exc
 
-    updated = bundle.model_copy(
-        update={"processed": processed, "applied_steps": list(request.steps), "report": report}
-    )
-    return updated, compute_metrics(bundle.original), compute_metrics(processed)
+    save()
+    for stage in ("sentiment", "embedding", "explanation"):
+        if stage in state.completed:
+            continue
+        if stage == "explanation" and not request.explain:
+            state.completed.append(stage)
+            continue
+        if not can_start():
+            state.partial = True
+            break
+        attempt_key = signature + ":" + stage
+        report.warnings = [w for w in report.warnings if not w.startswith(f"{stage} unavailable")]
+        try:
+            if stage == "sentiment":
+                client = comprehend() if callable(comprehend) else comprehend
+                if client is None:
+                    report.warnings.append(
+                        "sentiment comparison disabled (COMPREHEND_ENABLED=false)"
+                    )
+                else:
+                    if any(
+                        prepare_text(r.text).truncated
+                        for r in [*updated.original.records, *processed.records]
+                    ):
+                        report.warnings.append(TRUNCATION_WARNING)
+                    scorer = ComprehendScorer(client, cache=state.sentiment, persist=save)
+                    report.sentiment = scorer.compare(updated.original, processed)
+                    report.warnings = [
+                        w
+                        for w in report.warnings
+                        if w != "Some sentiment comparisons are unavailable"
+                    ]
+                    if any(r.label == "error" for r in state.sentiment.values()):
+                        report.warnings.append("Some sentiment comparisons are unavailable")
+                    if scorer.retry_pending:
+                        state.partial = True
+                        break
+            else:
+                model_client = bedrock() if callable(bedrock) else bedrock
+                if model_client is None:
+                    report.warnings.append(
+                        "embedding drift and explanation disabled (BEDROCK_ENABLED=false)"
+                    )
+                elif stage == "embedding":
+                    report.embedding_drift = EmbeddingDrift(
+                        model_client,
+                        settings.embed_model_id,
+                        settings.embed_sample_size,
+                        cache=state.vectors,
+                        attempts=state.attempts,
+                        persist=save,
+                    ).compute(updated.original, processed)
+                else:
+                    report.explanation = BedrockExplainer(
+                        model_client, settings.bedrock_text_model_id
+                    ).explain(report, request.steps)
+        except ProgressPersistenceError:
+            raise
+        except BudgetExhaustedError:
+            state.partial = True
+            break
+        except Exception as exc:
+            # Optional provider failure: keep deterministic output and all committed paid units.
+            logger.error("analysis_enrichment_failed", stage=stage, exc_info=True)
+            report.warnings.append(f"{stage} unavailable: {type(exc).__name__}")
+            state.attempts[attempt_key] = state.attempts.get(attempt_key, 0) + 1
+            if state.attempts[attempt_key] < 3:
+                state.partial = True
+                save()
+                break
+        state.completed.append(stage)
+        save()
+    if state.partial:
+        report.warnings.append("Analysis partially complete; resume to continue saved work")
+    report.warnings = list(dict.fromkeys(report.warnings))
+    save()
+    return updated, compute_metrics(updated.original), compute_metrics(processed)

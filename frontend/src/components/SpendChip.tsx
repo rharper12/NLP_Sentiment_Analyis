@@ -8,7 +8,7 @@ import { Skeleton } from "./ui/Skeleton";
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
 /** Always-visible X spend. Opens to caps, month total, and an optional live check with X. */
-export function SpendChip({ refreshKey }: { refreshKey: number }) {
+export function SpendChip({ refreshKey, diagnostics }: { refreshKey: number; diagnostics: boolean }) {
   const spend = useAsync<SpendSummary>();
   const { run: loadSpend } = spend;
   const [open, setOpen] = useState(false);
@@ -46,7 +46,7 @@ export function SpendChip({ refreshKey }: { refreshKey: number }) {
             <dt className="text-muted">Per search cap</dt><dd className="tnum">{s.cap_per_fetch.toLocaleString()} reads</dd>
             <dt className="text-muted">Rate</dt><dd className="tnum">{usd(s.cost_per_read_usd * 1000)} per 1,000</dd>
           </dl>
-          {s.x_configured ? (
+          {diagnostics && s.x_configured && (
             <>
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" className="accent-accent" checked={withX} onChange={(e) => setWithX(e.target.checked)} />
@@ -54,7 +54,8 @@ export function SpendChip({ refreshKey }: { refreshKey: number }) {
               </label>
               {withX && <p className="text-xs text-muted">{s.x_usage ? `X reports: ${JSON.stringify(s.x_usage)}` : "X did not return usage for this account tier; the local ledger is authoritative."}</p>}
             </>
-          ) : <p className="text-xs text-muted">No X token configured on the server. Set X_BEARER_TOKEN to enable searches.</p>}
+          )}
+          {!s.x_configured && <p className="text-xs text-muted">X search is unavailable.{diagnostics && " Set X_BEARER_TOKEN to enable searches."}</p>}
           <p className="text-xs text-muted">Counted locally from every billed read. The caps stop a search before it exceeds them.</p>
         </div>
       )}

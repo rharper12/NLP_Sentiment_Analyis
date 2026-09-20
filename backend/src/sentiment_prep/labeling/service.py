@@ -1,7 +1,8 @@
 """Labelling operations on a bundle.
 
 Comprehend labelling runs in slices (``max_records`` per call) so the client can show progress
-and cancel, and so a crash loses at most one slice of paid labels. Manual labels always win:
+and cancel. Each batch is persisted before the next. A response lost before commit may need
+to be re-billed on recovery. Manual labels always win:
 applying one sets ``label_source="manual"`` and keeps ``comprehend_label`` for comparison.
 Every function returns a new bundle; nothing here mutates its input. Dollar figures are only
 produced when a current rate from the Price List API is supplied; otherwise they are null.
@@ -9,17 +10,21 @@ produced when a current rate from the Price List API is supplied; otherwise they
 
 from __future__ import annotations
 
+import math
 import random
 from collections import Counter
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer, cost_for_units, count_units
+from sentiment_prep.analysis.comprehend_text import prepare_text
+from sentiment_prep.budget import can_start
 from sentiment_prep.config import Settings
 from sentiment_prep.errors import ValidationError
 from sentiment_prep.logging_config import get_logger
-from sentiment_prep.models import DatasetBundle, LabelSummary, Record, SentimentLabel
+from sentiment_prep.models import DatasetBundle, LabelFailure, LabelSummary, Record, SentimentLabel
 from sentiment_prep.pricing.comprehend_price import PriceQuote, PriceStatus
 
 if TYPE_CHECKING:
@@ -29,6 +34,7 @@ logger = get_logger(__name__)
 
 ReviewMode = Literal["none", "all", "sample"]
 SampleUnit = Literal["count", "percent"]
+MAX_LABEL_ATTEMPTS = 3
 
 
 class LabelEstimate(BaseModel):
@@ -40,7 +46,10 @@ class LabelEstimate(BaseModel):
 
     records_total: int
     records_unlabelled: int
+    truncated_records: int = 0
+    prefix_labels: int = 0
     records_to_send: int
+    failed_total: int = 0
     billable_units: int
     unit_chars: int
     min_units_per_document: int
@@ -48,18 +57,25 @@ class LabelEstimate(BaseModel):
     cost_per_unit_usd: float | None
     price_status: PriceStatus
     price_fetched_at: str | None
-    price_region: str
+    price_region: str | None = None
 
 
 class LabelProgress(BaseModel):
     """Result of one Comprehend slice. ``cost_usd`` is null when no rate is known."""
 
+    truncated_records: int = 0
     labelled_in_call: int
+    attempted_in_call: int = 0
+    failed_in_call: int = 0
+    failed_total: int = 0
+    failures: list[LabelFailure] = Field(default_factory=list)
     labelled_total: int
     remaining: int
     units_billed: int
     cost_usd: float | None
     done: bool
+    partial: bool = False
+    stop_reason: str | None = None
 
 
 class ManualLabel(BaseModel):
@@ -70,8 +86,18 @@ class ManualLabel(BaseModel):
 
 
 def needs_comprehend(record: Record) -> bool:
-    """Records that have never been sent to Comprehend."""
+    """Records without a successful Comprehend label."""
     return record.comprehend_label is None
+
+
+def _pending(bundle: DatasetBundle) -> list[Record]:
+    def eligible(record: Record) -> bool:
+        failure = bundle.label_failures.get(record.id)
+        return needs_comprehend(record) and (
+            failure is None or (failure.retryable and failure.attempts < MAX_LABEL_ATTEMPTS)
+        )
+
+    return [r for r in bundle.original.records if eligible(r)]
 
 
 def _units(records: list[Record], settings: Settings) -> int:
@@ -86,25 +112,42 @@ def _dollars(units: int, rate: PriceQuote | None) -> float | None:
     Computed in ``Decimal`` and quantised once; converted to ``float`` only here, at the edge, so
     the value is JSON-friendly without letting float error accumulate across slices.
     """
-    return float(cost_for_units(units, rate.price_per_unit)) if rate else None
+    if rate is None:
+        return None
+    try:
+        cost = float(cost_for_units(units, rate.price_per_unit))
+    except ArithmeticError:
+        logger.warning("comprehend_price_arithmetic_unavailable")
+        return None
+    return cost if math.isfinite(cost) else None
 
 
 def estimate(bundle: DatasetBundle, settings: Settings, rate: PriceQuote | None) -> LabelEstimate:
     """Units and (when a rate is known) dollars to label every record Comprehend has not seen."""
-    pending = [r for r in bundle.original.records if needs_comprehend(r)]
+    pending = _pending(bundle)
     units = _units(pending, settings)
+    cost = _dollars(units, rate)
+    if cost is None:
+        rate = None
     return LabelEstimate(
         records_total=len(bundle.original.records),
         records_unlabelled=sum(1 for r in bundle.original.records if r.label is None),
         records_to_send=len(pending),
+        truncated_records=sum(prepare_text(r.text).truncated for r in pending),
+        prefix_labels=sum(
+            prepare_text(r.text).truncated
+            for r in bundle.original.records
+            if r.comprehend_label is not None
+        ),
+        failed_total=len(bundle.label_failures),
         billable_units=units,
         unit_chars=settings.comprehend_unit_chars,
         min_units_per_document=settings.comprehend_min_units,
-        estimated_cost_usd=_dollars(units, rate),
+        estimated_cost_usd=cost,
         cost_per_unit_usd=float(rate.price_per_unit) if rate else None,
         price_status=rate.status if rate else "unavailable",
         price_fetched_at=rate.fetched_at.isoformat() if rate else None,
-        price_region=settings.aws_region,
+        price_region=settings.aws_region if settings.diagnostics_enabled else None,
     )
 
 
@@ -114,24 +157,78 @@ def label_with_comprehend(
     settings: Settings,
     max_records: int,
     rate: PriceQuote | None = None,
+    *,
+    persist: Callable[[DatasetBundle], None] | None = None,
+) -> tuple[DatasetBundle, LabelProgress]:
+    """Commit each paid batch before starting another; resume skips committed successes.
+
+    Provider success followed by process termination before commit is inherently ambiguous.
+    There is no exactly-once billing guarantee; the repository's abandoned claim requires
+    operator inspection rather than automatically repeating uncertain work.
+    """
+    attempted = succeeded = units = 0
+    reason = None
+    # Snapshot eligible IDs once: retries never loop within the same request.
+    ids = [r.id for r in _pending(bundle)[:max_records]]
+    for offset in range(0, len(ids), 25):
+        if not can_start():
+            reason = "request_budget"
+            break
+        batch_ids = set(ids[offset : offset + 25])
+        bundle, progress = _label_batch(bundle, client, settings, batch_ids, rate)
+        if persist is not None:
+            persist(bundle)
+        attempted += progress.attempted_in_call
+        succeeded += progress.labelled_in_call
+        units += progress.units_billed
+        if progress.failed_in_call:
+            reason = "upstream_failure"
+            break
+    result = _progress(bundle, succeeded, units, _dollars(units, rate), attempted=attempted)
+    result.partial = bool(result.remaining or result.failed_total)
+    result.stop_reason = reason or ("more_records" if result.remaining else None)
+    return bundle, result
+
+
+def _label_batch(
+    bundle: DatasetBundle,
+    client: ComprehendClient,
+    settings: Settings,
+    batch_ids: set[str],
+    rate: PriceQuote | None = None,
 ) -> tuple[DatasetBundle, LabelProgress]:
     """Send up to ``max_records`` pending records to Comprehend and store the results.
 
     A record that already has a source or manual label keeps it; Comprehend's answer is recorded
     alongside so the two can be compared. A record with no label adopts Comprehend's.
     """
-    pending = [r for r in bundle.original.records if needs_comprehend(r)][:max_records]
+    pending = [r for r in _pending(bundle) if r.id in batch_ids]
     if not pending:
         return bundle, _progress(bundle, 0, 0, _dollars(0, rate))
 
     results = ComprehendScorer(client).label_texts([r.text for r in pending])
     by_id = dict(zip((r.id for r in pending), results, strict=True))
     updated: list[Record] = []
+    failures = dict(bundle.label_failures)
+    succeeded = 0
     for record in bundle.original.records:
         result = by_id.get(record.id)
-        if result is None or result.label == "error":
+        if result is None:
             updated.append(record)
             continue
+        if result.label == "error":
+            previous = failures.get(record.id)
+            attempts = previous.attempts + 1 if previous else 1
+            failures[record.id] = LabelFailure(
+                record_id=record.id,
+                code=result.error_code or "missing_result",
+                retryable=result.retryable,
+                attempts=attempts,
+            )
+            updated.append(record)
+            continue
+        succeeded += 1
+        failures.pop(record.id, None)
         changes: dict[str, Any] = {
             "comprehend_label": result.label,
             "comprehend_confidence": result.confidence,
@@ -144,9 +241,15 @@ def label_with_comprehend(
 
     units = _units(pending, settings)
     cost = _dollars(units, rate)
-    new_bundle = _with_records(bundle, updated)
-    logger.info("comprehend_labels_applied", records=len(pending), units=units, cost_usd=cost)
-    return new_bundle, _progress(new_bundle, len(pending), units, cost)
+    new_bundle = _with_records(bundle, updated).model_copy(update={"label_failures": failures})
+    logger.info(
+        "comprehend_labels_applied",
+        records=succeeded,
+        attempted=len(pending),
+        units=units,
+        cost_usd=cost,
+    )
+    return new_bundle, _progress(new_bundle, succeeded, units, cost, attempted=len(pending))
 
 
 def apply_manual_labels(bundle: DatasetBundle, items: list[ManualLabel]) -> DatasetBundle:
@@ -217,11 +320,22 @@ def summary(bundle: DatasetBundle) -> LabelSummary:
     )
 
 
-def _progress(bundle: DatasetBundle, in_call: int, units: int, cost: float | None) -> LabelProgress:
-    remaining = sum(1 for r in bundle.original.records if needs_comprehend(r))
+def _progress(
+    bundle: DatasetBundle, in_call: int, units: int, cost: float | None, *, attempted: int = 0
+) -> LabelProgress:
+    remaining = len(_pending(bundle))
     return LabelProgress(
+        truncated_records=sum(
+            prepare_text(r.text).truncated
+            for r in bundle.original.records
+            if r.comprehend_label is not None
+        ),
         labelled_in_call=in_call,
-        labelled_total=len(bundle.original.records) - remaining,
+        labelled_total=sum(1 for r in bundle.original.records if not needs_comprehend(r)),
+        attempted_in_call=attempted,
+        failed_in_call=attempted - in_call,
+        failed_total=len(bundle.label_failures),
+        failures=list(bundle.label_failures.values()),
         remaining=remaining,
         units_billed=units,
         cost_usd=cost,

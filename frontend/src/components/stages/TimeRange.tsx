@@ -1,7 +1,7 @@
 import { useId } from "react";
 
 /** Presets cover the common cases; Custom exposes the two dates X's recent search accepts. */
-export type RangePreset = "7d" | "3d" | "24h" | "custom";
+type RangePreset = "7d" | "3d" | "24h" | "custom";
 
 export interface TimeRange {
   preset: RangePreset;
@@ -24,7 +24,7 @@ const isoDate = (daysAgo: number): string =>
   new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
 /** The earliest date X will accept: recent search reaches back seven days. */
-export const earliestDate = (): string => isoDate(6);
+const earliestDate = (): string => isoDate(6);
 export const today = (): string => isoDate(0);
 
 /**

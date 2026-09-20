@@ -8,13 +8,18 @@ Tests monkeypatch these functions to inject fakes.
 
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 
+from sentiment_prep.aws import create_aws_session
+from sentiment_prep.budget import AWS_CONFIG
 from sentiment_prep.config import get_settings
 from sentiment_prep.errors import ConfigurationError
+from sentiment_prep.history.db import require_durable_spend_storage
 from sentiment_prep.history.services import DbLedger
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.sources.huggingface import HuggingFaceSource
@@ -25,7 +30,8 @@ from sentiment_prep.storage.checkpoints import (
     LocalCheckpointStore,
     S3CheckpointStore,
 )
-from sentiment_prep.storage.repository import BundleRepository, InMemoryRepository, S3Repository
+from sentiment_prep.storage.local_repository import LocalRepository
+from sentiment_prep.storage.repository import BundleRepository, S3Repository
 from sentiment_prep.storage.s3_store import S3Store
 
 if TYPE_CHECKING:
@@ -39,7 +45,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Generous read timeout for paged fetches, short connect timeout so a dead host fails fast.
-HTTP_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+HTTP_TIMEOUT = httpx.Timeout(3.0, connect=1.0, pool=1.0)
 
 
 _open_clients: list[httpx.Client] = []
@@ -65,6 +71,24 @@ def _http_client(base_url: str, bearer_token: str | None = None) -> httpx.Client
 AwsService = Literal["s3", "comprehend", "bedrock-runtime", "pricing", "ssm"]
 
 
+@lru_cache(maxsize=1)
+def boto_session() -> Any:
+    """One boto3 session per process, built from whichever credentials are configured.
+
+    Precedence is explicit keys, then a named profile, then boto3's own chain. A session is what
+    carries a profile, so SSO credentials resolve and refresh through it; in Lambda nothing is
+    configured and the chain finds the task role.
+    """
+    settings = get_settings()
+    logger.info(
+        "boto_session_created",
+        source="static keys"
+        if settings.has_static_keys
+        else settings.aws_profile or "default chain",
+    )
+    return create_aws_session(settings)
+
+
 @lru_cache(maxsize=8)
 def _boto_client(service: AwsService, region: str) -> Any:
     """Cached boto3 client. Clients are thread-safe and meant to be reused, not rebuilt.
@@ -74,14 +98,13 @@ def _boto_client(service: AwsService, region: str) -> Any:
     callers still see a precise client. ``Settings`` is deliberately not a parameter: it is
     unhashable and would defeat the cache.
     """
-    import boto3
-
     logger.debug("boto_client_created", service=service, region=region)
-    return boto3.client(service, region_name=region)
+    return boto_session().client(service, region_name=region, config=AWS_CONFIG)
 
 
 def close_clients() -> None:
     """Close every pooled HTTP client and drop the caches. Called on application shutdown."""
+    boto_session.cache_clear()
     for client in _open_clients:
         client.close()
     _open_clients.clear()
@@ -98,8 +121,7 @@ def get_repository() -> BundleRepository:
         if not settings.data_bucket:
             raise ConfigurationError("DATA_BUCKET is required when RUNTIME=lambda")
         return S3Repository(settings.data_bucket, _s3_client())
-    logger.info("repository_in_memory", max_datasets=settings.local_repository_size)
-    return InMemoryRepository(settings.local_repository_size)
+    return LocalRepository(Path(settings.checkpoint_dir) / "_work")
 
 
 @lru_cache(maxsize=1)
@@ -122,9 +144,14 @@ def get_spend_ledger(query: str = "") -> SpendLedger:
     return DbLedger(get_settings().x_cost_per_read_usd, query=query)
 
 
-def get_x_source(query: str = "") -> XSearchSource:
+def get_x_source(
+    query: str = "",
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+) -> XSearchSource:
     """Fresh guard per request so the per-fetch cap starts at zero each time."""
     settings = get_settings()
+    require_durable_spend_storage()
     token = settings.resolve_x_bearer_token()
     if not token:
         raise ConfigurationError(
@@ -137,7 +164,12 @@ def get_x_source(query: str = "") -> XSearchSource:
         cost_per_read_usd=settings.x_cost_per_read_usd,
         query=query,
     )
-    return XSearchSource(guard=guard, client=_http_client(settings.x_api_base_url, token))
+    return XSearchSource(
+        guard=guard,
+        client=_http_client(settings.x_api_base_url, token),
+        start_time=start_time,
+        end_time=end_time,
+    )
 
 
 def get_hf_source() -> HuggingFaceSource:

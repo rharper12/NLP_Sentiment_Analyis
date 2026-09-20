@@ -10,6 +10,8 @@ import json
 from importlib import resources
 from typing import TYPE_CHECKING
 
+from sentiment_prep.analysis.payloads import ConverseResponse
+from sentiment_prep.budget import require_budget
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import ImpactReport
 
@@ -42,12 +44,14 @@ class BedrockExplainer:
         facts = report.model_dump(exclude={"explanation", "warnings"})
         for step in facts["steps"]:
             step.pop("sample_diffs", None)  # contains raw text
+            step.pop("duration_ms", None)  # operator-only, never part of generated prose
         prompt = load_prompt().format(steps=", ".join(applied_steps), facts=json.dumps(facts))
+        require_budget()
         response = self._client.converse(
             modelId=self._model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
             inferenceConfig={"maxTokens": 600, "temperature": 0.3},
         )
-        text: str = response["output"]["message"]["content"][0]["text"].strip()
+        text = ConverseResponse.model_validate(response).text()
         logger.info("explanation_generated", chars=len(text))
         return text

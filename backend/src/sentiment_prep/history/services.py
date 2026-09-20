@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
@@ -22,6 +24,7 @@ from sentiment_prep.models import DatasetBundle
 
 if TYPE_CHECKING:
     from sqlalchemy import CursorResult
+    from sqlalchemy.orm import Session
 
     from sentiment_prep.pricing.comprehend_price import PriceQuote
 
@@ -189,19 +192,27 @@ class DbLedger:
     and is what the spend panel reports.
     """
 
-    def __init__(self, cost_per_read_usd: float, query: str = "") -> None:
+    def __init__(
+        self,
+        cost_per_read_usd: float,
+        query: str = "",
+        *,
+        session_scope: Callable[[], AbstractContextManager[Session]] = session,
+    ) -> None:
         """Record spend against the history database.
 
         Args:
         cost_per_read_usd: Published X price per post read, used for the audit row's cost.
         query: Search text recorded alongside spend so a bill can be traced to a topic.
+        session_scope: Transaction factory; separate clients can share one durable database.
         """
+        self._session = session_scope
         self._cost = Decimal(str(cost_per_read_usd))
         self._query = query
 
     def get(self, day: str) -> int:
         """Reads actually billed for ``day`` (the audit trail, not the reservation counter)."""
-        with session() as s:
+        with self._session() as s:
             total = s.scalar(
                 select(func.coalesce(func.sum(SpendEntry.reads), 0)).where(
                     SpendEntry.day == dt.date.fromisoformat(day)
@@ -215,7 +226,7 @@ class DbLedger:
         This, not ``get``, is what remaining budget must be measured against: a reservation is
         money already committed even though the audit row is not written until the page returns.
         """
-        with session() as s:
+        with self._session() as s:
             row = s.get(SpendDay, dt.date.fromisoformat(day))
         return row.reads if row else 0
 
@@ -226,7 +237,7 @@ class DbLedger:
         zero row count means another caller took the remaining budget first.
         """
         date = dt.date.fromisoformat(day)
-        with session() as s:
+        with self._session() as s:
             if s.get(SpendDay, date) is None:
                 try:
                     with s.begin_nested():  # savepoint: a concurrent insert is expected, not fatal
@@ -246,7 +257,7 @@ class DbLedger:
     def settle(self, day: str, reserved: int, actual: int, query: str) -> int:
         """Write the audit row and release whatever part of the reservation went unused."""
         date = dt.date.fromisoformat(day)
-        with session() as s:
+        with self._session() as s:
             if actual:
                 s.add(
                     SpendEntry(

@@ -11,7 +11,9 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sentiment_prep.errors import CredentialsError, ExternalServiceError
+from botocore.exceptions import BotoCoreError
+
+from sentiment_prep.errors import ConfigurationError, CredentialsError, ExternalServiceError
 from sentiment_prep.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -66,4 +68,8 @@ def translated(service: str) -> Iterator[None]:
             raise ExternalServiceError(
                 f"{service} is throttling this account. Try again shortly."
             ) from error
+        if isinstance(error, BotoCoreError):
+            raise ConfigurationError(
+                f"Cannot initialize {service}. Check AWS_PROFILE, AWS_REGION and credentials."
+            ) from None
         raise

@@ -33,7 +33,23 @@ class ExternalServiceError(AppError):
     status_code = 502
 
 
+class CredentialsError(AppError):
+    """AWS credentials are missing, expired, or lack permission.
+
+    Separated from ``ConfigurationError`` because the fix is different: not a setting to change
+    but a session to renew, which for SSO means running ``aws sso login`` again.
+    """
+
+    status_code = 503
+
+
 class ConfigurationError(AppError):
     """A required setting is missing, e.g. no X token when the X source is requested."""
 
     status_code = 503
+
+
+class ConflictError(AppError):
+    """A competing dataset edit must finish before this operation can start."""
+
+    status_code = 409

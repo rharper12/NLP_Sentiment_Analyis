@@ -51,7 +51,7 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
   }
 }
 
-export const initialConfig: PipelineConfig = {
+const initialConfig: PipelineConfig = {
   order: [],
   enabled: {},
   options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: true },

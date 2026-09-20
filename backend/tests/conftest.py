@@ -98,7 +98,7 @@ class FakeBedrock:
         self, modelId: str, body: str, contentType: str, accept: str
     ) -> dict[str, Any]:
         text = json.loads(body)["inputText"]
-        vector = [0.0] * 26
+        vector = [0.0] * json.loads(body)["dimensions"]
         for ch in text.lower():
             if "a" <= ch <= "z":
                 vector[ord(ch) - 97] += 1.0

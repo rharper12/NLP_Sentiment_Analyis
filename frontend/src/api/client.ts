@@ -30,13 +30,13 @@ import {
 } from "./validation";
 
 const BASE = import.meta.env.VITE_API_URL ?? "/api";
-// Set at build time for deployments whose API requires a key. Never a user secret: it gates the
-// operator's own budget, and the built bundle is only as private as where it is hosted.
-const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
+// Browser sessions are temporary and live only in memory. Reloading requires signing in again.
+let sessionToken: string | null = null;
+export const AUTH_REQUIRED = "sentiment-prep-auth-required";
 
 /** Shown whenever the request never reached the API, which is nearly always "it isn't running". */
 const UNREACHABLE =
-  `Cannot reach the API at ${BASE}. Start it with \`make local-api\` (or check VITE_API_URL).`;
+  "Cannot reach the service. Please try again.";
 
 export class ApiError extends Error {
   constructor(
@@ -69,13 +69,9 @@ export class ApiContractError extends Error {
 export const isAbort = (error: unknown) =>
   error instanceof DOMException && error.name === "AbortError";
 
-async function request<T>(
-  path: string,
-  schema: z.ZodType<T>,
-  init: RequestInit = {},
-): Promise<T> {
+async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
-  if (API_KEY) headers.set("X-API-Key", API_KEY);
+  if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
 
   let response: Response;
   try {
@@ -89,6 +85,10 @@ async function request<T>(
 
   const requestId = response.headers.get("X-Request-Id");
   if (!response.ok) {
+    if (response.status === 401 && path !== "/auth/session") {
+      sessionToken = null;
+      window.dispatchEvent(new Event(AUTH_REQUIRED));
+    }
     let message = response.statusText;
     try {
       const body = (await response.json()) as { error?: string; detail?: unknown };
@@ -100,6 +100,12 @@ async function request<T>(
     }
     throw new ApiError(message, response.status, requestId);
   }
+  return response;
+}
+
+async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+  const response = await authorizedFetch(path, init);
+  const requestId = response.headers.get("X-Request-Id");
   const parsed = schema.safeParse(await response.json());
   if (!parsed.success) {
     const issues = parsed.error.issues
@@ -122,8 +128,29 @@ export const api = {
   health: (signal?: AbortSignal) => request("/health", healthSchema, { signal }),
   steps: (signal?: AbortSignal) => request("/steps", z.array(stepInfoSchema), { signal }),
 
-  load: (source: "x" | "huggingface", limit: number, query: string, signal?: AbortSignal) =>
-    request("/dataset/load", datasetSummarySchema, json({ source, limit, query: query || null }, signal)),
+  load: (
+    source: "x" | "huggingface",
+    limit: number,
+    query: string,
+    window?: { start?: string; end?: string },
+    signal?: AbortSignal,
+    requestId?: string,
+  ) =>
+    request(
+      "/dataset/load",
+      datasetSummarySchema,
+      json(
+        {
+          source,
+          request_id: source === "x" ? requestId ?? crypto.randomUUID() : null,
+          limit,
+          query: query || null,
+          start_time: window?.start ?? null,
+          end_time: window?.end ?? null,
+        },
+        signal,
+      ),
+    ),
 
   upload: (file: File, signal?: AbortSignal) => {
     const form = new FormData();
@@ -200,9 +227,35 @@ export const api = {
 
   history: (signal?: AbortSignal) => request("/history?limit=25", z.array(historyRunSchema), { signal }),
 
-  exportUrl: (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md") =>
-    kind === "md"
-      ? `${BASE}/dataset/${datasetId}/report.md`
-      : `${BASE}/dataset/${datasetId}/export.${kind}`,
+  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md", signal?: AbortSignal) => {
+    const filename = kind === "md" ? `${datasetId}-report.md` : `${datasetId}.${kind}`;
+    const path = kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
+    const response = await authorizedFetch(path, { signal });
+    const blob = await response.blob();
+    const disposition = response.headers.get("Content-Disposition");
+    const supplied = disposition?.match(/filename="([^"\r\n]+)"/i)?.[1];
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    try {
+      anchor.href = url;
+      anchor.download = supplied?.split(/[\\/]/).pop() || filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+    } finally {
+      anchor.remove();
+      // Let the browser consume the click before releasing the backing Blob.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+  },
 
+  login: async (key: string, signal?: AbortSignal) => {
+    const endpoint = new URL(BASE, window.location.href);
+    const local = (host: string) => ["localhost", "127.0.0.1", "[::1]"].includes(host);
+    if ((endpoint.protocol !== "https:" && !local(endpoint.hostname)) ||
+        (window.location.protocol !== "https:" && !local(window.location.hostname))) {
+      throw new ApiError("Operator sign-in requires HTTPS.", 0, null);
+    }
+    const result = await request("/auth/session", z.object({ token: z.string(), expires_in: z.number() }), json({ key }, signal));
+    sessionToken = result.token;
+  },
 };

@@ -29,7 +29,9 @@ Parameters:
   DatabaseUrlSsmPath:
     Type: String
     Default: ""
-    Description: Optional SSM SecureString with a Postgres URL. Empty = SQLite on /tmp (ephemeral).
+    Description: >
+      SSM SecureString with a shared postgresql+psycopg:// URL. Required for paid X collection.
+      Empty disables paid X collection; offline workflows use ephemeral SQLite history.
   XMaxReadsPerFetch:
     Type: Number
     Default: 1000
@@ -47,14 +49,14 @@ Parameters:
   CorsOrigins:
     Type: String
     Default: http://localhost:5173
-    Description: Comma-separated browser origins. Add the SiteUrl output after first deploy.
+    Description: Additional comma-separated browser origins. The HTTPS site origin is included automatically.
 
 Conditions:
   HasDatabaseUrl: !Not [!Equals [!Ref DatabaseUrlSsmPath, ""]]
 
 Globals:
   Function:
-    Timeout: 60
+    Timeout: 28
     MemorySize: 2048
     Architectures: [x86_64]
 
@@ -100,14 +102,11 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "sentiment-prep-site-${Stage}-${AWS::AccountId}"
-      WebsiteConfiguration:
-        IndexDocument: index.html
-        ErrorDocument: index.html
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
-        BlockPublicPolicy: false
-        RestrictPublicBuckets: false
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
 
   SiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -115,11 +114,49 @@ Resources:
       Bucket: !Ref SiteBucket
       PolicyDocument:
         Statement:
-          - Sid: PublicReadOfBuiltAssets
+          - Sid: CloudFrontReadOfBuiltAssets
             Effect: Allow
-            Principal: "*"
+            Principal: { Service: cloudfront.amazonaws.com }
             Action: s3:GetObject
             Resource: !Sub "${SiteBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}"
+
+  SiteOriginAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "sentiment-prep-site-${Stage}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: site
+            DomainName: !GetAtt SiteBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SiteOriginAccess.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 86400
 
   # ---------------------------------------------------------------- compute
   ApiLogGroup:
@@ -163,10 +200,6 @@ Resources:
                 Effect: Allow
                 Action: pricing:GetProducts
                 Resource: "*"   # Price List API has no resource-level permissions
-              - Sid: CurrentComprehendPrice
-                Effect: Allow
-                Action: pricing:GetProducts
-                Resource: "*"   # Price List API has no resource-level permissions
               - Sid: InvokeExactlyTwoModels
                 Effect: Allow
                 Action: bedrock:InvokeModel
@@ -206,7 +239,7 @@ Resources:
           X_MAX_READS_PER_DAY: !Ref XMaxReadsPerDay
           BEDROCK_TEXT_MODEL_ID: !Ref BedrockTextModelId
           EMBED_MODEL_ID: !Ref EmbedModelId
-          CORS_ORIGINS: !Ref CorsOrigins
+          CORS_ORIGINS: !Sub "${CorsOrigins},https://${SiteDistribution.DomainName}"
       Events:
         Api:
           Type: HttpApi
@@ -222,8 +255,8 @@ Resources:
     Properties:
       StageName: !Ref Stage
       CorsConfiguration:
-        AllowOrigins: !Split [",", !Ref CorsOrigins]
-        AllowMethods: [GET, POST, OPTIONS]
+        AllowOrigins: !Split [",", !Sub "${CorsOrigins},https://${SiteDistribution.DomainName}"]
+        AllowMethods: [GET, POST, PUT, OPTIONS]
         AllowHeaders: ["*"]
         ExposeHeaders: [X-Request-Id, Content-Disposition]
       DefaultRouteSettings:
@@ -238,6 +271,6 @@ Outputs:
   DataBucketName:
     Value: !Ref DataBucket
   SiteUrl:
-    Value: !GetAtt SiteBucket.WebsiteURL
+    Value: !Sub "https://${SiteDistribution.DomainName}"
   SiteBucketName:
     Value: !Ref SiteBucket

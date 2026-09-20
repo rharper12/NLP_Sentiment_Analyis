@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import httpx
 import pytest
 
@@ -243,3 +245,44 @@ def test_x_reports_why_posts_were_dropped():
     ).fetch(10, query="q")
     assert [r.id for r in ds.records] == ["1"]
     assert ds.filtered_out == {"no_content_after_cleaning": 1, "not_english": 1}
+
+
+def test_search_window_is_sent_and_recorded():
+    """The window is provenance: a write-up has to state the range the posts came from."""
+    start = datetime(2026, 9, 9, tzinfo=UTC)
+    end = datetime(2026, 9, 13, tzinfo=UTC)
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.url.params))
+        return httpx.Response(200, json={"data": [post(1)], "meta": {}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.x.test/2")
+    ds = XSearchSource(guard(), client, start_time=start, end_time=end).fetch(10, query="q")
+
+    assert captured["start_time"].endswith("Z") and captured["end_time"].endswith("Z")
+    assert ds.window_start is not None and ds.window_end is not None
+    assert ds.truncated_reason == "no more matching posts in the selected window"
+
+
+def test_window_is_clamped_to_what_recent_search_can_serve():
+    """X rejects a start older than seven days or an end at the present instant; clamp, not fail."""
+    from sentiment_prep.sources.x_search import clamp_window
+
+    now = datetime.now(UTC)
+    start, end = clamp_window(now - timedelta(days=30), now + timedelta(hours=1))
+
+    assert start is not None and start > now - timedelta(days=7)
+    assert end is not None and end < now
+    assert clamp_window(None, None) == (None, None)
+
+
+def test_a_backwards_window_is_refused_rather_than_clamped():
+    """Clamping cannot repair it, and X would answer with a 400 blamed on the query syntax."""
+    from datetime import UTC, datetime, timedelta
+
+    from sentiment_prep.sources.x_search import clamp_window
+
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError, match="before its end"):
+        clamp_window(now, now - timedelta(days=1))

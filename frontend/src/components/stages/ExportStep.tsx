@@ -13,7 +13,8 @@ const STAGE_BLURB: { [k in CheckpointStage]: string } = { collected: "raw posts 
 
 /** Stage 5. Downloads, the S3 save, and the checkpoint snapshots with one-click Parquet conversion. */
 export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: Props) {
-  const save = useAsync<{ uri: string }>();
+  const save = useAsync<{ uri?: string | null }>();
+  const download = useAsync<void>();
   const checkpoints = useAsync<CheckpointList>();
   const { run: loadCheckpoints } = checkpoints;
   const [uri, setUri] = useState<string | null>(null);
@@ -49,15 +50,15 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
         {downloads.map((it) => (
           <li key={it.title} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div><h3 className="font-semibold">{it.title}</h3><p className="text-sm text-muted">{it.body}</p></div>
-            <a className="btn shrink-0" href={api.exportUrl(id, it.kind)} download={it.name} aria-disabled={it.needsRun && !run}>Download</a>
+            <button type="button" className="btn shrink-0" disabled={download.loading || (it.needsRun && !run)} onClick={() => void download.run((signal) => api.download(id, it.kind, signal))}>Download</button>
           </li>
         ))}
         <li className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div><h3 className="font-semibold">Save to S3</h3><p className="text-sm text-muted">Parquet + impact.json + manifest.json in your bucket, timestamped.</p>{uri && <p className="tnum mt-1 break-all text-xs text-muted">Saved to {uri}</p>}</div>
-          <button type="button" className="btn shrink-0" disabled={save.loading} onClick={async () => { const r = await save.run((s) => api.save(id, s)); if (r) setUri(r.uri); }}>{save.loading ? "Saving…" : "Save"}</button>
+          <div><h3 className="font-semibold">Save to S3</h3><p className="text-sm text-muted">Parquet + impact.json + manifest.json in your bucket, timestamped.</p>{uri && <p className="tnum mt-1 break-all text-xs text-muted">{diagnostics ? `Saved to ${uri}` : "Saved successfully"}</p>}</div>
+          <button type="button" className="btn shrink-0" disabled={save.loading} onClick={async () => { const r = await save.run((s) => api.save(id, s)); if (r) setUri(r.uri ?? "Saved successfully"); }}>{save.loading ? "Saving…" : "Save"}</button>
         </li>
       </ul>
-      <Notice error={save.error ?? checkpoints.error} />
+      <Notice error={download.error ?? save.error ?? checkpoints.error} />
 
       {diagnostics && <div className="glass-panel p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-2">

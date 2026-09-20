@@ -18,6 +18,7 @@ interface Props {
   diagnostics: boolean;
   comprehendEnabled: boolean | null;
   checkpointLocation: "local" | "s3" | null;
+  onReviewActiveChange?: (active: boolean) => void;
   onBack: () => void;
   onContinue: () => void;
 }
@@ -30,13 +31,14 @@ type Phase = "method" | "labelling" | "review-choice" | "reviewing" | "summary";
  * slice is saved server-side before the next starts, and reviewer decisions are flushed in
  * small batches, so a crash or a closed tab never loses more than a few seconds of work.
  */
-export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpointLocation, onBack, onContinue }: Props) {
+export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpointLocation, onReviewActiveChange, onBack, onContinue }: Props) {
   const summary = useAsync<LabelSummary>();
   const estimate = useAsync<LabelEstimate>();
   const { run: loadSummary } = summary;
   const { run: loadEstimate } = estimate;
   const [phase, setPhase] = useState<Phase>("method");
   const [error, setError] = useState<Error | null>(null);
+  const [failed, setFailed] = useState(0);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; spent: number | null } | null>(null);
   const labelling = useRef<AbortController | null>(null);
@@ -62,7 +64,8 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
     try {
       for (;;) {
         const p = await api.labelComprehend(datasetId, SLICE, controller.signal);
-        done += p.labelled_in_call;
+        done = Math.min(total, done + p.labelled_in_call);
+        setFailed(p.failed_total ?? 0);
         spent = p.cost_usd == null || spent == null ? null : spent + p.cost_usd;
         setProgress({ done, total, spent });
         if (p.done || p.labelled_in_call === 0) break;
@@ -87,6 +90,14 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
       </div>
 
       <Notice error={error ?? summary.error ?? estimate.error} />
+      {Math.max(failed, estimate.data?.failed_total ?? 0) > 0 && <p role="status" className="text-sm text-warn-ink">
+        {Math.max(failed, estimate.data?.failed_total ?? 0)} posts have no successful Comprehend result. Successful labels were saved.
+        Permanently rejected posts are skipped; temporary failures can be retried up to three attempts. You can label these posts manually.
+      </p>}
+
+      {(est?.prefix_labels ?? 0) > 0 && <p role="status" className="text-sm text-warn-ink">
+        {est?.prefix_labels} Comprehend labels describe only the first 5,000 UTF-8 bytes of oversized documents. Complete text is retained.
+      </p>}
 
       {sum && (
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -103,10 +114,10 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
             <p className="text-sm text-muted">Amazon Comprehend assigns positive, negative, neutral or mixed with a confidence score. Fast and cheap; your Task 2 model will be learning to imitate it, so review a sample afterwards.</p>
             {!est && <Skeleton className="h-8 w-56" />}
             {est && <CostChip est={est} />}
-            <p className="text-xs text-muted">Billed per {est?.unit_chars ?? 100} characters with a {est?.min_units_per_document ?? 3}-unit minimum per post. Posts already sent to Comprehend are never re-billed.</p>
+            <p className="text-xs text-muted">Billed per {est?.unit_chars ?? 100} characters with a {est?.min_units_per_document ?? 3}-unit minimum per post. Successfully labelled posts are skipped. Retrying a temporary failure may incur another charge.</p>
             {diagnostics && comprehendEnabled === false && <p className="text-xs text-warn-ink">Comprehend is disabled on the server (COMPREHEND_ENABLED=false).</p>}
             <button type="button" className="btn-primary mt-auto" disabled={comprehendEnabled === false || !est || est.records_to_send === 0} onClick={() => setConfirmOpen(true)}>
-              {est && est.records_to_send === 0 ? "All posts already labelled" : "Label with Comprehend…"}
+              {est && est.records_to_send === 0 ? "No eligible posts to send" : "Label with Comprehend…"}
             </button>
           </div>
           <div className="glass-panel flex flex-col gap-3 p-5">
@@ -136,11 +147,12 @@ export function LabelStep({ datasetId, diagnostics, comprehendEnabled, checkpoin
         try {
           const s = await api.chooseReview(datasetId, mode, size, unit);
           summary.run(() => Promise.resolve(s));
+          onReviewActiveChange?.(mode !== "none");
           setPhase(mode === "none" ? "summary" : "reviewing");
         } catch (e) { setError(toError(e)); }
       }} onBack={() => setPhase("method")} />}
 
-      {phase === "reviewing" && <Reviewer datasetId={datasetId} onError={setError} onDone={async () => { await refresh(); setPhase("summary"); }} />}
+      {phase === "reviewing" && <Reviewer datasetId={datasetId} onError={setError} onDone={async () => { await refresh(); onReviewActiveChange?.(false); setPhase("summary"); }} />}
 
       {phase === "summary" && (
         <div className="glass-panel flex flex-col gap-4 p-5">

@@ -24,7 +24,7 @@ IMPACT_COLUMNS = [
 ]
 
 
-def to_excel(bundle: DatasetBundle) -> bytes:
+def to_excel(bundle: DatasetBundle, *, diagnostics: bool = False) -> bytes:
     """Build the workbook in memory."""
     workbook = Workbook()
     data = workbook.active
@@ -33,7 +33,8 @@ def to_excel(bundle: DatasetBundle) -> bytes:
 
     impact = workbook.create_sheet("impact")
     steps = bundle.report.steps if bundle.report else []
-    _write_sheet(impact, IMPACT_COLUMNS, [[getattr(s, c) for c in IMPACT_COLUMNS] for s in steps])
+    columns = IMPACT_COLUMNS if diagnostics else [c for c in IMPACT_COLUMNS if c != "duration_ms"]
+    _write_sheet(impact, columns, [[getattr(s, c) for c in columns] for s in steps])
     if bundle.report:
         impact.append([])
         impact.append(
@@ -42,6 +43,11 @@ def to_excel(bundle: DatasetBundle) -> bytes:
                 bundle.report.sentiment.agreement if bundle.report.sentiment else None,
             ]
         )
+        if bundle.report.sentiment:
+            impact.append(
+                ["sentiment_comparable_records", bundle.report.sentiment.comparable_records]
+            )
+            impact.append(["sentiment_shared_records", bundle.report.sentiment.shared_records])
         impact.append(["embedding_drift", bundle.report.embedding_drift])
 
     buffer = io.BytesIO()
@@ -56,6 +62,9 @@ def _write_sheet(sheet: Worksheet, columns: list[str], rows: list[list[object]])
         cell.font = Font(bold=True)
     for row in rows:
         sheet.append(row)
+        for cell in sheet[sheet.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"  # Dataset strings must never become executable formulas.
     for index, column in enumerate(columns, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = 40 if "text" in column else 16
     sheet.freeze_panes = "A2"

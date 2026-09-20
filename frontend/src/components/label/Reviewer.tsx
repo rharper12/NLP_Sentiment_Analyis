@@ -10,14 +10,13 @@ import { FLUSH_EVERY, KEYS, REVIEW_PAGE } from "./shared";
 
 interface Props {
   datasetId: string;
-  onError: (error: Error) => void;
-  onDone: () => void;
+  onError: (error: Error | null) => void;
+  onDone: () => void | Promise<void>;
 }
 
 /**
- * One post at a time with keyboard shortcuts. Decisions are buffered and flushed every
- * `FLUSH_EVERY` so a closed tab loses at most that many, and the review set is paged in as the
- * reviewer advances.
+ * One post at a time with keyboard shortcuts. Decisions share one ordered save queue;
+ * Finish drains it before leaving. The review set is paged in as the reviewer advances.
  */
 export function Reviewer({ datasetId, onError, onDone }: Props) {
   const [items, setItems] = useState<PostRecord[]>([]);
@@ -27,6 +26,10 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   const pending = useRef<{ id: string; label: SentimentLabel }[]>([]);
   const [agree, setAgree] = useState({ agreed: 0, compared: 0 });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<Error | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  const finishingRef = useRef(false);
+  const inFlight = useRef<Promise<boolean> | null>(null);
 
   // Highest offset already requested. Without this, any re-render while a page is in flight
   // (a save toggling `saving`, for instance) re-runs the effect and appends the same page twice.
@@ -55,15 +58,34 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
     return () => controller.abort();
   }, [index, items.length, total, datasetId, onError]);
 
-  const flush = useCallback(async () => {
-    if (pending.current.length === 0) return;
-    const batch = pending.current; pending.current = [];
-    setSaving(true);
-    try { await api.manualLabels(datasetId, batch); } catch (e) { pending.current = [...batch, ...pending.current]; onError(toError(e)); } finally { setSaving(false); }
+  const flush = useCallback((): Promise<boolean> => {
+    if (inFlight.current) return inFlight.current;
+    if (pending.current.length === 0) return Promise.resolve(true);
+    const drain = async (): Promise<boolean> => {
+      setSaving(true);
+      setSaveError(null);
+      try {
+        while (pending.current.length > 0) {
+          const batch = pending.current.splice(0, FLUSH_EVERY);
+          try { await api.manualLabels(datasetId, batch); }
+          catch (e) { pending.current = [...batch, ...pending.current]; throw e; }
+        }
+        onError(null);
+        return true;
+      } catch (e) {
+        const error = toError(e);
+        setSaveError(error);
+        onError(error);
+        return false;
+      } finally { setSaving(false); }
+    };
+    const operation = drain().finally(() => { inFlight.current = null; });
+    inFlight.current = operation;
+    return operation;
   }, [datasetId, onError]);
 
   const decide = useCallback((label: SentimentLabel) => {
-    const item = items[index]; if (!item) return;
+    const item = items[index]; if (!item || finishingRef.current) return;
     setDecisions((d) => ({ ...d, [item.id]: label }));
     if (item.comprehend_label) setAgree((a) => ({ agreed: a.agreed + (item.comprehend_label === label ? 1 : 0), compared: a.compared + 1 }));
     pending.current.push({ id: item.id, label });
@@ -72,13 +94,17 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   }, [items, index, flush]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { const l = KEYS[e.key.toLowerCase()]; if (l && !e.metaKey && !e.ctrlKey) { e.preventDefault(); decide(l); } if (e.key === "ArrowLeft") setIndex((i) => Math.max(0, i - 1)); };
+    const onKey = (e: KeyboardEvent) => { const l = KEYS[e.key.toLowerCase()]; if (l && !e.metaKey && !e.ctrlKey) { e.preventDefault(); decide(l); } if (e.key === "ArrowLeft" && !finishingRef.current) setIndex((i) => Math.max(0, i - 1)); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
   }, [decide]);
 
-  useEffect(() => () => { void flush(); }, [flush]);
-
-  const finish = async () => { await flush(); onDone(); };
+  const finish = async () => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    setFinishing(true);
+    try { if (await flush()) await onDone(); }
+    finally { finishingRef.current = false; setFinishing(false); }
+  };
   const item = items[index];
   const finished = index >= total && total > 0;
 
@@ -88,6 +114,10 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
         <h3 className="font-semibold">Review</h3>
         <span className="tnum text-sm text-muted">{Math.min(index, total).toLocaleString()} of {total.toLocaleString()}{agree.compared > 0 && ` · agree with Comprehend ${Math.round((100 * agree.agreed) / agree.compared)}%`}{saving && " · saving…"}</span>
       </div>
+      {saveError && <div role="alert" className="text-sm text-error-ink">
+        Labels have not been saved. {saveError.message}
+        <button type="button" className="btn ml-2" disabled={saving || finishing} onClick={() => void flush()}>Retry save</button>
+      </div>}
       <div className="h-1.5 w-full overflow-hidden rounded bg-surface-2"><div className="h-full bg-accent" style={{ width: `${total ? (100 * Math.min(index, total)) / total : 0}%` }} /></div>
 
       {!finished && !item && <SkeletonLines lines={3} />}
@@ -104,18 +134,18 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {SENTIMENT_LABELS.map((l, i) => (
-              <button key={l} type="button" onClick={() => decide(l)} aria-pressed={decisions[item.id] === l} className="selectable flex items-center justify-between px-3.5 py-3 text-sm font-medium">
+              <button key={l} type="button" onClick={() => decide(l)} disabled={finishing} aria-pressed={decisions[item.id] === l} className="selectable flex items-center justify-between px-3.5 py-3 text-sm font-medium">
                 <span className="capitalize">{l}{item.comprehend_label === l && decisions[item.id] !== l && <span className="ml-1 text-xs font-normal text-muted">(Comprehend)</span>}</span><kbd className="rounded bg-surface-2 px-1.5 text-xs text-muted">{i + 1}</kbd>
               </button>
             ))}
           </div>
-          <p className="text-xs text-muted">Keys 1–4 or P / N / U / M. ← goes back one. Labels save every {FLUSH_EVERY} decisions and when you finish.</p>
+          <p className="text-xs text-muted">Keys 1–4 or P / N / U / M. ← goes back one. Labels save every {FLUSH_EVERY} decisions and when you finish. Use Finish or Stop to save before leaving review.</p>
         </>
       )}
       {finished && <p className="text-sm">All {total.toLocaleString()} reviewed.</p>}
       <div className="flex flex-wrap justify-between gap-3 border-t border-rule pt-4">
-        <button type="button" className="btn" disabled={index === 0} onClick={() => setIndex((i) => i - 1)}>← Previous</button>
-        <button type="button" className="btn-primary" onClick={() => void finish()}>{finished ? "Finish" : "Stop here and keep labels"}</button>
+        <button type="button" className="btn" disabled={index === 0 || finishing} onClick={() => setIndex((i) => i - 1)}>← Previous</button>
+        <button type="button" className="btn-primary" disabled={finishing} onClick={() => void finish()}>{finishing ? "Saving labels…" : finished ? "Finish" : "Stop here and keep labels"}</button>
       </div>
     </div>
   );

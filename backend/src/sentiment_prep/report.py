@@ -12,8 +12,10 @@ from typing import Any
 
 import yaml
 
+from sentiment_prep.analysis.comprehend_text import TRUNCATION_WARNING, prepare_text
 from sentiment_prep.labeling import service as labeling
 from sentiment_prep.models import DatasetBundle
+from sentiment_prep.presentation import public_report
 
 
 def load_rationale() -> dict[str, dict[str, str]]:
@@ -23,11 +25,11 @@ def load_rationale() -> dict[str, dict[str, str]]:
     return data
 
 
-def render_report(bundle: DatasetBundle) -> str:
+def render_report(bundle: DatasetBundle, *, diagnostics: bool = False) -> str:
     """Return the Markdown document."""
     rationale = load_rationale()
     lines: list[str] = ["# Sentiment dataset preparation report", ""]
-    lines += _dataset_section(bundle)
+    lines += _dataset_section(bundle, diagnostics=diagnostics)
     lines += _labels_section(bundle)
 
     if not bundle.report:
@@ -40,7 +42,7 @@ def render_report(bundle: DatasetBundle) -> str:
         lines.append(f"{index}. **{entry.get('title', name)}**: {entry.get('summary', '')}")
     lines.append("")
 
-    lines += _impact_section(bundle)
+    lines += _impact_section(bundle, diagnostics=diagnostics)
 
     if bundle.report.explanation:
         lines += [
@@ -69,7 +71,7 @@ def render_report(bundle: DatasetBundle) -> str:
     return "\n".join(lines)
 
 
-def _dataset_section(bundle: DatasetBundle) -> list[str]:
+def _dataset_section(bundle: DatasetBundle, *, diagnostics: bool) -> list[str]:
     original = bundle.original
     lines = ["## Dataset", ""]
     lines.append(
@@ -77,6 +79,14 @@ def _dataset_section(bundle: DatasetBundle) -> list[str]:
         + (f" (query: `{original.query}`)" if original.query else "")
     )
     lines.append(f"- Fetched: {original.fetched_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    if original.window_start or original.window_end:
+        started = (
+            original.window_start.strftime("%Y-%m-%d %H:%M")
+            if original.window_start
+            else "7 days ago"
+        )
+        ended = original.window_end.strftime("%Y-%m-%d %H:%M") if original.window_end else "now"
+        lines.append(f"- Search window (UTC): {started} to {ended}")
     dropped_at_source = sum(original.filtered_out.values())
     if dropped_at_source:
         lines.append(f"- Posts returned by the source: {len(original.records) + dropped_at_source}")
@@ -91,18 +101,25 @@ def _dataset_section(bundle: DatasetBundle) -> list[str]:
         )
     if original.truncated_reason:
         lines.append(f"- Note: fetch stopped early ({original.truncated_reason})")
-    for stage, uri in sorted(bundle.checkpoints.items()):
-        lines.append(f"- Checkpoint `{stage}`: `{uri}`")
+    if diagnostics:
+        for stage, uri in sorted(bundle.checkpoints.items()):
+            lines.append(f"- Checkpoint `{stage}`: `{uri}`")
     lines.append("")
     return lines
 
 
 def _labels_section(bundle: DatasetBundle) -> list[str]:
     labels = labeling.summary(bundle)
-    if not labels.labelled:
+    if not labels.labelled and not bundle.label_failures:
         return []
     lines = ["## Labels", ""]
     lines.append(f"- Labelled records: {labels.labelled} of {labels.total}")
+    if any(r.comprehend_label and prepare_text(r.text).truncated for r in bundle.original.records):
+        lines.append(f"- Warning: {TRUNCATION_WARNING}")
+    if bundle.label_failures:
+        lines.append(
+            f"- Records without a successful Comprehend result: {len(bundle.label_failures)}"
+        )
     for source, count in sorted(labels.by_source.items()):
         lines.append(f"- From {source}: {count}")
     lines.append(
@@ -120,7 +137,7 @@ def _labels_section(bundle: DatasetBundle) -> list[str]:
     return lines
 
 
-def _impact_section(bundle: DatasetBundle) -> list[str]:
+def _impact_section(bundle: DatasetBundle, *, diagnostics: bool) -> list[str]:
     """Render the measured-impact table. Caller guarantees ``bundle.report`` is set."""
     if bundle.report is None:
         return []
@@ -138,9 +155,12 @@ def _impact_section(bundle: DatasetBundle) -> list[str]:
     lines.append("")
     if bundle.report.sentiment:
         s = bundle.report.sentiment
+        agreement = f"{s.agreement:.1%}" if s.agreement is not None else "unavailable"
         lines.append(
             "Baseline sentiment (Amazon Comprehend) agreement before vs after: "
-            f"**{s.agreement:.1%}**. Distribution before: {_fmt(s.distribution_before)}. "
+            f"**{agreement}** over {s.comparable_records} successful comparable records "
+            f"of {s.shared_records} shared records. "
+            f"Distribution before: {_fmt(s.distribution_before)}. "
             f"After: {_fmt(s.distribution_after)}."
         )
     if bundle.report.embedding_drift is not None:
@@ -148,7 +168,7 @@ def _impact_section(bundle: DatasetBundle) -> list[str]:
             "Mean embedding drift (Titan Embed v2, cosine distance): "
             f"**{bundle.report.embedding_drift}**."
         )
-    for warning in bundle.report.warnings:
+    for warning in public_report(bundle.report, diagnostics=diagnostics).warnings:
         lines.append(f"- Warning: {warning}")
     lines.append("")
     return lines

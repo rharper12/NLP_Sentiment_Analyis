@@ -14,12 +14,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from sentiment_prep.budget import can_start
 from sentiment_prep.history import services as history
 from sentiment_prep.logging_config import get_logger
 
@@ -46,49 +48,76 @@ class PriceQuote(BaseModel):
     float only in the response model.
     """
 
-    price_per_unit: Decimal
-    unit: str
-    sku: str
-    region: str
-    fetched_at: dt.datetime
+    model_config = ConfigDict(revalidate_instances="always")
+    price_per_unit: Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
+    unit: Annotated[str, Field(strict=True, pattern=r"^Units?$")]
+    sku: Annotated[str, Field(strict=True, min_length=1)]
+    region: Annotated[str, Field(strict=True, min_length=1)]
+    fetched_at: AwareDatetime
     status: PriceStatus
 
-
-def _matches_sentiment(attributes: dict[str, Any]) -> bool:
-    """True for the standard (not targeted, not custom) sentiment SKU.
-
-    Prefers ``usagetype``, which is the field AWS uses to name the metered operation. Falls back
-    to scanning every attribute value because attribute names differ between services and the
-    Price List schema is not versioned. Either way the match is anchored and excludes targeted,
-    custom, async and batch SKUs, and a miss degrades to "estimate unavailable" rather than a
-    wrong number.
-    """
-    usagetype = str(attributes.get("usagetype", "")).lower()
-    blob = " ".join(str(v) for v in attributes.values()).lower()
-    if any(word in blob for word in EXCLUDED_TERMS):
-        return False
-    if usagetype:
-        return bool(SENTIMENT_USAGETYPE.search(usagetype))
-    return "sentiment" in blob
+    @field_validator("price_per_unit")
+    @classmethod
+    def usable_numeric_price(cls, value: Decimal) -> Decimal:
+        """Reject values that cannot survive the API's numeric representation."""
+        if not math.isfinite(float(value)) or float(value) <= 0:
+            raise ValueError("Price is not a representable positive number")
+        return value
 
 
-def _first_tier_price(product: dict[str, Any]) -> tuple[Decimal, str] | None:
-    """USD price of the lowest usage tier among the OnDemand dimensions.
+class PriceDimension(BaseModel):
+    """Only USD per-character-unit dimensions can price sentiment requests."""
 
-    Parsed straight into ``Decimal`` from the string AWS returns, never via ``float``, so the
-    published price is preserved exactly.
-    """
-    best: tuple[Decimal, str] | None = None
-    for term in product.get("terms", {}).get("OnDemand", {}).values():
-        for dimension in term.get("priceDimensions", {}).values():
-            price = dimension.get("pricePerUnit", {}).get("USD")
-            begin = dimension.get("beginRange", "0")
-            if price is None or begin not in ("0", "0.0"):
-                continue
-            value = Decimal(str(price))
-            if value > 0 and (best is None or value < best[0]):
-                best = (value, str(dimension.get("unit", "")))
-    return best
+    unit: str
+    begin_range: str = Field(alias="beginRange")
+    price_per_unit: dict[str, Annotated[Decimal, Field(ge=0, allow_inf_nan=False)]] = Field(
+        alias="pricePerUnit"
+    )
+
+
+class PriceTerm(BaseModel):
+    """On-demand dimensions, including volume tiers."""
+
+    price_dimensions: dict[str, PriceDimension] = Field(alias="priceDimensions")
+
+
+class Product(BaseModel):
+    """Product identity and the attributes used to select standard sentiment."""
+
+    model_config = ConfigDict(strict=True)
+    sku: Annotated[str, Field(min_length=1)]
+    attributes: dict[str, str]
+
+
+class PriceProduct(BaseModel):
+    """The consumed portion of one Price List product."""
+
+    product: Product
+    terms: dict[str, dict[str, PriceTerm]]
+
+
+def _first_tier_price(product: PriceProduct, region: str) -> tuple[Decimal, str] | None:
+    attributes = product.product.attributes
+    usage = attributes.get("usagetype", "").lower()
+    blob = " ".join(attributes.values()).lower()
+    if (
+        not SENTIMENT_USAGETYPE.search(usage)
+        or any(word in blob for word in EXCLUDED_TERMS)
+        or attributes.get("regionCode") != region
+        or attributes.get("servicecode") != SERVICE_CODE
+    ):
+        return None
+    prices = [
+        (dimension.price_per_unit["USD"], dimension.unit)
+        for term in product.terms.get("OnDemand", {}).values()
+        for dimension in term.price_dimensions.values()
+        if dimension.begin_range in ("0", "0.0")
+        and dimension.unit in ("Unit", "Units")
+        and set(dimension.price_per_unit) == {"USD"}
+        and dimension.price_per_unit["USD"] > 0
+    ]
+    # Conflicting first-tier rates cannot safely be resolved by guessing the cheapest.
+    return prices[0] if prices and len(set(prices)) == 1 else None
 
 
 def fetch_rate(client: PricingClient, region: str) -> PriceQuote | None:
@@ -99,19 +128,25 @@ def fetch_rate(client: PricingClient, region: str) -> PriceQuote | None:
         Filters=[{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}],
         FormatVersion="aws_v1",
     )
-    for page in pages:
-        for raw in page.get("PriceList", []):
-            product = json.loads(raw) if isinstance(raw, str) else raw
-            attributes = product.get("product", {}).get("attributes", {})
-            if not _matches_sentiment(attributes):
-                continue
-            price = _first_tier_price(product)
+    iterator = iter(pages)
+    # Bound both latency and pagination even when a catalogue has no matching SKU.
+    for _ in range(3):
+        if not can_start():
+            break
+        page = next(iterator, None)
+        if page is None:
+            break
+        if not isinstance(page, dict) or not isinstance(page.get("PriceList"), list):
+            raise TypeError("Malformed Price List page")
+        for raw in page["PriceList"]:
+            product = PriceProduct.model_validate(json.loads(raw) if isinstance(raw, str) else raw)
+            price = _first_tier_price(product, region)
             if price is None:
                 continue
             quote = PriceQuote(
                 price_per_unit=price[0],
                 unit=price[1],
-                sku=str(product.get("product", {}).get("sku", "")),
+                sku=product.product.sku,
                 region=region,
                 fetched_at=dt.datetime.now(dt.UTC),
                 status="live",
@@ -124,22 +159,34 @@ def fetch_rate(client: PricingClient, region: str) -> PriceQuote | None:
 
 def current_rate(client: PricingClient | None, region: str, cache_hours: int) -> PriceQuote | None:
     """Cached rate if fresh; else a live lookup; else the stale cache; else ``None``."""
-    cached = history.get_price_quote(SERVICE_CODE, region)
+    cached = None
     now = dt.datetime.now(dt.UTC)
-    if cached and now - cached.fetched_at < dt.timedelta(hours=cache_hours):
-        return cached.model_copy(update={"status": "cached"})
+    try:
+        stored = history.get_price_quote(SERVICE_CODE, region)
+        if stored is not None:
+            candidate = PriceQuote.model_validate(stored)
+            age = now - candidate.fetched_at
+            if candidate.region == region and age >= dt.timedelta(0):
+                cached = candidate
+                if age < dt.timedelta(hours=cache_hours):
+                    return cached.model_copy(update={"status": "cached"})
+    except Exception:  # noqa: BLE001 - every pricing cache failure is optional
+        logger.warning("comprehend_price_cache_read_failed")
+        cached = None
 
     if client is not None:
         try:
             quote = fetch_rate(client, region)
-        except Exception as exc:  # noqa: BLE001 - any failure degrades to cache/unavailable
-            logger.warning("comprehend_price_lookup_failed", error=str(exc))
+        except Exception:  # noqa: BLE001 - lookup and pagination are best effort
+            logger.warning("comprehend_price_lookup_failed")
             quote = None
         if quote is not None:
-            history.put_price_quote(quote)
+            try:
+                history.put_price_quote(quote)
+            except Exception:  # noqa: BLE001 - keep a valid live rate if cache storage fails
+                logger.warning("comprehend_price_cache_write_failed")
             return quote
 
     if cached:
-        logger.warning("comprehend_price_stale", fetched_at=cached.fetched_at.isoformat())
         return cached.model_copy(update={"status": "stale"})
     return None

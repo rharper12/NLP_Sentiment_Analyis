@@ -17,6 +17,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mangum import Mangum
@@ -26,6 +28,8 @@ from sentiment_prep.api import deps
 from sentiment_prep.api.routes import public_router, router
 from sentiment_prep.api.schemas import ErrorResponse
 from sentiment_prep.api.security import require_api_key
+from sentiment_prep.api.upload_limit import UploadLimitMiddleware
+from sentiment_prep.budget import REQUEST_SECONDS, RequestBudget, current_budget
 from sentiment_prep.config import get_settings
 from sentiment_prep.errors import AppError
 from sentiment_prep.history.db import get_engine
@@ -47,8 +51,8 @@ of steps → inspect the impact report → **label** (Comprehend, manual review,
 **export** as CSV/Excel/Parquet/Markdown or **save** to S3.
 
 Every response carries an `X-Request-Id` header; quote it when reading logs. When `API_KEY` is
-configured, every endpoint except `/health` requires an `X-API-Key` header. Run history and X
-spend are available under the `account` tag.
+configured, exchange it at `/auth/session` for a one-hour bearer session. Operator scripts may
+also use `X-API-Key`. `/health` is public. Run history and X spend use the `account` tag.
 """
 
 
@@ -91,6 +95,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Request-Id", "Content-Disposition"],
     )
+    app.add_middleware(UploadLimitMiddleware)
 
     @app.middleware("http")
     async def request_context(
@@ -102,6 +107,7 @@ def create_app() -> FastAPI:
         )
         bind_context(request_id=request_id, method=request.method, path=request.url.path)
         started = time.perf_counter()
+        budget_token = current_budget.set(RequestBudget(time.monotonic() + REQUEST_SECONDS))
         logger.info("request_started", client=request.client.host if request.client else None)
         try:
             response = await call_next(request)
@@ -112,6 +118,8 @@ def create_app() -> FastAPI:
                 exc_info=True,
             )
             raise
+        finally:
+            current_budget.reset(budget_token)
         response.headers["X-Request-Id"] = request_id
         logger.info(
             "request_finished",
@@ -120,12 +128,26 @@ def create_app() -> FastAPI:
         )
         return response
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
+        # FastAPI normally echoes invalid input. Never reflect a credential back to the client.
+        if request.url.path == "/auth/session":
+            return JSONResponse(
+                status_code=422,
+                content={"error": "Invalid sign-in request"},
+                headers={"Cache-Control": "no-store"},
+            )
+        return await request_validation_exception_handler(request, exc)
+
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
         logger.warning("request_rejected", error=exc.message, status=exc.status_code)
+        message = exc.message
+        if not get_settings().diagnostics_enabled and exc.status_code >= 500:
+            message = "This operation is currently unavailable. Please try again later."
         return JSONResponse(
             status_code=exc.status_code,
-            content=ErrorResponse(error=exc.message, request_id=get_request_id()).model_dump(),
+            content=ErrorResponse(error=message, request_id=get_request_id()).model_dump(),
         )
 
     @app.exception_handler(Exception)

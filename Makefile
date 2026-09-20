@@ -36,7 +36,7 @@ DOCKER_ENV = $(shell test ! -S /var/run/docker.sock && test -S "$(DOCKER_SOCK)" 
              && echo DOCKER_HOST=unix://$(DOCKER_SOCK))
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev dev-api dev-web preview check lint test test-backend test-web audit-a11y \
+.PHONY: help setup dev dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
         api-types validate build deploy deploy-web put-secret logs clean
 
 ##@ Getting started
@@ -95,6 +95,9 @@ test-backend: ## pytest (use 'pytest -m "not slow"' to skip wall-clock assertion
 test-web: ## vitest
 	cd frontend && npm test
 
+aws-check: ## Verify AWS credentials the way the app resolves them; PROBE=1 also calls Comprehend
+	python tools/aws_check.py
+
 audit-a11y: ## axe over every stage in both themes; run 'make dev-api' and 'make preview' first
 	python tools/a11y_audit.py
 
@@ -117,12 +120,11 @@ deploy: build ## Deploy the API stack from the artefacts in .aws-sam/build
 deploy-web: ## Build the UI against the deployed API and upload it to the site bucket
 	$(eval API_URL := $(shell aws cloudformation describe-stacks --stack-name sentiment-prep-$(STAGE) --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" --output text))
 	$(eval SITE_BUCKET := $(shell aws cloudformation describe-stacks --stack-name sentiment-prep-$(STAGE) --query "Stacks[0].Outputs[?OutputKey=='SiteBucketName'].OutputValue" --output text))
-	$(eval API_KEY := $(shell aws ssm get-parameter --name /sentiment-prep/$(STAGE)/api-key --with-decryption --query Parameter.Value --output text 2>/dev/null))
-	cd frontend && VITE_API_URL=$(API_URL) VITE_API_KEY=$(API_KEY) npm run build
+	cd frontend && VITE_API_URL=$(API_URL) npm run build
 	aws s3 sync frontend/dist s3://$(SITE_BUCKET) --delete
 
 put-secret: ## Store a SecureString: make put-secret NAME=api-key VALUE=... [STAGE=dev]
-	aws ssm put-parameter --name /sentiment-prep/$(STAGE)/$(NAME) --type SecureString --overwrite --value "$(VALUE)"
+	@aws ssm put-parameter --name /sentiment-prep/$(STAGE)/$(NAME) --type SecureString --overwrite --value "$(VALUE)"
 
 logs: ## Tail the deployed Lambda's structured logs
 	sam logs --stack-name sentiment-prep-$(STAGE) --tail

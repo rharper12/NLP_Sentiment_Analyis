@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Login
+         * @description Authenticate an operator without distributing the permanent key in public assets.
+         */
+        post: operations["login_auth_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -15,7 +35,7 @@ export interface paths {
          * Liveness check
          * @description Liveness and, only with diagnostics on, the facts an operator checks first.
          *
-         *     Never touches paid services. Operator-only fields are null unless diagnostics are enabled so
+         *     Never touches paid services. Operator-only fields are omitted unless diagnostics are enabled so
          *     a public deployment reveals nothing about its storage or which paid services are switched on.
          */
         get: operations["health_health_get"];
@@ -213,9 +233,9 @@ export interface paths {
          * Label a slice with Comprehend
          * @description Send up to ``max_records`` unlabelled records to Comprehend; call again until ``done``.
          *
-         *     Resumable: records that already have a Comprehend label are skipped, so a crash or a
-         *     cancelled loop never re-bills. After each call the bundle is saved and the ``labelled``
-         *     checkpoint is rewritten. Requires ``confirm_cost=true`` so nothing is billed without the
+         *     Resumable: successful labels and permanent failures are skipped; temporary failures have
+         *     at most three attempts. Each call saves successes and failure counts before writing a
+         *     labelled checkpoint. Requires ``confirm_cost=true`` so nothing is billed without the
          *     confirmation dialog.
          */
         post: operations["label_comprehend_dataset__dataset_id__labels_comprehend_post"];
@@ -558,6 +578,10 @@ export interface components {
             source_type: "x" | "huggingface" | "csv";
             /** Query */
             query: string | null;
+            /** Window Start */
+            window_start?: string | null;
+            /** Window End */
+            window_end?: string | null;
             /** Record Count */
             record_count: number;
             /** Labelled Count */
@@ -573,6 +597,15 @@ export interface components {
             truncated_reason: string | null;
             /** Estimated Cost Usd */
             estimated_cost_usd?: number | null;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Resume Request Id */
+            resume_request_id?: string | null;
+            /** Retry At */
+            retry_at?: number | null;
             /** Warnings */
             warnings?: string[];
             /** Preview */
@@ -592,8 +625,8 @@ export interface components {
          * HealthResponse
          * @description Liveness plus, when ``diagnostics`` is true, the facts an operator checks first.
          *
-         *     Every field after ``x_configured`` is null unless diagnostics are enabled (local runtime by
-         *     default), so a public deployment reveals nothing about its storage or enabled services.
+         *     Operator fields are omitted unless diagnostics are enabled (local runtime by default)
+         *     and the caller is authorized. Public liveness reveals no storage or enabled-service details.
          */
         HealthResponse: {
             /** Status */
@@ -645,27 +678,9 @@ export interface components {
             /** Embedding Drift */
             embedding_drift: number | null;
             /** Duration Ms */
-            duration_ms: number;
+            duration_ms?: number | null;
             /** Created At */
             created_at: string;
-        };
-        /**
-         * ImpactReport
-         * @description Everything the UI and the written report need about a preprocessing run.
-         *
-         *     Optional fields are ``None`` when the corresponding AWS service was disabled or failed;
-         *     the ``warnings`` list says which and why.
-         */
-        ImpactReport: {
-            /** Steps */
-            steps: components["schemas"]["StepResult"][];
-            sentiment?: components["schemas"]["SentimentComparison"] | null;
-            /** Embedding Drift */
-            embedding_drift?: number | null;
-            /** Explanation */
-            explanation?: string | null;
-            /** Warnings */
-            warnings?: string[];
         };
         /**
          * LabelEstimate
@@ -679,8 +694,23 @@ export interface components {
             records_total: number;
             /** Records Unlabelled */
             records_unlabelled: number;
+            /**
+             * Truncated Records
+             * @default 0
+             */
+            truncated_records: number;
+            /**
+             * Prefix Labels
+             * @default 0
+             */
+            prefix_labels: number;
             /** Records To Send */
             records_to_send: number;
+            /**
+             * Failed Total
+             * @default 0
+             */
+            failed_total: number;
             /** Billable Units */
             billable_units: number;
             /** Unit Chars */
@@ -699,15 +729,54 @@ export interface components {
             /** Price Fetched At */
             price_fetched_at: string | null;
             /** Price Region */
-            price_region: string;
+            price_region?: string | null;
+        };
+        /**
+         * LabelFailure
+         * @description A persisted document failure; raw service messages stay in operator logs.
+         */
+        LabelFailure: {
+            /** Record Id */
+            record_id: string;
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "document_rejected" | "temporarily_unavailable" | "missing_result";
+            /** Retryable */
+            retryable: boolean;
+            /** Attempts */
+            attempts: number;
         };
         /**
          * LabelProgress
          * @description Result of one Comprehend slice. ``cost_usd`` is null when no rate is known.
          */
         LabelProgress: {
+            /**
+             * Truncated Records
+             * @default 0
+             */
+            truncated_records: number;
             /** Labelled In Call */
             labelled_in_call: number;
+            /**
+             * Attempted In Call
+             * @default 0
+             */
+            attempted_in_call: number;
+            /**
+             * Failed In Call
+             * @default 0
+             */
+            failed_in_call: number;
+            /**
+             * Failed Total
+             * @default 0
+             */
+            failed_total: number;
+            /** Failures */
+            failures?: components["schemas"]["LabelFailure"][];
             /** Labelled Total */
             labelled_total: number;
             /** Remaining */
@@ -718,6 +787,13 @@ export interface components {
             cost_usd: number | null;
             /** Done */
             done: boolean;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
+            /** Stop Reason */
+            stop_reason?: string | null;
         };
         /**
          * LabelSummary
@@ -750,6 +826,8 @@ export interface components {
          * @description Fetch a dataset from a remote source.
          */
         LoadRequest: {
+            /** Request Id */
+            request_id?: string | null;
             /**
              * Source
              * @enum {string}
@@ -766,6 +844,16 @@ export interface components {
              * @description Required for X. Operators like lang:en allowed.
              */
             query?: string | null;
+            /**
+             * Start Time
+             * @description Oldest post to return (X only). Clamped to seven days ago, the limit of recent search.
+             */
+            start_time?: string | null;
+            /**
+             * End Time
+             * @description Newest post to return (X only). Clamped to a few seconds ago.
+             */
+            end_time?: string | null;
         };
         /**
          * ManualLabelItem
@@ -817,11 +905,58 @@ export interface components {
             applied_steps: string[];
             /** Record Count */
             record_count: number;
+            /**
+             * Partial
+             * @default false
+             */
+            partial: boolean;
             metrics_before: components["schemas"]["DatasetMetrics"];
             metrics_after: components["schemas"]["DatasetMetrics"];
-            report: components["schemas"]["ImpactReport"];
+            report: components["schemas"]["PublicImpactReport"];
             /** Preview */
             preview: components["schemas"]["Record"][];
+        };
+        /**
+         * PublicImpactReport
+         * @description A report safe to serialize for the current diagnostics policy.
+         */
+        PublicImpactReport: {
+            sentiment?: components["schemas"]["SentimentComparison"] | null;
+            /** Embedding Drift */
+            embedding_drift?: number | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Warnings */
+            warnings?: string[];
+            /** Steps */
+            steps: components["schemas"]["PublicStepResult"][];
+        };
+        /**
+         * PublicStepResult
+         * @description User metrics with optional operator timing.
+         */
+        PublicStepResult: {
+            /** Step Name */
+            step_name: string;
+            /** Records In */
+            records_in: number;
+            /** Records Out */
+            records_out: number;
+            /** Vocab Before */
+            vocab_before: number;
+            /** Vocab After */
+            vocab_after: number;
+            /** Avg Tokens Before */
+            avg_tokens_before: number;
+            /** Avg Tokens After */
+            avg_tokens_after: number;
+            /** Sample Diffs */
+            sample_diffs?: [
+                string,
+                string
+            ][];
+            /** Duration Ms */
+            duration_ms?: number | null;
         };
         /**
          * Record
@@ -922,7 +1057,7 @@ export interface components {
          */
         SaveResponse: {
             /** Uri */
-            uri: string;
+            uri?: string | null;
         };
         /**
          * SentimentComparison
@@ -930,7 +1065,17 @@ export interface components {
          */
         SentimentComparison: {
             /** Agreement */
-            agreement: number;
+            agreement?: number | null;
+            /**
+             * Comparable Records
+             * @default 0
+             */
+            comparable_records: number;
+            /**
+             * Shared Records
+             * @default 0
+             */
+            shared_records: number;
             /** Distribution Before */
             distribution_before: {
                 [key: string]: number;
@@ -939,6 +1084,30 @@ export interface components {
             distribution_after: {
                 [key: string]: number;
             };
+        };
+        /**
+         * SessionRequest
+         * @description Operator credential, submitted once over HTTPS and never stored by the browser.
+         */
+        SessionRequest: {
+            /**
+             * Key
+             * Format: password
+             */
+            key: string;
+        };
+        /**
+         * SessionResponse
+         * @description Short-lived bearer credential. Kept only in browser memory.
+         */
+        SessionResponse: {
+            /** Token */
+            token: string;
+            /**
+             * Expires In
+             * @default 3600
+             */
+            expires_in: number;
         };
         /**
          * SpendSummary
@@ -1007,33 +1176,6 @@ export interface components {
              */
             keep_negations: boolean;
         };
-        /**
-         * StepResult
-         * @description What one preprocessing step did to the dataset.
-         */
-        StepResult: {
-            /** Step Name */
-            step_name: string;
-            /** Records In */
-            records_in: number;
-            /** Records Out */
-            records_out: number;
-            /** Vocab Before */
-            vocab_before: number;
-            /** Vocab After */
-            vocab_after: number;
-            /** Avg Tokens Before */
-            avg_tokens_before: number;
-            /** Avg Tokens After */
-            avg_tokens_after: number;
-            /** Duration Ms */
-            duration_ms: number;
-            /** Sample Diffs */
-            sample_diffs?: [
-                string,
-                string
-            ][];
-        };
     };
     responses: never;
     parameters: never;
@@ -1043,6 +1185,48 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    login_auth_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     health_health_get: {
         parameters: {
             query?: never;
@@ -1086,6 +1270,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1132,6 +1317,7 @@ export interface operations {
             };
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1176,6 +1362,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1223,6 +1410,7 @@ export interface operations {
             };
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1265,6 +1453,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1305,6 +1494,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1351,6 +1541,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1393,6 +1584,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1435,6 +1627,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1484,6 +1677,7 @@ export interface operations {
             };
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1526,6 +1720,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1572,6 +1767,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1618,6 +1814,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1660,6 +1857,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1703,6 +1901,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1743,6 +1942,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1783,6 +1983,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1823,6 +2024,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1863,6 +2065,7 @@ export interface operations {
             query?: never;
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path: {
                 dataset_id: string;
@@ -1907,6 +2110,7 @@ export interface operations {
             };
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -1949,6 +2153,7 @@ export interface operations {
             };
             header?: {
                 "X-API-Key"?: string | null;
+                authorization?: string | null;
             };
             path?: never;
             cookie?: never;

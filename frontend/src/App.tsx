@@ -42,16 +42,21 @@ export default function App() {
     void loadSteps(api.steps).then((list) => list && dispatch({ type: "init", steps: list }));
   }, [loadHealth, loadSteps, dispatch]);
 
+  const [xRequest, setXRequest] = useState<{ id: string; query: string; limit: number; window: { start?: string; end?: string } } | null>(null);
   const [labelled, setLabelled] = useState(false);
+  const [reviewActive, setReviewActive] = useState(false);
   const reached: Stage = labelled ? "export" : run.data ? "label" : dataset.data ? "clean" : "collect";
-  const go = (s: Stage) => { if (order(s) <= order(reached)) setStage(s); };
+  const go = (s: Stage) => { if (!reviewActive && order(s) <= order(reached)) setStage(s); };
 
   const collect = async (task: (signal: AbortSignal) => Promise<DatasetSummary>) => {
     run.reset();
     setLabelled(false);
     setRunVersion((v) => v + 1);
     const result = await dataset.run(task);
-    if (result?.source_type === "x") setSpendVersion((v) => v + 1);
+    if (result?.source_type === "x") {
+      setSpendVersion((v) => v + 1);
+      if (!result.partial) setXRequest(null);
+    }
   };
 
   const runPipeline = async () => {
@@ -69,17 +74,22 @@ export default function App() {
   return (
     <div className="flex min-h-screen flex-col">
       <DocumentTitle stage={stage} records={dataset.data?.record_count ?? null} />
-      <Header theme={theme} onToggleTheme={toggle} onOpenHistory={() => setHistoryOpen(true)} spendVersion={spendVersion} />
-      <Stepper current={stage} reached={reached} onSelect={go} />
+      <Header diagnostics={health.data?.diagnostics ?? false} theme={theme} onToggleTheme={toggle} onOpenHistory={() => setHistoryOpen(true)} spendVersion={spendVersion} />
+      <Stepper disabled={reviewActive} current={stage} reached={reached} onSelect={go} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <ErrorBoundary>
           {stage === "collect" && (
             <CollectStep
               busy={dataset.loading} error={dataset.error} dataset={dataset.data}
               xConfigured={health.data?.x_configured ?? true}
-              onSearch={(q, n) => void collect((s) => api.load("x", n, q, s))}
-              onLoadSample={(n) => void collect((s) => api.load("huggingface", n, "", s))}
-              onUpload={(f) => void collect((s) => api.upload(f, s))}
+              onSearch={(q, n, window) => {
+                const id = crypto.randomUUID();
+                setXRequest({ id, query: q, limit: n, window });
+                void collect((s) => api.load("x", n, q, window, s, id));
+              }}
+              onResume={xRequest ? () => void collect((s) => api.load("x", xRequest.limit, xRequest.query, xRequest.window, s, xRequest.id)) : undefined}
+              onLoadSample={(n) => { setXRequest(null); void collect((s) => api.load("huggingface", n, "", undefined, s)); }}
+              onUpload={(f) => { setXRequest(null); void collect((s) => api.upload(f, s)); }}
               onCancel={dataset.cancel}
               onContinue={() => setStage("clean")}
             />
@@ -97,6 +107,7 @@ export default function App() {
           )}
           {stage === "analyze" && dataset.data && (
             <AnalyzeStep
+              diagnostics={health.data?.diagnostics ?? false}
               datasetId={dataset.data.dataset_id} recordCount={dataset.data.record_count} theme={theme}
               run={run.data} busy={run.loading} error={run.error} runVersion={runVersion}
               onCancel={run.cancel} onRerun={() => void runPipeline()}
@@ -105,6 +116,7 @@ export default function App() {
           )}
           {stage === "label" && dataset.data && (
             <LabelStep
+              onReviewActiveChange={setReviewActive}
               datasetId={dataset.data.dataset_id}
               diagnostics={health.data?.diagnostics ?? false}
               comprehendEnabled={health.data?.comprehend_enabled ?? null}

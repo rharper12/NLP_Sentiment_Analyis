@@ -11,6 +11,7 @@ COPY backend/pyproject.toml ${LAMBDA_TASK_ROOT}/
 COPY backend/src/ ${LAMBDA_TASK_ROOT}/src/
 
 RUN pip install --no-cache-dir ${LAMBDA_TASK_ROOT} \
+ && python -c "from sqlalchemy import create_engine; import psycopg; create_engine('postgresql+psycopg://user:pass@localhost/db')" \
  && python -m nltk.downloader -d ${NLTK_DATA} wordnet omw-1.4 averaged_perceptron_tagger_eng
 
 CMD ["sentiment_prep.api.app.handler"]

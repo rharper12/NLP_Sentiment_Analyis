@@ -55,6 +55,7 @@ change:
 | `X_BEARER_TOKEN` | X API token for local use. **Change this line to switch accounts.** |
 | `X_BEARER_TOKEN_SSM_PATH` | SSM SecureString path used in Lambda (set via `samconfig.toml`) |
 | `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | hard caps on billed reads (defaults 1000 / 3000) |
+| `AWS_PROFILE` | named profile from `~/.aws/config`, including SSO; blank uses the default chain |
 | `COMPREHEND_ENABLED`, `BEDROCK_ENABLED` | turn paid services on |
 | `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (cached 24 h; no hard-coded fallback) |
 | `API_KEY` | shared secret required on every request except `/health`; unset locally, **required for any internet-facing deployment** |
