@@ -151,6 +151,12 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.click("text=Continue to Clean")
     await page.wait_for_selector("text=Normalise for NLP")
     await audit("clean")
+    assert await page.locator("main input[type=checkbox]:checked").count() == 0
+    await page.locator("button:visible:has-text('Continue to Analyze')").first.click()
+    await page.wait_for_selector(".ag-row", timeout=40000)
+    await audit("analyze-original")
+    await page.click("text=Adjust steps")
+    await page.wait_for_selector("text=Normalise for NLP")
     step = page.locator("li input[type=checkbox]").first
     await step.uncheck()
     await audit("clean-off-step")
@@ -158,7 +164,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.locator("details").first.locator("summary").click()
     await audit("clean-explanation")
 
-    await page.click("text=Run pipeline and measure")
+    await page.locator("button:visible:has-text('Continue to Analyze')").first.click()
     await page.wait_for_selector(".ag-row", timeout=40000)
     await page.wait_for_timeout(500)
     await page.evaluate("window.scrollTo(0,0)")

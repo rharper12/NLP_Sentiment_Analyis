@@ -61,6 +61,61 @@ def test_health_and_request_id_echo(client):
     assert "X-Request-Id" in client.get("/health").headers
 
 
+@pytest.mark.parametrize("successful_pages", [0, 1])
+def test_sample_timeout_is_handled_and_preserves_fetched_pages(
+    client, monkeypatch, successful_pages
+):
+    offsets = []
+
+    def handler(request):
+        offset = int(request.url.params["offset"])
+        offsets.append(offset)
+        if offset >= successful_pages * 100:
+            raise httpx.ReadTimeout("private provider detail", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "rows": [
+                    {"row_idx": i, "row": {"text": f"sample record {i}", "label": 2}}
+                    for i in range(100)
+                ]
+            },
+        )
+
+    with httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://hf.test"
+    ) as provider:
+        monkeypatch.setattr(
+            deps,
+            "get_hf_source",
+            lambda: HuggingFaceSource(
+                "cardiffnlp/tweet_eval", "sentiment", "train", "text", "label", provider
+            ),
+        )
+        response = client.post("/dataset/load", json={"source": "huggingface", "limit": 600})
+    assert "private provider detail" not in response.text
+    if successful_pages == 0:
+        assert offsets == [0, 0]
+        assert response.status_code == 502
+        assert "timed out" in response.json()["error"]
+        assert response.json()["request_id"] == response.headers["X-Request-Id"]
+    else:
+        assert offsets == [0, 100, 100]
+        assert response.status_code == 200
+        body = response.json()
+        assert body["record_count"] == 100
+        assert "timed out" in body["truncated_reason"]
+        stored = client.get(f"/dataset/{body['dataset_id']}").json()
+        assert (
+            stored["record_count"] == 100 and stored["truncated_reason"] == body["truncated_reason"]
+        )
+        checkpoints = client.get(f"/dataset/{body['dataset_id']}/checkpoints").json()
+        assert any(
+            item["stage"] == "collected" and item["status"] == "current"
+            for item in checkpoints["items"]
+        )
+
+
 def test_health_hides_operator_fields_without_diagnostics(client, monkeypatch):
     from sentiment_prep.config import get_settings
 
@@ -86,6 +141,24 @@ def test_health_hides_operator_fields_without_diagnostics(client, monkeypatch):
 def test_steps_catalogue(client):
     r = client.get("/steps")
     assert r.status_code == 200 and {s["name"] for s in r.json()} >= {"tokenize", "stopwords"}
+
+
+def test_preprocess_without_selected_steps_preserves_original_text(client, monkeypatch):
+    def unexpected_explanation(*args, **kwargs):
+        pytest.fail("Unchecked explanation must not call Bedrock Converse")
+
+    monkeypatch.setattr(FakeBedrock, "converse", unexpected_explanation)
+    loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 10}).json()
+    response = client.post(
+        f"/dataset/{loaded['dataset_id']}/preprocess",
+        json={"steps": [], "explain": False, "options": {"keep_negations": False}},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["applied_steps"] == result["report"]["steps"] == []
+    assert result["report"]["explanation"] is None
+    assert result["metrics_before"] == result["metrics_after"]
+    assert result["preview"] == loaded["preview"]
 
 
 def test_load_preprocess_export_flow(client):

@@ -30,6 +30,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
   // A blank placeholder would leave the record empty and defeat the step, so the run is blocked
   // rather than letting the server reject it after the person has waited.
   const fillValid =
+    !config.enabled.missing_data ||
     config.options.missing_data_strategy !== "fill" ||
     config.options.missing_data_fill_value.trim().length > 0;
 
@@ -37,7 +38,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
     <section className="mx-auto flex max-w-5xl flex-col gap-6">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Clean and normalise</h2>
-        <p className="mt-1 text-muted">Each step is a trade-off: it removes noise a model would otherwise learn from, and sometimes removes signal too. Turn steps on or off, reorder within a group, then run to measure the effect.</p>
+        <p className="mt-1 text-muted">Each step is a trade-off: it removes noise a model would otherwise learn from, and sometimes removes signal too. Select only the steps relevant to your data, then continue to Analyze to measure the effect.</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
@@ -130,7 +131,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
         <aside className="flex flex-col gap-4 lg:sticky lg:top-4 lg:self-start">
           <div className="glass-panel flex flex-col gap-3 p-5">
             <h3 className="font-semibold">Your pipeline</h3>
-            {active.length === 0 ? <p className="text-sm text-muted">No steps selected.</p> : (
+            {active.length === 0 ? <p className="text-sm text-muted">No steps selected. Continue to analyze the original text without cleaning.</p> : (
               <ol className="tnum flex flex-col gap-1 text-sm">
                 {active.map((n, i) => <li key={n}><span className="text-muted">{i + 1}.</span> {byName.get(n)?.title ?? n}</li>)}
               </ol>
@@ -139,18 +140,18 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
               <input type="checkbox" className="mt-1 accent-accent" checked={config.explain} onChange={(e) => onExplain(e.target.checked)} />
               <span>Ask the model to explain the results in plain English <span className="text-muted">(uses Bedrock)</span></span>
             </label>
-            <button type="button" className="btn-primary" disabled={busy || active.length === 0 || !fillValid} onClick={onRun}>
-              {busy ? "Running…" : "Run pipeline and measure →"}
+            <button type="button" className="btn-primary" disabled={busy || !fillValid} onClick={onRun}>
+              {busy ? "Running…" : "Continue to Analyze →"}
             </button>
             <button type="button" className="btn-link self-start" onClick={onBack}>← Back to Collect</button>
           </div>
-          <p className="px-1 text-xs text-muted">Nothing is changed until you run. Each run starts from the original posts, so you can try combinations freely.</p>
+          <p className="px-1 text-xs text-muted">Continuing runs your selected steps and opens Analyze. Each run starts from the original posts, so you can try combinations freely.</p>
         </aside>
       </div>
 
       <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-3 border-t border-rule bg-surface px-4 py-3 lg:hidden">
         <span className="tnum text-sm text-muted">{active.length} of {steps.length} steps on</span>
-        <button type="button" className="btn-primary" disabled={busy || active.length === 0 || !fillValid} onClick={onRun}>{busy ? "Running…" : "Run and measure →"}</button>
+        <button type="button" className="btn-primary" disabled={busy || !fillValid} onClick={onRun}>{busy ? "Running…" : "Continue to Analyze →"}</button>
       </div>
     </section>
   );

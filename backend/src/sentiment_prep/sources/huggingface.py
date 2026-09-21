@@ -2,7 +2,7 @@
 
 Uses the public REST ``/rows`` endpoint rather than the ``datasets`` library, which keeps the
 Lambda image small and avoids downloading whole parquet shards for a 600-row sample. This is
-the guaranteed path to the 500-record minimum when a live X topic runs dry.
+the free sample path when a live X topic runs dry; availability depends on the public service.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from sentiment_prep.sources.payloads import HFPage
 logger = get_logger(__name__)
 
 PAGE_SIZE = 100
+MAX_PAGE_ATTEMPTS = 2
+PAGE_TIMEOUT = httpx.Timeout(3.0, connect=1.0, pool=1.0)
 # tweet_eval/sentiment encodes labels as integers; keep the mapping explicit for the report.
 TWEET_EVAL_LABELS = {0: "negative", 1: "neutral", 2: "positive"}
 
@@ -69,26 +71,57 @@ class HuggingFaceSource:
         offset = 0
         started = time.perf_counter()
         truncated_reason: str | None = None
+        attempts = 0
+        last_error: str | None = None
 
         while len(records) < limit:
             if not can_start():
-                truncated_reason = "request budget reached"
+                truncated_reason = last_error or "request budget reached"
                 break
             if should_stop and should_stop():
                 truncated_reason = "cancelled by client"
                 break
-            response = self._client.get(
-                "/rows",
-                timeout=3.0,
-                params={
-                    "dataset": self._dataset,
-                    "config": self._config,
-                    "split": self._split,
-                    "offset": offset,
-                    "length": min(PAGE_SIZE, limit - len(records)),
-                },
-            )
-            response.raise_for_status()
+            try:
+                response = self._client.get(
+                    "/rows",
+                    timeout=PAGE_TIMEOUT,
+                    params={
+                        "dataset": self._dataset,
+                        "config": self._config,
+                        "split": self._split,
+                        "offset": offset,
+                        "length": min(PAGE_SIZE, limit - len(records)),
+                    },
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                status = (
+                    exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                )
+                if isinstance(exc, httpx.TimeoutException):
+                    last_error = (
+                        "Hugging Face timed out while loading the sample dataset. "
+                        "Try loading the sample again, or upload a CSV."
+                    )
+                elif status is not None:
+                    last_error = (
+                        f"Hugging Face could not load the sample dataset (HTTP {status}). "
+                        "Try again later or upload a CSV."
+                    )
+                else:
+                    last_error = (
+                        "Could not reach Hugging Face to load the sample dataset. "
+                        "Check your connection and try again, or upload a CSV."
+                    )
+                attempts += 1
+                if attempts < MAX_PAGE_ATTEMPTS and (status is None or status >= 500):
+                    logger.warning("hugging_face_page_retry", offset=offset, attempt=attempts)
+                    # Retry the same offset, checking cancellation and the shared budget first.
+                    continue
+                truncated_reason = last_error
+                break
+            attempts = 0
+            last_error = None
             try:
                 rows = HFPage.model_validate(response.json()).rows
             except ValueError:
@@ -119,6 +152,9 @@ class HuggingFaceSource:
                 )
             offset += len(rows)
 
+        if not records and last_error is not None:
+            # AppError escapes the route's task group through its normal handled-error path.
+            raise ExternalServiceError(last_error)
         logger.info(
             "hugging_face_fetch_complete",
             dataset=self._dataset,

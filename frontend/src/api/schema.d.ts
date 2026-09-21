@@ -919,7 +919,7 @@ export interface components {
         PreprocessRequest: {
             /**
              * Steps
-             * @description Step names in execution order.
+             * @description Step names in execution order; empty analyzes the original text unchanged.
              */
             steps: string[];
             options?: components["schemas"]["StepOptions"];

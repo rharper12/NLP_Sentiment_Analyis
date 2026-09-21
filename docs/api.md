@@ -59,6 +59,8 @@ Always re-runs from the original data. Returns `metrics_before`, `metrics_after`
 (`ImpactReport`: per-step `StepResult`s, optional `sentiment`, `embedding_drift`, `explanation`,
 and analysis `warnings`), public-safe persistence `warnings`, and a processed `preview`.
 Large jobs may return `partial=true`; repeating the same request resumes saved analysis units.
+An empty `steps` list analyzes the original text without preprocessing. The Clean screen starts
+with every checkbox unchecked and sends `explain: false` unless explicitly enabled.
 
 ## Label
 
@@ -122,4 +124,3 @@ conversions stale. Rerunning preprocessing also marks existing labelled snapshot
 (local runtime by default, `DIAGNOSTICS` overrides) it also returns `runtime`, `database`,
 `database_ephemeral`, `checkpoints`, `comprehend_enabled`, `bedrock_enabled`; otherwise those are
 omitted; configured authentication is required before operator details are returned. Never touches paid services.
-

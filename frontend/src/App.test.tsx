@@ -39,6 +39,9 @@ async function enterAnalyze() {
   await screen.findByText("old");
   fireEvent.click(screen.getByText("Continue clean"));
   fireEvent.click(screen.getByText("Process"));
+  expect(api.preprocess).toHaveBeenLastCalledWith(
+    "old", [], expect.objectContaining({ keep_negations: false }), false, expect.any(AbortSignal),
+  );
 }
 
 it("dataset replacement invalidates an old processing result and its version follow-up", async () => {

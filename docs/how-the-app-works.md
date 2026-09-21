@@ -35,8 +35,10 @@ row for the history tab, and returns a `DatasetSummary` with a 20-row preview an
 `resources/rationale.yaml`. The **Clean** stage (`CleanStep.tsx`) shows server-provided cleaning and normalization groups, followed by the final empty-record
 sweep; display and movement eligibility use the same group metadata.
 Each step expands to show what it helps and what it costs: the reducer in `hooks/usePipelineConfig.ts` tracks order, on/off state, and the
-two per-step options (negation handling, missing-data strategy). Nothing runs until **Run
-pipeline** is pressed, because a run may call paid services.
+two per-step options (negation handling, missing-data strategy). All Clean-screen checkboxes start
+unchecked, including the optional model explanation and keep-negations option. **Continue to
+Analyze** runs the selected steps and opens the results; with none selected, it analyzes the
+original text unchanged. A run may call the enabled analysis services.
 
 ## 3. Running the pipeline
 

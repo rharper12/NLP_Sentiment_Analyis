@@ -181,6 +181,73 @@ def test_huggingface_pages_and_maps_labels():
     assert ds.records[1].label == "neutral"
 
 
+@pytest.mark.parametrize("failure", ["timeout", "connection", 503])
+def test_huggingface_retries_transient_failure_at_same_offset(failure):
+    offsets = []
+
+    def handler(request):
+        offsets.append(int(request.url.params["offset"]))
+        if len(offsets) == 1:
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private provider detail", request=request)
+            if failure == "connection":
+                raise httpx.ConnectError("private provider detail", request=request)
+            return httpx.Response(failure)
+        return httpx.Response(
+            200, json={"rows": [{"row_idx": 0, "row": {"text": "sample text", "label": 2}}]}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://hf.test") as client:
+        source = HuggingFaceSource(
+            "cardiffnlp/tweet_eval", "sentiment", "train", "text", "label", client
+        )
+        result = source.fetch(1)
+    assert offsets == [0, 0]
+    assert [(r.id, r.label) for r in result.records] == [("hf-0", "positive")]
+    assert result.truncated_reason is None
+
+
+@pytest.mark.parametrize(
+    "failure,expected_calls", [("timeout", 2), ("connection", 2), (503, 2), (404, 1), (429, 1)]
+)
+def test_huggingface_outage_is_bounded_and_actionable(failure, expected_calls):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private provider detail", request=request)
+        if failure == "connection":
+            raise httpx.ConnectError("private provider detail", request=request)
+        return httpx.Response(failure, text="private provider detail")
+
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://hf.test") as client:
+        source = HuggingFaceSource("d", "c", "s", "text", "label", client)
+        with pytest.raises(ExternalServiceError, match="Hugging Face") as error:
+            source.fetch(600)
+    assert len(calls) == expected_calls
+    assert "private provider detail" not in str(error.value)
+    assert "CSV" in str(error.value)
+
+
+@pytest.mark.parametrize("stop", ["budget", "cancel"])
+def test_huggingface_does_not_retry_after_budget_or_cancellation(monkeypatch, stop):
+    from sentiment_prep.sources import huggingface
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("provider timeout", request=request)
+
+    monkeypatch.setattr(huggingface, "can_start", lambda: stop != "budget" or not calls)
+    with httpx.Client(transport=httpx.MockTransport(handler), base_url="https://hf.test") as client:
+        source = HuggingFaceSource("d", "c", "s", "text", "label", client)
+        with pytest.raises(ExternalServiceError, match="timed out"):
+            source.fetch(600, should_stop=lambda: stop == "cancel" and bool(calls))
+    assert len(calls) == 1
+
+
 def test_csv_upload_requires_text_column():
     with pytest.raises(ValidationError):
         CsvUploadSource(b"body,label\nhi,pos\n").fetch(10)

@@ -79,7 +79,9 @@ class StepOptions(BaseModel):
 class PreprocessRequest(BaseModel):
     """Run steps in the given order and measure impact."""
 
-    steps: list[str] = Field(min_length=1, description="Step names in execution order.")
+    steps: list[str] = Field(
+        description="Step names in execution order; empty analyzes the original text unchanged."
+    )
     options: StepOptions = Field(default_factory=StepOptions)
     explain: bool = Field(default=True, description="Ask Bedrock for a prose explanation.")
 

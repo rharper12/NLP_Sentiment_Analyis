@@ -34,7 +34,7 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
         ...state,
         order: action.steps.map((s) => s.name),
         groups: Object.fromEntries(action.steps.map((s) => [s.name, s.group])),
-        enabled: Object.fromEntries(action.steps.map((s) => [s.name, true])),
+        enabled: Object.fromEntries(action.steps.map((s) => [s.name, false])),
       };
     case "toggle":
       return { ...state, enabled: { ...state.enabled, [action.name]: !state.enabled[action.name] } };
@@ -58,8 +58,8 @@ const initialConfig: PipelineConfig = {
   order: [],
   groups: {},
   enabled: {},
-  options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: true },
-  explain: true,
+  options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: false },
+  explain: false,
 };
 
 export function usePipelineConfig() {
