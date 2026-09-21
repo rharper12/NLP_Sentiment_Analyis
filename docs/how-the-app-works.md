@@ -67,9 +67,11 @@ the records.
 
 The records section of Analyze uses AG Grid Community (`RecordsGrid.tsx`), fetching all records
 once via `GET /dataset/{id}/records`, which joins original and processed
-records by id (dropped records show as "dropped"). Sorting, filtering and pagination happen in the browser. Activating a native View changes button with Enter/Space, or clicking a row, opens `DiffDialog.tsx`, which
-strikes through words that disappeared and underlines words that were introduced (lemmas,
-split contractions).
+records by id (dropped records show as "dropped"). Sorting, filtering and pagination happen in the browser.
+Only changed or dropped records offer **View changes**. Activating that button with Enter/Space,
+or clicking a changed row, opens `DiffDialog.tsx`. It compares the exact text in order, highlighting
+removals with strikethrough and additions with underlines, including case and punctuation changes.
+Whitespace-only edits use visible markers for spaces, tabs and line breaks.
 
 ## 5. Labelling
 

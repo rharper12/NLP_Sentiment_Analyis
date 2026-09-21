@@ -83,6 +83,7 @@ async def keyboard_diff(page: Page, findings: list[Finding], theme: str) -> None
             await page.keyboard.press(key)
             dialog = page.get_by_role("dialog")
             await expect(dialog).to_be_visible()
+            await expect(dialog.locator("del, ins").first).to_be_visible()
             await expect(
                 dialog.get_by_role(
                     "heading",
@@ -155,6 +156,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.locator("button:visible:has-text('Continue to Analyze')").first.click()
     await page.wait_for_selector(".ag-row", timeout=40000)
     await audit("analyze-original")
+    await expect(page.locator(".record-diff-action")).to_have_count(0)
     await page.click("text=Adjust steps")
     await page.wait_for_selector("text=Normalise for NLP")
     step = page.locator("li input[type=checkbox]").first

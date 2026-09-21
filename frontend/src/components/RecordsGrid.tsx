@@ -42,6 +42,7 @@ interface Row {
   id: string;
   original: string;
   processed: string | null;
+  changed: boolean;
   label: string | null;
   labelSource: LabelSource | null;
   confidence: number | null;
@@ -93,11 +94,12 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         id: p.original.id,
         original: p.original.text,
         processed: p.processed ? p.processed.text : null,
+        changed: hasRun && (!p.processed || p.original.text !== p.processed.text),
         label: p.original.label ?? null,
         labelSource: p.original.label_source ?? null,
         confidence: p.original.label_confidence ?? null,
       })),
-    [pairs],
+    [pairs, hasRun],
   );
 
   const columns = useMemo<ColDef<Row>[]>(
@@ -110,7 +112,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         sortable: false,
         filter: false,
         resizable: false,
-        cellRenderer: ({ data }: ICellRendererParams<Row>) => data && (
+        cellRenderer: ({ data }: ICellRendererParams<Row>) => data?.changed ? (
           <button type="button" className="btn record-diff-action my-1 py-1"
             aria-label={`View changes for record ${data.id}`}
             onClick={(event) => {
@@ -118,7 +120,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
               const pair = pairs.find((p) => p.original.id === data.id);
               if (pair) onSelect(pair, event.currentTarget);
             }}>View changes</button>
-        ),
+        ) : null,
         // Let the native button receive activation and Tab from its containing grid cell.
         // Other keys retain AG Grid's normal row/column navigation.
         suppressKeyboardEvent: ({ event }) => {
@@ -192,7 +194,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
         <div>
           <h3 className="font-semibold">Records</h3>
           <p className="text-xs text-muted">
-            Use View changes or click a row to inspect changed words. Sort and filter from the column menus.
+            View changes is available for changed or dropped records. Sort and filter from the column menus.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -228,6 +230,7 @@ export function RecordsGrid({ pairs, theme, hasRun, onSelect }: Props) {
           rowSelection={{ mode: "singleRow", checkboxes: false, enableClickSelection: true }}
           onGridReady={onGridReady}
           onRowClicked={(e) => {
+            if (!e.data?.changed) return;
             // AG Grid's native listener can run before React's stopPropagation.
             const target = e.event?.target;
             if (target instanceof HTMLElement && target.closest(".record-diff-action")) return;

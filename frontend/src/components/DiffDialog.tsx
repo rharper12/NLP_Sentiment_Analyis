@@ -1,9 +1,19 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { RecordPair } from "../api/types";
+import { textDiff, type DiffPart } from "./textDiff";
 
-/** Case-fold and strip punctuation so "Movie," matches the processed token "movie". */
-const normalise = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+function HighlightedText({ parts, removed }: { parts: DiffPart[]; removed: boolean }) {
+  return parts.map((part, index) => {
+    if (!part.changed) return <span key={index}>{part.text}</span>;
+    const whitespace = /^\s+$/u.test(part.text);
+    const text = whitespace ? part.text.replace(/ /g, "·").replace(/\t/g, "⇥").replace(/\r/g, "␍").replace(/\n/g, "↵\n") : part.text;
+    const title = whitespace ? `${removed ? "Removed" : "Added"} whitespace` : undefined;
+    return removed
+      ? <del key={index} title={title} className="rounded-sm bg-surface-2 text-removed decoration-[1.5px]">{text}</del>
+      : <ins key={index} title={title} className="rounded-sm bg-surface-2 text-introduced decoration-[1.5px]">{text}</ins>;
+  });
+}
 
 /** Word-level diff: struck = removed by the pipeline, underlined = introduced (lemma, split contraction). */
 export default function DiffDialog({ pair, trigger, onClose }: { pair: RecordPair; trigger?: HTMLElement; onClose: () => void }) {
@@ -15,13 +25,7 @@ export default function DiffDialog({ pair, trigger, onClose }: { pair: RecordPai
     return () => { d?.close(); if (previous?.isConnected) previous.focus(); };
   }, [trigger]);
 
-  const originalWords = pair.original.text.split(/\s+/).filter(Boolean);
-  const processedWords = pair.processed?.tokens ?? pair.processed?.text.split(/\s+/).filter(Boolean) ?? [];
-  const remaining = new Map<string, number>();
-  for (const w of processedWords) remaining.set(normalise(w), (remaining.get(normalise(w)) ?? 0) + 1);
-  const marked = originalWords.map((w) => { const k = normalise(w), c = remaining.get(k) ?? 0; if (c > 0) { remaining.set(k, c - 1); return { w, kept: true }; } return { w, kept: false }; });
-  const originalKeys = new Set(originalWords.map(normalise));
-  const introduced = new Set(processedWords.filter((w) => !originalKeys.has(normalise(w))));
+  const changes = useMemo(() => textDiff(pair.original.text, pair.processed?.text ?? ""), [pair.original.text, pair.processed?.text]);
 
   return (
     <dialog ref={ref} onCancel={(event) => {
@@ -37,15 +41,15 @@ export default function DiffDialog({ pair, trigger, onClose }: { pair: RecordPai
         <button type="button" className="btn-link" onClick={onClose}>Close</button>
       </div>
       <h4 className="mt-4 text-xs font-medium text-muted">Original</h4>
-      <p className="mt-1 leading-8">{marked.map((t, i) => <span key={i} className={t.kept ? "" : "text-removed line-through decoration-[1.5px]"}>{t.w} </span>)}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words leading-8"><HighlightedText parts={changes.original} removed />{!pair.original.text && <em className="text-muted">empty original text</em>}</p>
       <h4 className="mt-4 text-xs font-medium text-muted">Processed</h4>
       {pair.processed ? (
-        <p className="mt-1 leading-8">
-          {processedWords.length === 0 && <em className="text-muted">empty after processing</em>}
-          {processedWords.map((w, i) => <span key={i} className={introduced.has(w) ? "underline decoration-introduced decoration-[1.5px]" : ""}>{w} </span>)}
+        <p className="mt-1 whitespace-pre-wrap break-words leading-8">
+          {!pair.processed.text && <em className="text-muted">empty after processing</em>}
+          <HighlightedText parts={changes.processed} removed={false} />
         </p>
       ) : <p className="mt-1 text-muted">This record was dropped by the pipeline.</p>}
-      <p className="mt-4 text-xs text-muted"><s>struck</s> removed · <u>underlined</u> introduced (lemma or split contraction)</p>
+      <p className="mt-4 text-xs text-muted"><s>Struck through</s> = removed or replaced · <u>Underlined</u> = added or replacement text. Whitespace-only changes use · for spaces, ⇥ for tabs, ␍ for carriage returns and ↵ for line breaks.</p>
     </dialog>
   );
 }

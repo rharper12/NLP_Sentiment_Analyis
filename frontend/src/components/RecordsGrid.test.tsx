@@ -59,3 +59,30 @@ it("native actions preserve identity for multiple rows without also firing the r
   }
   expect(select).toHaveBeenCalledTimes(2);
 });
+
+it("only opens changes for changed or dropped rows after a run", async () => {
+  const record = (id: string, text: string) => ({ id, text, source_type: "csv" as const });
+  const pairs: RecordPair[] = [
+    { original: record("same", "unchanged"), processed: { ...record("same", "unchanged"), tokens: ["unchanged"] } },
+    { original: record("changed", "HELLO!"), processed: record("changed", "hello") },
+    { original: record("dropped", ""), processed: null },
+    { original: record("emptied", "remove"), processed: record("emptied", "") },
+    { original: record("spacing", "two  spaces"), processed: record("spacing", "two spaces") },
+  ];
+  const select = vi.fn();
+  const { container, rerender } = render(<RecordsGrid pairs={pairs} theme="light" hasRun={false} onSelect={select} />);
+  await waitFor(() => expect(container.querySelector('[row-id="changed"] [col-id="original"]')).not.toBeNull());
+  expect(screen.queryByRole("button", { name: /View changes/ })).toBeNull();
+  fireEvent.click(container.querySelector('[row-id="changed"] [col-id="original"]')!);
+  expect(select).not.toHaveBeenCalled();
+  rerender(<RecordsGrid pairs={pairs} theme="light" hasRun onSelect={select} />);
+  await screen.findByRole("button", { name: "View changes for record changed" });
+  expect(screen.queryByRole("button", { name: "View changes for record same" })).toBeNull();
+  fireEvent.click(container.querySelector('[row-id="same"] [col-id="original"]')!);
+  expect(select).not.toHaveBeenCalled();
+  for (const pair of pairs.slice(1)) {
+    const button = await screen.findByRole("button", { name: `View changes for record ${pair.original.id}` });
+    fireEvent.click(button);
+    expect(select).toHaveBeenLastCalledWith(pair, button);
+  }
+});
