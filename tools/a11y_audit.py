@@ -123,7 +123,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     async def audit(screen: str) -> None:
         width = (page.viewport_size or {})["width"]
         await run_axe(page, f"{theme}-{width}/{screen}", findings)
-        if screen.startswith(("csv-", "saved-")):
+        if screen.startswith(("csv-", "saved-", "export")):
             assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (
                 screen + " overflows the viewport"
             )
@@ -143,6 +143,11 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
 
     await page.goto(UI)
     await page.wait_for_selector("text=Search and collect", timeout=15000)
+    guide = page.get_by_role("link", name=re.compile("X query guide"))
+    await expect(guide).to_have_attribute(
+        "href", "https://docs.x.com/x-api/posts/search/integrate/build-a-query"
+    )
+    await expect(guide).to_have_attribute("target", "_blank")
     if theme == "dark":
         await page.click("[aria-label='Switch to dark mode']")
         await page.wait_for_timeout(200)
@@ -188,6 +193,10 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     async with page.expect_download() as original_download:
         await page.get_by_role("button", name="Download original dataset").click()
     downloaded = await original_download.value
+    assert re.fullmatch(
+        r"csv-import-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-UTC-0500.json",
+        downloaded.suggested_filename,
+    )
     original_path = await downloaded.path()
     assert original_path
     await page.get_by_role("tab", name="Saved datasets").click()
@@ -267,6 +276,32 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.wait_for_timeout(600)
     await audit("export")
 
+    custom = page.get_by_role("checkbox", name="Custom filename for CSV", exact=True)
+    name = page.get_by_role("textbox", name="CSV filename", exact=True)
+    await expect(name).to_have_attribute("readonly", "")
+    await custom.focus()
+    await page.keyboard.press("Space")
+    await page.keyboard.press("Tab")
+    await expect(name).to_be_focused()
+    await name.fill("results.csv")
+    await expect(name).to_have_attribute("aria-invalid", "true")
+    await expect(page.get_by_role("button", name="Download CSV", exact=True)).to_be_disabled()
+    await audit("export-invalid-name")
+    await name.fill("My reviewed posts")
+    await page.keyboard.press("Tab")
+    await expect(page.get_by_role("button", name="Download CSV", exact=True)).to_be_focused()
+    async with page.expect_download() as renamed_download:
+        await page.keyboard.press("Enter")
+    exported = await renamed_download.value
+    assert exported.suggested_filename == "My reviewed posts.csv"
+    path = await exported.path()
+    assert path
+    content = await asyncio.to_thread(pathlib.Path(path).read_text, encoding="utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(content)))
+    reviewed = [row for row in rows if row["label_source"] == "manual"]
+    assert len(reviewed) == 6 and all(row["label"] == "positive" for row in reviewed)
+    await audit("export-custom-name")
+
 
 async def main() -> int:
     """Desktop in both themes plus a phone viewport; return the process exit code."""
@@ -274,13 +309,16 @@ async def main() -> int:
     async with async_playwright() as pw:
         browser = await pw.chromium.launch()
         for theme in ("light", "dark"):
-            page = await browser.new_page(viewport={"width": 1440, "height": 900})
+            page = await browser.new_page(
+                viewport={"width": 1440, "height": 900}, timezone_id="America/Chicago"
+            )
             await walk_stages(page, theme, findings, shots="--screenshots" in sys.argv)
             await page.close()
         phone = await browser.new_page(
             viewport={"width": 390, "height": 844},
             device_scale_factor=2,
             is_mobile=True,
+            timezone_id="America/Chicago",
         )
         await walk_stages(phone, "dark", findings, shots="--screenshots" in sys.argv)
         await phone.close()

@@ -158,7 +158,21 @@ conversions stale. Rerunning preprocessing also marks existing labelled snapshot
 | GET `/dataset/{id}/export.parquet` | Same rows, typed and compressed; the file Task 2 should load |
 | GET `/dataset/{id}/export.xlsx` | Sheet `data` as above; sheet `impact` with per-step statistics |
 | GET `/dataset/{id}/report.md` | Task 1 Markdown report, including a Labels section |
-| POST `/dataset/{id}/save` | `dataset.parquet`, `impact.json`, `manifest.json` under `s3://{bucket}/datasets/{id}/{timestamp}/`; returns `{ "uri": … }` |
+| POST `/dataset/{id}/save` | `{filename}.parquet`, `impact.json`, `manifest.json` under `s3://{bucket}/datasets/{id}/{filename}/{save_id}/`; returns `{ "uri": … }` |
+
+Exports and S3 saves accept an optional `filename` query parameter **without an extension**.
+Use 1–120 ASCII letters, numbers, spaces, hyphens or underscores, starting with a letter or
+number. Invalid names return 422 before generating data or accessing S3. Each endpoint owns
+its extension. Renaming an export does not rename the working dataset or change its contents.
+
+Dataset summaries expose `file_stem`, the default name shared by downloads and S3 saves.
+On collection/import/restore the browser sends its IANA timezone in `X-Time-Zone`; clients
+that omit it use UTC. The name combines a sanitized topic with creation time and UTC offset,
+for example `iphone-duo-2026-09-23_12-15-30-UTC-0500`. CSV and sample imports use `csv-import`
+and `sample-tweets` when no query exists. Names stay stable across processing and X retries.
+New local bundles live at `CHECKPOINT_DIR/_work/{dataset_id}/{file_stem}.json`; legacy flat
+`{dataset_id}.json` files remain readable. Dataset IDs isolate same-second name collisions.
+S3 saves use independent save IDs so repeated saves do not overwrite previous outputs.
 
 ## Account
 

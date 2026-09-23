@@ -5,6 +5,7 @@ import type { CheckpointInfo, CheckpointList, CheckpointStage, DatasetSummary, P
 import { useAsync } from "../../hooks/useAsync";
 import { Notice } from "../ui/Notice";
 import { SkeletonLines } from "../ui/Skeleton";
+import { ExportFile } from "../export/ExportFile";
 
 interface Props { dataset: DatasetSummary; run: PreprocessResponse | null; diagnostics: boolean; onBack: () => void; onStartOver: () => void }
 
@@ -21,6 +22,7 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
   const [uri, setUri] = useState<string | null>(null);
   const [converting, setConverting] = useState<CheckpointStage | null>(null);
   const id = dataset.dataset_id;
+  const defaultName = dataset.file_stem ?? id;
 
   useEffect(() => {
     if (diagnostics) void loadCheckpoints((signal) => api.checkpoints(id, signal));
@@ -48,17 +50,13 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
         <p className="mt-1 text-muted"><span className="tnum">{dataset.record_count.toLocaleString()}</span> posts{run ? `, ${run.applied_steps.length} steps applied` : ", not yet processed"}. Columns: id, source, label, label_source, label_confidence, comprehend_label, comprehend_confidence, created_at, original_text, processed_text, tokens.</p>
       </div>
 
+      <p className="text-sm text-muted">Default filenames use the topic and local date and time when the dataset was created. You can choose a different name for each export; the file type stays fixed.</p>
+
       <ul className="glass-panel divide-y divide-rule">
         {downloads.map((it) => (
-          <li key={it.title} className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-            <div><h3 className="font-semibold">{it.title}</h3><p className="text-sm text-muted">{it.body}</p></div>
-            <button type="button" className="btn shrink-0" disabled={download.loading || (it.needsRun && !run)} onClick={() => void download.run((signal) => api.download(id, it.kind, signal))}>Download</button>
-          </li>
+          <ExportFile key={it.kind} title={it.title} description={it.body} extension={it.kind} defaultName={defaultName} busy={download.loading} disabled={it.needsRun && !run} onExport={(filename) => void download.run((signal) => api.download(id, it.kind, signal, filename))} />
         ))}
-        <li className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div><h3 className="font-semibold">Save to S3</h3><p className="text-sm text-muted">Parquet + impact.json + manifest.json in your bucket, timestamped.</p>{uri && <p className="tnum mt-1 break-all text-xs text-muted">{diagnostics ? `Saved to ${uri}` : "Saved successfully"}</p>}</div>
-          <button type="button" className="btn shrink-0" disabled={save.loading} onClick={async () => { const r = await save.run((s) => api.save(id, s)); if (r) setUri(r.uri ?? "Saved successfully"); }}>{save.loading ? "Saving…" : "Save"}</button>
-        </li>
+        <ExportFile title="Save to S3" description={<>A named Parquet file, impact.json and manifest.json in a new folder for each save.{uri && <p role="status" className="tnum mt-1 break-all text-xs">{diagnostics ? `Saved to ${uri}` : "Saved successfully"}</p>}</>} extension="parquet" defaultName={defaultName} busy={save.loading} action="Save" onExport={async (filename) => { const r = await save.run((signal) => api.save(id, signal, filename)); if (r) setUri(r.uri ?? "Saved successfully"); }} />
       </ul>
       <Notice error={conversion.error ?? download.error ?? save.error ?? checkpoints.error} />
 

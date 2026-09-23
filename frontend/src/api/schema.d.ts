@@ -503,7 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Save to S3
-         * @description Write ``dataset.parquet``, ``impact.json`` and ``manifest.json`` to the data bucket.
+         * @description Write named Parquet data, impact and manifest into a new S3 save folder.
          */
         post: operations["save_dataset_dataset__dataset_id__save_post"];
         delete?: never;
@@ -678,6 +678,8 @@ export interface components {
         DatasetSummary: {
             /** Dataset Id */
             dataset_id: string;
+            /** File Stem */
+            file_stem?: string | null;
             /**
              * Source Type
              * @enum {string}
@@ -1433,6 +1435,7 @@ export interface operations {
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
+                "X-Time-Zone"?: string;
             };
             path?: never;
             cookie?: never;
@@ -1480,6 +1483,7 @@ export interface operations {
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
+                "X-Time-Zone"?: string;
             };
             path?: never;
             cookie?: never;
@@ -1614,6 +1618,7 @@ export interface operations {
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
+                "X-Time-Zone"?: string;
             };
             path: {
                 dataset_id: string;
@@ -2235,7 +2240,10 @@ export interface operations {
     };
     export_csv_dataset__dataset_id__export_csv_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
@@ -2276,7 +2284,10 @@ export interface operations {
     };
     export_excel_dataset__dataset_id__export_xlsx_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
@@ -2317,7 +2328,10 @@ export interface operations {
     };
     export_parquet_dataset__dataset_id__export_parquet_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
@@ -2358,7 +2372,10 @@ export interface operations {
     };
     export_report_dataset__dataset_id__report_md_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;
@@ -2399,7 +2416,10 @@ export interface operations {
     };
     save_dataset_dataset__dataset_id__save_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
             header?: {
                 "X-API-Key"?: string | null;
                 authorization?: string | null;

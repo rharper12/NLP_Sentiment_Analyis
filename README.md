@@ -53,6 +53,12 @@ working JSON files from `backend/data/checkpoints/_work/` (or `CHECKPOINT_DIR/_w
 newest first. Choose a file and click **Open in Clean**. Older files load in pages of 50; Refresh
 updates the list. This picker and its API are unavailable in the deployed runtime.
 
+New JSON filenames use the search topic and the browser's local creation time, for example
+`iphone-duo-2026-09-23_12-15-30-UTC-0500.json`. They live in dataset-ID folders within `_work`
+to avoid collisions; older flat JSON files remain available. Export uses the same default
+name for downloads and S3 data. Select **Custom filename** beside a format to change the name;
+the extension is fixed. Each S3 save gets its own folder and retains earlier saves.
+
 Opening a file creates a fresh dataset and starts Step 2 with all options unchecked. Original
 rows and source labels are retained; later labels, cleaning, analysis, review, and billing state
 are reset. The saved file remains unchanged. **Download original dataset** still provides a

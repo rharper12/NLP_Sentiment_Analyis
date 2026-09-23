@@ -108,7 +108,7 @@ def test_exports_and_report(s3_bucket):
     client, bucket = s3_bucket
     uri = S3Store(bucket, "datasets", client).save(b)
     keys = [o["Key"] for o in client.list_objects_v2(Bucket=bucket)["Contents"]]
-    assert any(k.endswith("dataset.parquet") for k in keys)
+    assert any(k.endswith(".parquet") for k in keys)
     manifest = json.loads(
         client.get_object(Bucket=bucket, Key=next(k for k in keys if k.endswith("manifest.json")))[
             "Body"

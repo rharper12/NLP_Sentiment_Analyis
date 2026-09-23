@@ -1,6 +1,6 @@
 """The user-facing "Save to S3" action.
 
-Writes a timestamped folder containing Parquet data (for Task 2 modelling), the impact report,
+Writes a named folder containing Parquet data (for Task 2 modelling), the impact report,
 and a manifest describing provenance. Separate from the working repository so a user's saved
 outputs are never mixed with transient state.
 """
@@ -8,11 +8,13 @@ outputs are never mixed with transient state.
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sentiment_prep import __version__
 from sentiment_prep.export.parquet_export import to_parquet
+from sentiment_prep.filenames import bundle_file_stem
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle
 from sentiment_prep.presentation import public_report
@@ -24,26 +26,30 @@ logger = get_logger(__name__)
 
 
 class S3Store:
-    """Save a bundle under ``s3://{bucket}/{prefix}/{dataset_id}/{timestamp}/``."""
+    """Named exports beneath dataset/name/save-ID folders; repeat saves never overwrite."""
 
     def __init__(self, bucket: str, prefix: str, client: S3Client) -> None:
         """Write user-facing saves to a bucket.
 
         Args:
         bucket: Destination bucket for user-facing saves.
-        prefix: Key prefix, one folder per dataset and timestamp beneath it.
+        prefix: Key prefix, with an isolated folder for every save beneath it.
         client: boto3 S3 client, shared and owned by the caller.
         """
         self._bucket = bucket
         self._prefix = prefix.strip("/")
         self._client = client
 
-    def save(self, bundle: DatasetBundle, *, diagnostics: bool = False) -> str:
+    def save(
+        self, bundle: DatasetBundle, *, diagnostics: bool = False, filename: str | None = None
+    ) -> str:
         """Write the three files and return the folder URI."""
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        folder = f"{self._prefix}/{bundle.dataset_id}/{stamp}"
+        stamp = datetime.now(UTC).isoformat()
+        stem = filename or bundle_file_stem(bundle)
+        # Separate saves remain distinct even when two requests use the same name and second.
+        folder = f"{self._prefix}/{bundle.dataset_id}/{stem}/{uuid.uuid4().hex}"
 
-        self._put(f"{folder}/dataset.parquet", to_parquet(bundle), "application/octet-stream")
+        self._put(f"{folder}/{stem}.parquet", to_parquet(bundle), "application/octet-stream")
 
         report = (
             public_report(bundle.report, diagnostics=diagnostics).model_dump_json(
@@ -61,6 +67,7 @@ class S3Store:
             "query": bundle.original.query,
             "fetched_at": bundle.original.fetched_at.isoformat(),
             "saved_at": stamp,
+            "filename": f"{stem}.parquet",
             "record_count_original": len(bundle.original.records),
             "record_count_processed": len(bundle.processed.records) if bundle.processed else None,
             "labelled_records": sum(1 for r in bundle.original.records if r.label),

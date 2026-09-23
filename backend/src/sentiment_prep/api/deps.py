@@ -11,14 +11,16 @@ from __future__ import annotations
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
+from fastapi import Header
 
 from sentiment_prep.aws import create_aws_session
 from sentiment_prep.budget import AWS_CONFIG
 from sentiment_prep.config import get_settings
-from sentiment_prep.errors import ConfigurationError
+from sentiment_prep.errors import ConfigurationError, ValidationError
 from sentiment_prep.history.db import require_durable_spend_storage
 from sentiment_prep.history.services import DbLedger
 from sentiment_prep.logging_config import get_logger
@@ -42,6 +44,19 @@ if TYPE_CHECKING:
     from sentiment_prep.pricing.comprehend_price import PriceQuote
 
 logger = get_logger(__name__)
+
+
+def browser_time_zone(
+    name: Annotated[str, Header(alias="X-Time-Zone", max_length=80)] = "UTC",
+) -> ZoneInfo:
+    """Use the browser's IANA zone rather than a cloud server's local clock."""
+    try:
+        return ZoneInfo(name)
+    except (ValueError, ZoneInfoNotFoundError) as exc:
+        raise ValidationError(
+            "X-Time-Zone must be a valid IANA timezone, such as America/Chicago"
+        ) from exc
+
 
 # Generous read timeout for paged fetches, short connect timeout so a dead host fails fast.
 HTTP_TIMEOUT = httpx.Timeout(3.0, connect=1.0, pool=1.0)

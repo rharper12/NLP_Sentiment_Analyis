@@ -57,6 +57,7 @@ const recordSchema: z.ZodType<PostRecord> = z.looseObject({
 
 export const datasetSummarySchema: z.ZodType<DatasetSummary> = z.looseObject({
   dataset_id: z.string(),
+  file_stem: maybe(z.string()),
   source_type: z.enum(["x", "huggingface", "csv"]),
   query: z.string().nullable(),
   window_start: maybe(z.string()),

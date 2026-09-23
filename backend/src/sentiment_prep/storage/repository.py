@@ -53,6 +53,8 @@ class BundleEdit:
             raise ConflictError("This dataset edit has already finished")
         if bundle.dataset_id != self._bundle.dataset_id:
             raise ValidationError("An edit cannot change the dataset id")
+        if bundle.file_stem != self._bundle.file_stem:
+            raise ValidationError("An edit cannot change the saved dataset filename")
         validated = _validated(bundle)
         self._commit(validated)
         self._bundle = validated.model_copy(deep=True)

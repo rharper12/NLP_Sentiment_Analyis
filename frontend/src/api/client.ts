@@ -73,6 +73,7 @@ export const isAbort = (error: unknown) =>
 
 async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
+  headers.set("X-Time-Zone", Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   if (sessionToken) headers.set("Authorization", `Bearer ${sessionToken}`);
 
   let response: Response;
@@ -232,18 +233,18 @@ export const api = {
   convertCheckpoint: (datasetId: string, stage: CheckpointStage, signal?: AbortSignal) =>
     request(`/dataset/${datasetId}/checkpoints/${stage}/parquet`, checkpointInfoSchema, { method: "POST", signal }),
 
-  save: (datasetId: string, signal?: AbortSignal) =>
-    request(`/dataset/${datasetId}/save`, saveResponseSchema, { method: "POST", signal }),
+  save: (datasetId: string, signal?: AbortSignal, filename?: string) =>
+    request(`/dataset/${datasetId}/save${filename === undefined ? "" : `?${new URLSearchParams({ filename })}`}`, saveResponseSchema, { method: "POST", signal }),
 
   spend: (includeXUsage = false, signal?: AbortSignal) =>
     request(`/spend?include_x_usage=${includeXUsage}`, spendSummarySchema, { signal }),
 
   history: (signal?: AbortSignal) => request("/history?limit=25", z.array(historyRunSchema), { signal }),
 
-  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md" | "original.json", signal?: AbortSignal) => {
+  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md" | "original.json", signal?: AbortSignal, customName?: string) => {
     const filename = kind === "md" ? `${datasetId}-report.md` : `${datasetId}.${kind}`;
     const path = kind === "original.json" ? `/dataset/${datasetId}/original.json` : kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
-    const response = await authorizedFetch(path, { signal });
+    const response = await authorizedFetch(`${path}${customName === undefined ? "" : `?${new URLSearchParams({ filename: customName })}`}`, { signal });
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition");
     const supplied = disposition?.match(/filename="([^"\r\n]+)"/i)?.[1];

@@ -13,6 +13,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sentiment_prep.errors import ValidationError
+from sentiment_prep.filenames import FileStem
 
 SourceType = Literal["x", "huggingface", "csv"]
 CheckpointStage = Literal["collected", "processed", "labelled"]
@@ -217,6 +218,7 @@ class DatasetBundle(BaseModel):
     """
 
     dataset_id: str
+    file_stem: FileStem | None = None
     original: Dataset
     processed: Dataset | None = None
     applied_steps: list[str] = Field(default_factory=list)

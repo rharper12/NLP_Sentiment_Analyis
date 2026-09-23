@@ -431,8 +431,8 @@ def test_diagnostics_policy_covers_json_routes_and_exports(
         for suffix in ("csv", "xlsx", "parquet"):
             result = operator.get(f"{root}/export.{suffix}")
             assert result.status_code == 200
-            assert f"{dataset_id}.{suffix}" in result.headers["Content-Disposition"]
-        assert f"{dataset_id}-report.md" in markdown.headers["Content-Disposition"]
+            assert f"{bundle.file_stem}.{suffix}" in result.headers["Content-Disposition"]
+        assert f"{bundle.file_stem}.md" in markdown.headers["Content-Disposition"]
     finally:
         get_settings.cache_clear()
 

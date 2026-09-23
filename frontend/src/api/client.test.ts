@@ -34,6 +34,14 @@ afterEach(() => {
 });
 
 describe("authenticated downloads", () => {
+  it("sends the local timezone and encodes a custom stem while keeping the CSV route", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("contents", { headers: { "Content-Disposition": 'attachment; filename="My results.csv"' } }));
+    await api.download("dataset", "csv", undefined, "My results");
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/dataset/dataset/export.csv?filename=My+results");
+    expect(new Headers(options?.headers).get("X-Time-Zone")).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+    expect(clicked[0].name).toBe("My results.csv");
+  });
   it.each(["csv", "xlsx", "parquet", "md", "original.json"] as const)("downloads %s only after success with the server filename and exact bytes", async (kind) => {
     const bytes = new Uint8Array([1, 7, 255]);
     fetchMock.mockResolvedValueOnce(new Response(bytes, { headers: {

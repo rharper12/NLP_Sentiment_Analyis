@@ -105,6 +105,7 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
             <input id={ids.q} className="field text-lg" value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder='e.g. "lindsay clancy" trial   or   #WWDC -has:links' autoComplete="off" />
             <p className="text-xs text-muted">Choose recent posts or custom historical dates. <code className="rounded bg-surface-2 px-1">lang:en -is:retweet</code> is added unless you set <code className="rounded bg-surface-2 px-1">lang:</code> yourself. X search operators are supported.</p>
+            <a href="https://docs.x.com/x-api/posts/search/integrate/build-a-query" target="_blank" rel="noopener noreferrer" className="self-start text-sm underline underline-offset-4">X query guide: operators and examples <span className="text-xs">(opens in a new tab)</span></a>
             <TimeRangePicker value={range} onChange={setRange} />
             {!xConfigured && <p className="text-xs text-warn-ink">No X token is configured on the server, so this search will be refused. Use the sample dataset to explore.</p>}
           </div>

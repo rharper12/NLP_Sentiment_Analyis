@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from sentiment_prep.analysis.metrics import DatasetMetrics
+from sentiment_prep.filenames import FileStem
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
 from sentiment_prep.models import Record, SentimentLabel, SourceType
 from sentiment_prep.preprocessing import StepGroup
@@ -41,6 +42,7 @@ class DatasetSummary(BaseModel):
     """Enough about a dataset for the UI header and the loader result."""
 
     dataset_id: str
+    file_stem: FileStem | None = None
     source_type: SourceType
     query: str | None
     window_start: datetime | None = None

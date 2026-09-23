@@ -49,14 +49,27 @@ class LocalRepository:
         self._root = root
         root.mkdir(parents=True, exist_ok=True)
 
-    def _path(self, dataset_id: str) -> Path:
+    def _base(self, dataset_id: str) -> Path:
         if not DATASET_ID.fullmatch(dataset_id):
             raise ValidationError("Invalid dataset id")
-        return self._root / f"{dataset_id}.json"
+        return self._root / dataset_id
+
+    def _path(self, dataset_id: str) -> Path:
+        """Read new named files and existing flat journals without migrating user data."""
+        folder = self._base(dataset_id)
+        legacy = folder.with_suffix(".json")
+        if legacy.exists() or legacy.is_symlink():
+            return legacy
+        if folder.is_symlink():
+            raise ValidationError("Saved dataset folder must not be a symbolic link")
+        files = list(folder.glob("*.json"))
+        if len(files) > 1:
+            raise ValidationError("Saved dataset folder must contain exactly one JSON file")
+        return files[0] if files else legacy
 
     @contextmanager
     def _lock(self, dataset_id: str) -> Iterator[None]:
-        with self._path(dataset_id).with_suffix(".lock").open("a") as lock:
+        with self._base(dataset_id).with_suffix(".lock").open("a") as lock:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -69,7 +82,10 @@ class LocalRepository:
     def _write(self, bundle: DatasetBundle) -> None:
         bundle = DatasetBundle.model_validate(bundle.model_dump())
         path = self._path(bundle.dataset_id)
-        with NamedTemporaryFile(dir=self._root, suffix=".tmp", delete=False) as temporary:
+        if bundle.file_stem and not path.exists():
+            path = self._base(bundle.dataset_id) / f"{bundle.file_stem}.json"
+            path.parent.mkdir(exist_ok=True)
+        with NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as temporary:
             tmp = Path(temporary.name)
             try:
                 temporary.write(bundle.model_dump_json().encode())
@@ -106,8 +122,13 @@ class LocalRepository:
     def list_files(self, offset: int, limit: int) -> LocalDatasetPage:
         """List metadata without deserializing every potentially large working bundle."""
         files = []
-        for path in self._root.glob("*.json"):
-            if not DATASET_ID.fullmatch(path.stem):
+        # One level only: dataset-ID folders keep same-second topic names collision-free.
+        candidates = [(path.stem, path) for path in self._root.glob("*.json")]
+        for folder in self._root.iterdir():
+            if DATASET_ID.fullmatch(folder.name) and not folder.is_symlink() and folder.is_dir():
+                candidates.extend((folder.name, path) for path in folder.glob("*.json"))
+        for dataset_id, path in candidates:
+            if not DATASET_ID.fullmatch(dataset_id):
                 continue
             try:
                 info = path.lstat()
@@ -116,7 +137,7 @@ class LocalRepository:
             if stat.S_ISREG(info.st_mode):
                 files.append(
                     LocalDatasetFile(
-                        dataset_id=path.stem,
+                        dataset_id=dataset_id,
                         filename=path.name,
                         bytes=info.st_size,
                         modified_at=datetime.fromtimestamp(info.st_mtime, UTC),

@@ -13,10 +13,11 @@ import threading
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import anyio
 from botocore.exceptions import BotoCoreError
@@ -69,6 +70,7 @@ from sentiment_prep.errors import (
 from sentiment_prep.export.csv_export import to_csv
 from sentiment_prep.export.excel_export import to_excel
 from sentiment_prep.export.parquet_export import csv_to_parquet, to_parquet
+from sentiment_prep.filenames import FileStem, bundle_file_stem, default_file_stem
 from sentiment_prep.history import db
 from sentiment_prep.history import services as history
 from sentiment_prep.labeling import service as labeling
@@ -116,6 +118,10 @@ DISCONNECT_POLL_SECONDS = 0.25
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 RepoDep = Annotated[BundleRepository, Depends(deps.get_repository)]
 CheckpointDep = Annotated[CheckpointStore, Depends(deps.get_checkpoint_store)]
+TimeZoneDep = Annotated[ZoneInfo, Depends(deps.browser_time_zone)]
+FilenameQuery = Annotated[
+    FileStem | None, Query(description="Filename without its fixed extension")
+]
 
 
 # --- system -----------------------------------------------------------------------------------
@@ -182,6 +188,7 @@ async def load_dataset(
     repo: RepoDep,
     checkpoints: CheckpointDep,
     settings: SettingsDep,
+    zone: TimeZoneDep,
 ) -> DatasetSummary:
     """Fetch up to ``limit`` records.
 
@@ -209,7 +216,7 @@ async def load_dataset(
         try:
             if body.source == "x":
                 summary = await anyio.to_thread.run_sync(
-                    lambda: _collect_x(body, repo, checkpoints, settings, stop.is_set)
+                    lambda: _collect_x(body, repo, checkpoints, settings, stop.is_set, zone=zone)
                 )
             else:
                 assert source is not None
@@ -229,7 +236,7 @@ async def load_dataset(
         return summary
     assert dataset is not None
     # Database and checkpoint writes are synchronous; keep them off the event loop.
-    return await anyio.to_thread.run_sync(lambda: _store(dataset, repo, checkpoints))
+    return await anyio.to_thread.run_sync(lambda: _store(dataset, repo, checkpoints, zone=zone))
 
 
 @router.post(
@@ -239,13 +246,14 @@ async def upload_dataset(
     repo: RepoDep,
     checkpoints: CheckpointDep,
     file: Annotated[UploadFile, File()],
+    zone: TimeZoneDep,
     limit: int = Query(MAX_UPLOAD_RECORDS, ge=1, le=MAX_UPLOAD_RECORDS),
 ) -> DatasetSummary:
     """CSV with a ``text`` column and optional ``label``/``id`` columns."""
     content = await read_csv_upload(file)
     bind_context(source="csv", filename=file.filename, bytes=len(content))
     return await anyio.to_thread.run_sync(
-        lambda: _store(CsvUploadSource(content).fetch(limit=limit), repo, checkpoints)
+        lambda: _store(CsvUploadSource(content).fetch(limit=limit), repo, checkpoints, zone=zone)
     )
 
 
@@ -305,6 +313,7 @@ def restore_local_dataset(
     settings: SettingsDep,
     repo: RepoDep,
     checkpoints: CheckpointDep,
+    zone: TimeZoneDep,
 ) -> DatasetSummary:
     """Validate a local working file and create a fresh run from its original rows."""
     try:
@@ -318,7 +327,7 @@ def restore_local_dataset(
         ) from exc
     if not 1 <= len(saved.original.records) <= MAX_UPLOAD_RECORDS:
         raise ValidationError("Saved dataset must contain between 1 and 5,000 original records")
-    return _store(original_only(saved.original), repo, checkpoints, dedupe=False)
+    return _store(original_only(saved.original), repo, checkpoints, dedupe=False, zone=zone)
 
 
 @router.get(
@@ -640,10 +649,11 @@ def convert_checkpoint(
 )
 def download_original(dataset_id: str, repo: RepoDep) -> Response:
     """Portable original records/provenance, with no processing or paid-work state."""
+    bundle = repo.get(dataset_id)
     return _download(
-        export_original(repo.get(dataset_id).original),
+        export_original(bundle.original),
         "application/json",
-        f"{dataset_id}.original.json",
+        f"{bundle_file_stem(bundle)}.json",
     )
 
 
@@ -653,9 +663,10 @@ def download_original(dataset_id: str, repo: RepoDep) -> Response:
     summary="Download CSV",
     response_class=Response,
 )
-def export_csv(dataset_id: str, repo: RepoDep) -> Response:
+def export_csv(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
     """One row per original record: text, processed text, tokens, labels and provenance."""
-    return _download(to_csv(repo.get(dataset_id)), "text/csv", f"{dataset_id}.csv")
+    bundle = repo.get(dataset_id)
+    return _download(to_csv(bundle), "text/csv", f"{filename or bundle_file_stem(bundle)}.csv")
 
 
 @router.get(
@@ -664,12 +675,15 @@ def export_csv(dataset_id: str, repo: RepoDep) -> Response:
     summary="Download Excel",
     response_class=Response,
 )
-def export_excel(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> Response:
+def export_excel(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> Response:
     """Two sheets: ``data`` and ``impact`` (per-step statistics)."""
+    bundle = repo.get(dataset_id)
     return _download(
-        to_excel(repo.get(dataset_id), diagnostics=settings.diagnostics_enabled),
+        to_excel(bundle, diagnostics=settings.diagnostics_enabled),
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        f"{dataset_id}.xlsx",
+        f"{filename or bundle_file_stem(bundle)}.xlsx",
     )
 
 
@@ -679,10 +693,13 @@ def export_excel(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> Respo
     summary="Download Parquet",
     response_class=Response,
 )
-def export_parquet(dataset_id: str, repo: RepoDep) -> Response:
+def export_parquet(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
     """Same rows as the CSV, typed and compressed. The format Task 2 should load."""
+    bundle = repo.get(dataset_id)
     return _download(
-        to_parquet(repo.get(dataset_id)), "application/octet-stream", f"{dataset_id}.parquet"
+        to_parquet(bundle),
+        "application/octet-stream",
+        f"{filename or bundle_file_stem(bundle)}.parquet",
     )
 
 
@@ -692,12 +709,15 @@ def export_parquet(dataset_id: str, repo: RepoDep) -> Response:
     summary="Task 1 report (Markdown)",
     response_class=Response,
 )
-def export_report(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> Response:
+def export_report(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> Response:
     """Markdown with provenance, measured impact, labelling, and per-step strengths/limitations."""
+    bundle = repo.get(dataset_id)
     return _download(
-        render_report(repo.get(dataset_id), diagnostics=settings.diagnostics_enabled).encode(),
+        render_report(bundle, diagnostics=settings.diagnostics_enabled).encode(),
         "text/markdown; charset=utf-8",
-        f"{dataset_id}-report.md",
+        f"{filename or bundle_file_stem(bundle)}.md",
     )
 
 
@@ -708,10 +728,14 @@ def export_report(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> Resp
     response_model_exclude_none=True,
     summary="Save to S3",
 )
-def save_dataset(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> SaveResponse:
-    """Write ``dataset.parquet``, ``impact.json`` and ``manifest.json`` to the data bucket."""
+def save_dataset(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> SaveResponse:
+    """Write named Parquet data, impact and manifest into a new S3 save folder."""
     bind_context(dataset_id=dataset_id)
-    uri = deps.get_s3_store().save(repo.get(dataset_id), diagnostics=settings.diagnostics_enabled)
+    uri = deps.get_s3_store().save(
+        repo.get(dataset_id), diagnostics=settings.diagnostics_enabled, filename=filename
+    )
     return SaveResponse(uri=uri if settings.diagnostics_enabled else None)
 
 
@@ -776,6 +800,8 @@ def _collect_x(
     checkpoints: CheckpointStore,
     settings: Settings,
     should_stop: Callable[[], bool] | None = None,
+    *,
+    zone: tzinfo = UTC,
 ) -> DatasetSummary:
     """Stable request identity plus the existing exclusive edit, across all page slices."""
     # Validate durable spend storage/token before creating a job. No paid work occurs here.
@@ -788,6 +814,7 @@ def _collect_x(
     except NotFoundError:
         bundle = DatasetBundle(
             dataset_id=dataset_id,
+            file_stem=default_file_stem(body.query, "x", zone),
             original=Dataset(
                 records=[],
                 source_type="x",
@@ -834,7 +861,12 @@ def _collect_x(
 
 
 def _store(
-    dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore, *, dedupe: bool = True
+    dataset: Dataset,
+    repo: BundleRepository,
+    checkpoints: CheckpointStore,
+    *,
+    dedupe: bool = True,
+    zone: tzinfo = UTC,
 ) -> DatasetSummary:
     """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
 
@@ -851,7 +883,11 @@ def _store(
                     "filtered_out": {**dataset.filtered_out, **removed},
                 }
             )
-    bundle = DatasetBundle(dataset_id=uuid.uuid4().hex[:12], original=dataset)
+    bundle = DatasetBundle(
+        dataset_id=uuid.uuid4().hex[:12],
+        original=dataset,
+        file_stem=default_file_stem(dataset.query, dataset.source_type, zone),
+    )
     bind_context(dataset_id=bundle.dataset_id)
     bundle = checkpoint_bundle(checkpoints, bundle, "collected")
     repo.save(bundle)
@@ -877,6 +913,7 @@ def _summary(bundle: DatasetBundle) -> DatasetSummary:
         )
     return DatasetSummary(
         dataset_id=bundle.dataset_id,
+        file_stem=bundle_file_stem(bundle),
         source_type=dataset.source_type,
         query=dataset.query,
         window_start=dataset.window_start,
