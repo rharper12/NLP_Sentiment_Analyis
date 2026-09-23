@@ -28,7 +28,7 @@ dev = [
     "ruff",
     "mypy",
     "types-PyYAML",
-    "boto3-stubs[bedrock-runtime,comprehend,pricing,s3,ssm]",
+    "boto3-stubs[comprehend,pricing,s3,ssm]",
 ]
 
 [build-system]

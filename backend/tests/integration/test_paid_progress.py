@@ -20,7 +20,7 @@ from sentiment_prep.sources.x_search import XSearchSource
 from sentiment_prep.storage.checkpoints import LocalCheckpointStore
 from sentiment_prep.storage.local_repository import LocalRepository
 from sentiment_prep.storage.repository import S3Repository
-from tests.conftest import FakeBedrock, FakeComprehend, make_dataset
+from tests.conftest import FakeComprehend, make_dataset
 
 
 def test_local_journal_reloads_paid_results_and_excludes_independent_writers(tmp_path):
@@ -167,52 +167,6 @@ def test_x_saved_page_cursor_survives_failed_next_page_and_new_app(
     assert app_client().post("/dataset/load", json={**body, "query": "changed"}).status_code == 400
 
 
-def test_slow_analysis_resumes_vectors_and_persists_cleaning_first(s3_bucket, monkeypatch):
-    s3, bucket = s3_bucket
-    repo = S3Repository(bucket, s3)
-    repo.save(
-        DatasetBundle(dataset_id="analysis", original=make_dataset(["LOUD TEXT", "OTHER TEXT"]))
-    )
-    now = [0.0]
-    monkeypatch.setattr(budget, "time", SimpleNamespace(monotonic=lambda: now[0]))
-    calls = []
-
-    class SlowBedrock(FakeBedrock):
-        def invoke_model(self, **kwargs):
-            assert repo.get("analysis").processed is not None
-            calls.append(kwargs["body"])
-            now[0] += 6
-            return super().invoke_model(**kwargs)
-
-    request = PreprocessRequest(steps=["lowercase"], explain=False)
-    provider = SlowBedrock()
-    partial = True
-    for _ in range(4):
-        token = budget.current_budget.set(budget.RequestBudget(now[0] + 22))
-        try:
-            with S3Repository(bucket, s3).edit("analysis") as edit:
-                saved, _, _ = run_preprocessing(
-                    edit.bundle,
-                    request,
-                    Settings(_env_file=None),
-                    None,
-                    provider,
-                    persist=edit.save,
-                )
-            partial = saved.analysis.partial
-        finally:
-            budget.current_budget.reset(token)
-        if not partial:
-            break
-    assert not partial and saved.report.embedding_drift is not None
-    assert len(calls) == len(set(calls)) == 4
-    with repo.edit("analysis") as edit:
-        run_preprocessing(
-            edit.bundle, request, Settings(_env_file=None), None, provider, persist=edit.save
-        )
-    assert len(calls) == 4
-
-
 def test_comprehend_deadline_stops_before_next_batch_and_resume_skips_success(
     s3_bucket, monkeypatch
 ):
@@ -274,37 +228,6 @@ def test_provider_success_before_failed_commit_is_explicitly_ambiguous(s3_bucket
     assert provider.calls == 2  # Recovery cannot infer the lost provider response.
 
 
-def test_explanation_failure_keeps_paid_embeddings_and_retries_only_explanation(s3_bucket):
-    s3, bucket = s3_bucket
-    repo = S3Repository(bucket, s3)
-    repo.save(DatasetBundle(dataset_id="explain", original=make_dataset(["LOUD TEXT"])))
-
-    class Provider(FakeBedrock):
-        embeddings = 0
-        explanations = 0
-
-        def invoke_model(self, **kwargs):
-            self.embeddings += 1
-            return super().invoke_model(**kwargs)
-
-        def converse(self, **kwargs):
-            self.explanations += 1
-            assert repo.get("explain").report.embedding_drift is not None
-            if self.explanations == 1:
-                raise ReadTimeoutError(endpoint_url="https://offline.test")
-            return super().converse(**kwargs)
-
-    provider = Provider()
-    request = PreprocessRequest(steps=["lowercase"])
-    for _ in range(2):
-        with S3Repository(bucket, s3).edit("explain") as edit:
-            saved, _, _ = run_preprocessing(
-                edit.bundle, request, Settings(_env_file=None), None, provider, persist=edit.save
-            )
-    assert not saved.analysis.partial and saved.report.explanation
-    assert provider.embeddings == 2 and provider.explanations == 2
-
-
 def test_analysis_comprehend_cache_survives_later_batch_failure(s3_bucket):
     s3, bucket = s3_bucket
     repo = S3Repository(bucket, s3)
@@ -322,15 +245,15 @@ def test_analysis_comprehend_cache_survives_later_batch_failure(s3_bucket):
             return super().batch_detect_sentiment(TextList, LanguageCode)
 
     provider = Provider()
-    request = PreprocessRequest(steps=["lowercase"], explain=False)
+    request = PreprocessRequest(steps=["lowercase"])
     with repo.edit("compare") as edit:
         saved, _, _ = run_preprocessing(
-            edit.bundle, request, Settings(_env_file=None), provider, None, persist=edit.save
+            edit.bundle, request, Settings(_env_file=None), provider, persist=edit.save
         )
     assert saved.analysis.partial
     with S3Repository(bucket, s3).edit("compare") as edit:
         saved, _, _ = run_preprocessing(
-            edit.bundle, request, Settings(_env_file=None), provider, None, persist=edit.save
+            edit.bundle, request, Settings(_env_file=None), provider, persist=edit.save
         )
     assert not saved.analysis.partial and saved.report.sentiment.comparable_records == 60
     assert all(not (set(batch) & set(batches[0])) for batch in batches[1:])

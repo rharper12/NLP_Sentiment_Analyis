@@ -9,7 +9,7 @@ Browser (React 19, Vite)  ──HTTPS──►  API Gateway (HTTP API)  ──�
                                        │                             │      runs, spend ledger
                                        ├─ sources/      X · HF · CSV │
                                        ├─ preprocessing/ 6 steps     │
-                                       ├─ analysis/     metrics · Comprehend · Titan · Bedrock
+                                       ├─ analysis/     metrics · Comprehend
                                        ├─ export/       csv · xlsx · parquet
                                        └─ storage/      bundle repository · S3 saves
                                                                      │
@@ -88,10 +88,8 @@ Money is `Decimal` end to end on the server: the Price List price is parsed from
 without passing through `float`, `cost_for_units` is the single place it is multiplied, and the
 value becomes a `float` only in the JSON response. Comprehend labelling is priced before it runs (`labels/estimate`) from the live Price List rate, refused without an explicit
 `confirm_cost`, done in resumable slices that skip already-labelled records, and checkpointed after
-every slice. The same `ComprehendScorer` serves the Analyze comparison, with a per-instance cache
-keyed on text hash.
+every slice. The same `ComprehendScorer` serves the Analyze comparison, with a text-hash cache persisted in the working bundle.
 
-X reads are the only variable cost. `SpendGuard` reserves reads before each page and refuses when
+X reads have explicit spend caps. `SpendGuard` reserves reads before each page and refuses when
 either cap would be exceeded; the ledger is append-only in the database so concurrent invocations
-cannot undercount. Comprehend results are cached by text hash per scorer instance; embedding drift
-uses a fixed sample of 50; the explainer receives numbers only.
+cannot undercount. Comprehend results are cached by text hash and saved incrementally in the working bundle.

@@ -51,7 +51,7 @@ export function SummaryBlock({ s }: { s: LabelSummary }) {
           <p className="mt-3 text-sm">
             Reviewers agreed with Comprehend on{" "}
             <strong className="tnum">{(s.manual_vs_comprehend_agreement * 100).toFixed(1)}%</strong>{" "}
-            of {s.comparable_records.toLocaleString()} comparable posts across all manual labels ({s.disagreements} disagreements). Quote this in your write-up.
+            of {s.comparable_records.toLocaleString()} comparable posts across all manual labels ({s.disagreements} disagreements). This describes reviewed posts only, not overall accuracy. Prioritizing low-confidence posts makes this a targeted error check.
           </p>
         )}
       </section>

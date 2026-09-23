@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_RANGE, rangeError, toWindow, type TimeRange } from "./TimeRange";
 
@@ -6,7 +6,15 @@ const custom = (from: string, to: string): TimeRange => ({ preset: "custom", fro
 const iso = (daysAgo: number) =>
   new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
+afterEach(() => vi.useRealTimers());
+
 describe("toWindow", () => {
+  it("leaves a transit margin inside the recent-search window for the seven-day preset", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
+    expect(toWindow(DEFAULT_RANGE).start).toBe("2026-09-14T12:01:00.000Z");
+  });
+
   it("sends only a start for a preset, leaving the end open at now", () => {
     const { start, end } = toWindow({ ...DEFAULT_RANGE, preset: "24h" });
     expect(end).toBeUndefined();
@@ -33,8 +41,16 @@ describe("rangeError", () => {
     expect(rangeError(custom(iso(0), iso(3)))).toMatch(/before/);
   });
 
-  it("rejects a range that reaches past what recent search serves", () => {
-    expect(rangeError(custom(iso(30), iso(0)))).toMatch(/7 days/);
+  it("accepts September 9 through today using the archive", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
+    expect(rangeError(custom("2026-09-09", "2026-09-21"))).toBeNull();
+    expect(rangeError(custom(iso(30), iso(0)))).toBeNull();
+  });
+
+  it("rejects future dates and dates before the archive", () => {
+    expect(rangeError(custom(iso(3), iso(-1)))).toMatch(/today/);
+    expect(rangeError(custom("2006-02-28", iso(0)))).toMatch(/March 2006/);
   });
 
   it("rejects an incomplete range rather than guessing the missing end", () => {

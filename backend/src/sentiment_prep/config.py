@@ -49,8 +49,7 @@ class Settings(BaseSettings):
     data_bucket: str | None = None
     dataset_prefix: str = "datasets"
 
-    # X API v2. Recent search only covers the last seven days and every returned post is
-    # billed, so two spend caps guard against runaway pagination.
+    # X API v2. Recent and full-archive search share these per-fetch and daily spend caps.
     x_bearer_token: str | None = None
     x_bearer_token_ssm_path: str | None = None
     x_api_base_url: str = "https://api.x.com/2"
@@ -91,11 +90,6 @@ class Settings(BaseSettings):
     # /health only when this is true. Defaults to local runtime; deployed builds hide them.
     diagnostics: bool | None = None
 
-    bedrock_enabled: bool = True
-    bedrock_text_model_id: str = "anthropic.claude-3-5-haiku-20241022-v1:0"
-    embed_model_id: str = "amazon.titan-embed-text-v2:0"
-    embed_sample_size: int = Field(default=50, ge=5, le=200)
-
     # Shared secret required on every request when set. Unset locally; required in Lambda.
     api_key: str | None = None
     api_key_ssm_path: str | None = None
@@ -105,6 +99,11 @@ class Settings(BaseSettings):
     # History database. Empty = SQLite (./data locally, /tmp in Lambda, which is ephemeral).
     database_url: str | None = None
     database_url_ssm_path: str | None = None
+
+    @property
+    def local_datasets_available(self) -> bool:
+        """The local picker reads the working journal used by the development runtime."""
+        return self.runtime == "local"
 
     @property
     def diagnostics_enabled(self) -> bool:

@@ -40,7 +40,7 @@ fields @timestamp, reads, reads_today, estimated_cost_usd | filter message = "x_
 
 # Every enrichment that degraded
 fields @timestamp, request_id, message | filter message in ["comprehend_comparison_failed",
-  "embedding_drift_failed", "explanation_failed"]
+  "analysis_enrichment_failed"]
 
 # Cold starts
 fields @timestamp, duration_ms | filter message = "database_ready"
@@ -56,8 +56,8 @@ Locally, `make dev-api` prints coloured lines; pipe through `grep request_id=<id
 | `request_started` / `request_finished` / `request_crashed` | middleware | method, path, status, duration_ms |
 | `request_rejected` | AppError handler | error, status |
 | `dataset_stored` | routes | records, source |
-| `x_fetch_started` / `x_page_received` / `x_fetch_complete` | sources.x_search | query, requested, returned, reads_billed |
-| `x_fetch_truncated_by_cap` / `x_rate_limited` | sources.x_search | reason / attempt, wait_seconds |
+| `x_page_received` (DEBUG) / `x_fetch_complete` | sources.x_search | returned, reads_billed, filtered_out, has_more; completion also has requested, complete, truncated_reason |
+| `x_rate_limited` | sources.x_search | attempt, wait_seconds (provider HTTP 429 only) |
 | `x_reads_consumed` | spend_guard | reads, released, reads_this_fetch, reads_today, estimated_cost_usd |
 | `spend_reservation_refused` | history.services | day, reads, cap |
 | `client_disconnected_during_fetch` | routes | (request context) |
@@ -65,8 +65,6 @@ Locally, `make dev-api` prints coloured lines; pipe through `grep request_id=<id
 | `step_applied` | preprocessing.base | all StepResult fields except sample_diffs |
 | `pipeline_complete` | preprocessing.pipeline | steps, records_in, records_out, duration_ms |
 | `sentiment_comparison` | analysis.comprehend_scorer | agreement, distributions |
-| `embedding_drift` | analysis.embeddings | sample, mean_cosine_distance |
-| `explanation_generated` | analysis.bedrock_explainer | chars |
 | `*_failed` | api.service | exc_info |
 | `comprehend_batch_scored` / `comprehend_labels_applied` | analysis / labeling | documents / records, units, cost_usd |
 | `comprehend_price_fetched` / `comprehend_price_lookup_failed` / `comprehend_price_not_found` | pricing | sku, price / no provider details / region |
@@ -89,7 +87,10 @@ Locally, `make dev-api` prints coloured lines; pipe through `grep request_id=<id
 - 503 with "No X bearer token": check `X_BEARER_TOKEN` (local) or that the Lambda role can read the
   SSM path (`ssm:GetParameter` on the exact ARN). `GET /health` shows `x_configured`.
 - Fewer records than requested: read `truncated_reason` in the response; `x_fetch_complete` has
-  the same value plus `reads_billed`.
+  the same value plus `reads_billed`, filter totals and whether more pages remain. X targets
+  unique retained rows, fetching replacements after duplicate removal within the read caps.
+  `request budget reached` means resume the next work slice; `rate limited` means X returned
+  HTTP 429. Neither means the search has exhausted its matching posts.
 - `report.sentiment` is null: `report.warnings` names the cause; search
   `comprehend_comparison_failed` for the trace. Usually a missing IAM action or an unsupported region.
 - History tab empty after a deploy: `database_ephemeral: true` in `/health` means SQLite on `/tmp`.

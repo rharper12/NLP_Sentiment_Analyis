@@ -29,8 +29,8 @@ class LoadRequest(BaseModel):
     )
     start_time: datetime | None = Field(
         default=None,
-        description="Oldest post to return (X only). Clamped to seven days ago, the limit of "
-        "recent search.",
+        description="Oldest post to return (X only). Dates older than seven days automatically "
+        "use full-archive search, requiring pay-per-use or Enterprise access.",
     )
     end_time: datetime | None = Field(
         default=None, description="Newest post to return (X only). Clamped to a few seconds ago."
@@ -83,7 +83,6 @@ class PreprocessRequest(BaseModel):
         description="Step names in execution order; empty analyzes the original text unchanged."
     )
     options: StepOptions = Field(default_factory=StepOptions)
-    explain: bool = Field(default=True, description="Ask Bedrock for a prose explanation.")
 
 
 class PreprocessResponse(BaseModel):
@@ -149,6 +148,7 @@ class ReviewPage(BaseModel):
 
     total: int
     offset: int
+    reviewed: int = 0
     items: list[Record]
 
 
@@ -212,7 +212,6 @@ class HistoryRun(BaseModel):
     vocab_before: int
     vocab_after: int
     sentiment_agreement: float | None
-    embedding_drift: float | None
     duration_ms: float | None = None
     created_at: str
 
@@ -235,4 +234,13 @@ class HealthResponse(BaseModel):
     database_ephemeral: bool | None = None
     checkpoints: Literal["local", "s3"] | None = None
     comprehend_enabled: bool | None = None
-    bedrock_enabled: bool | None = None
+    local_datasets_available: bool | None = None
+
+
+class CsvValidation(BaseModel):
+    """Read-only validation results before any collection or checkpoint writes."""
+
+    record_count: int
+    skipped_empty: int
+    labelled_count: int
+    preview: list[Record]

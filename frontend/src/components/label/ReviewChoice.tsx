@@ -7,26 +7,31 @@ import { convertOnUnitSwitch, maxFor, normaliseSize, resolveSample } from "./sam
 
 interface Props {
   total: number;
+  unreviewed?: number;
+  machineScored?: number;
   onChoose: (mode: ReviewMode, size: number, unit: SampleUnit) => void;
   onBack: () => void;
 }
 
 const MODES: [ReviewMode, string, string][] = [
+  ["low_confidence", "Lowest confidence first (recommended)", "Find likely errors: unscored posts first, then the lowest Comprehend scores."],
   ["none", "Skip review", "Keep Comprehend's labels as they are."],
-  ["sample", "Review a sample", "Enough to measure how often you disagree."],
+  ["sample", "Review a sample", "Random selection for a broader check; agreement is not accuracy."],
   ["all", "Review everything", "Every post gets a human label."],
 ];
 
 /** Choose the review scope. Sample size is editable as a post count or a percent of the dataset. */
-export function ReviewChoice({ total, onChoose, onBack }: Props) {
-  const [mode, setMode] = useState<ReviewMode>("sample");
+export function ReviewChoice({ total, unreviewed = total, machineScored = 0, onChoose, onBack }: Props) {
+  const [mode, setMode] = useState<ReviewMode>(machineScored > 0 && unreviewed > 0 ? "low_confidence" : "sample");
   const [unit, setUnit] = useState<SampleUnit>("count");
   const [raw, setRaw] = useState("150");
   const id = useId();
 
-  const sample = resolveSample(raw, unit, total);
+  const population = mode === "low_confidence" ? unreviewed : total;
+  const sized = mode === "sample" || mode === "low_confidence";
+  const sample = resolveSample(raw, unit, population);
   const effective = mode === "all" ? total : mode === "none" ? 0 : sample.posts;
-  const max = maxFor(unit, total);
+  const max = maxFor(unit, population);
 
   const switchUnit = (next: SampleUnit) => {
     if (next === unit) return;
@@ -37,7 +42,7 @@ export function ReviewChoice({ total, onChoose, onBack }: Props) {
   return (
     <div className="glass-panel flex flex-col gap-4 p-5">
       <h3 className="font-semibold">How much will you review by hand?</h3>
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2">
         {MODES.map(([m, title, blurb]) => (
           <label key={m} data-selected={mode === m} className="selectable flex cursor-pointer flex-col gap-1 p-3">
             <span className="flex items-center gap-2 font-medium">
@@ -49,7 +54,7 @@ export function ReviewChoice({ total, onChoose, onBack }: Props) {
         ))}
       </div>
 
-      {mode === "sample" && (
+      {sized && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-col gap-1">
@@ -63,7 +68,7 @@ export function ReviewChoice({ total, onChoose, onBack }: Props) {
                 aria-describedby={`${id}-help`}
                 aria-invalid={!sample.valid}
                 value={raw}
-                onChange={(e) => setRaw(normaliseSize(e.target.value, unit, total))}
+                onChange={(e) => setRaw(normaliseSize(e.target.value, unit, population))}
                 className="field tnum w-28"
               />
             </div>
@@ -79,8 +84,7 @@ export function ReviewChoice({ total, onChoose, onBack }: Props) {
             {sample.valid ? (
               <>
                 <span className="tnum font-medium text-ink">{sample.posts.toLocaleString()} posts</span>{" "}
-                <span className="tnum">({sample.percent}% of {total.toLocaleString()})</span>, chosen at random.{" "}
-                100–150 is enough to estimate agreement within a few points.
+                <span className="tnum">({sample.percent}% of {population.toLocaleString()})</span>. {mode === "low_confidence" ? "Already reviewed posts are excluded. This selection helps find errors; it cannot estimate overall accuracy." : "Chosen at random. Larger samples reduce uncertainty; agreement with Comprehend is not an accuracy score."}
               </>
             ) : (
               <span className="text-warn-ink">
@@ -96,8 +100,8 @@ export function ReviewChoice({ total, onChoose, onBack }: Props) {
         <button
           type="button"
           className="btn-primary"
-          disabled={mode === "sample" && !sample.valid}
-          onClick={() => onChoose(mode, mode === "sample" ? sample.posts : 1, "count")}
+          disabled={(sized && !sample.valid) || (mode !== "none" && effective === 0)}
+          onClick={() => onChoose(mode, sized ? sample.posts : 1, "count")}
         >
           {mode === "none" ? "Skip review" : `Start reviewing ${effective.toLocaleString()} posts`}
         </button>

@@ -93,15 +93,16 @@ intensity words ("very", "too") by removing them from the stopword list.
 
 **Comparing techniques for a write-up (Task 1).**
 Run the full pipeline, then re-run with one step off at a time. The waterfall shows each step's
-vocabulary effect; the sentiment agreement shows meaning preserved. Export the report after each
+vocabulary effect; sentiment agreement measures prediction consistency. Export the report after each
 run; the differences are your "strengths and limitations" evidence.
 
 ## How to read the app's numbers when deciding
 
-- Vocabulary dropped a lot, agreement stayed high → the step removed noise. Keep it.
+- Vocabulary dropped and agreement stayed high → inspect what was removed; these numbers alone
+  do not prove noise reduction or preserved meaning.
 - Vocabulary barely moved → the step is not doing much on this data; consider dropping it to
   keep the pipeline simple.
-- Agreement fell noticeably → the step changed meaning. Look at sample diffs in the Records tab
+- Agreement fell noticeably → predictions changed. Look at sample diffs in the Records tab
   for what changed; negation removal and over-aggressive lemmatization are the usual culprits.
-- Embedding drift high but agreement high → the text looks different to an embedding model but a
-  classifier still agrees; fine for count-based models, a warning sign if you plan to use embeddings.
+- Tokenization can increase counts by splitting punctuation and words differently. Compare
+  representations consistently and evaluate accuracy separately on held-out human-labelled data.

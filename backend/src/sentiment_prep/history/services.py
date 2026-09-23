@@ -78,7 +78,6 @@ def record_run(bundle: DatasetBundle) -> None:
                 sentiment_agreement=bundle.report.sentiment.agreement
                 if bundle.report.sentiment
                 else None,
-                embedding_drift=bundle.report.embedding_drift,
                 duration_ms=sum(x.duration_ms for x in steps),
                 warnings=list(bundle.report.warnings),
             )
@@ -106,7 +105,6 @@ def recent_runs(limit: int = 20) -> list[dict[str, Any]]:
                 "vocab_before": r.vocab_before,
                 "vocab_after": r.vocab_after,
                 "sentiment_agreement": r.sentiment_agreement,
-                "embedding_drift": r.embedding_drift,
                 "duration_ms": r.duration_ms,
                 "created_at": r.created_at.isoformat(),
             }

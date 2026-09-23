@@ -40,12 +40,6 @@ Parameters:
     Type: Number
     Default: 3000
     MinValue: 1
-  BedrockTextModelId:
-    Type: String
-    Default: anthropic.claude-3-5-haiku-20241022-v1:0
-  EmbedModelId:
-    Type: String
-    Default: amazon.titan-embed-text-v2:0
   CorsOrigins:
     Type: String
     Default: http://localhost:5173
@@ -200,12 +194,6 @@ Resources:
                 Effect: Allow
                 Action: pricing:GetProducts
                 Resource: "*"   # Price List API has no resource-level permissions
-              - Sid: InvokeExactlyTwoModels
-                Effect: Allow
-                Action: bedrock:InvokeModel
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockTextModelId}"
-                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${EmbedModelId}"
               - Sid: ReadSecrets
                 Effect: Allow
                 Action: ssm:GetParameter
@@ -237,8 +225,6 @@ Resources:
           DATABASE_URL_SSM_PATH: !If [HasDatabaseUrl, !Ref DatabaseUrlSsmPath, !Ref AWS::NoValue]
           X_MAX_READS_PER_FETCH: !Ref XMaxReadsPerFetch
           X_MAX_READS_PER_DAY: !Ref XMaxReadsPerDay
-          BEDROCK_TEXT_MODEL_ID: !Ref BedrockTextModelId
-          EMBED_MODEL_ID: !Ref EmbedModelId
           CORS_ORIGINS: !Sub "${CorsOrigins},https://${SiteDistribution.DomainName}"
       Events:
         Api:

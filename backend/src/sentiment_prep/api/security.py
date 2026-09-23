@@ -91,3 +91,9 @@ def require_diagnostics(settings: Annotated[Settings, Depends(get_settings)]) ->
     """Operator-only routes are unavailable when diagnostics are disabled."""
     if not settings.diagnostics_enabled:
         raise NotFoundError("Not found")
+
+
+def require_local_datasets(settings: Annotated[Settings, Depends(get_settings)]) -> None:
+    """Prevent the deployed runtime from browsing local dataset files."""
+    if not settings.local_datasets_available:
+        raise NotFoundError("Not found")

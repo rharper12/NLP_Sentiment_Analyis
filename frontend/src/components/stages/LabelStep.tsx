@@ -113,7 +113,7 @@ function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLoc
     <section className="mx-auto flex max-w-4xl flex-col gap-6">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight">Label the posts</h2>
-        <p className="mt-1 text-muted">Task 2 trains and scores a model against known labels. Comprehend gives every post a label in seconds; reviewing a sample by hand tells you how far to trust it.</p>
+        <p className="mt-1 text-muted">Comprehend suggests labels for the overall sentiment of each post. Review uncertain predictions and save your own labels before using them in a model. These labels do not necessarily describe sentiment toward a particular product.</p>
       </div>
 
       <Notice error={error ?? summary.error ?? estimate.error} warnings={summary.error ? persistenceWarnings : summary.data?.warnings ?? persistenceWarnings} />
@@ -149,7 +149,7 @@ function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLoc
           </div>
           <div className="glass-panel flex flex-col gap-3 p-5">
             <h3 className="font-semibold">Label manually</h3>
-            <p className="text-sm text-muted">Read each post and pick the label yourself. Free, slower, and the most trustworthy ground truth. You can label all posts or a sample.</p>
+            <p className="text-sm text-muted">Read each post and pick the label yourself. Use consistent criteria and check ambiguous posts; human labels can also be uncertain. You can label all posts or a sample.</p>
             <button type="button" className="btn mt-auto" onClick={() => setPhase("review-choice")}>Choose what to label by hand</button>
           </div>
           {allLabelled && (
@@ -169,7 +169,7 @@ function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLoc
         </div>
       )}
 
-      {phase === "review-choice" && <ReviewChoice total={sum?.total ?? 0} onChoose={async (mode, size, unit) => {
+      {phase === "review-choice" && <ReviewChoice total={sum?.total ?? 0} unreviewed={(sum?.total ?? 0) - (sum?.manually_reviewed ?? 0)} machineScored={sum?.machine_scored ?? 0} onChoose={async (mode, size, unit) => {
         setError(null);
         const s = await summary.run((signal) => api.chooseReview(datasetId, mode, size, unit, signal));
         if (!s) return;
@@ -181,7 +181,9 @@ function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLoc
 
       {phase === "summary" && (
         <div className="glass-panel flex flex-col gap-4 p-5">
-          <h3 className="font-semibold">Labels ready</h3>
+          <h3 className="font-semibold">{sum && sum.review_sample_size > 0 ? sum.reviewed === sum.review_sample_size ? "Review complete — labels saved" : "Review paused — labels saved" : "Label summary"}</h3>
+          {sum && sum.review_sample_size > 0 && <p role="status" className="text-sm">{sum.reviewed} of {sum.review_sample_size} selected posts have saved manual labels. {sum.reviewed < sum.review_sample_size ? "You can return to this review or export the labels saved so far." : "You can export now or choose more posts to review."}</p>}
+          {sum && sum.review_sample_size > 0 && <button type="button" className="btn self-start" onClick={() => { onReviewActiveChange?.(true); setPhase("reviewing"); }}>Return to selected review</button>}
           {sum ? <SummaryBlock s={sum} /> : <SkeletonLines lines={4} />}
           <div className="flex flex-wrap justify-between gap-3 border-t border-rule pt-4">
             <div className="flex gap-2"><button type="button" className="btn" onClick={() => setPhase("method")}>Label more</button><button type="button" className="btn" onClick={() => setPhase("review-choice")}>Review more</button></div>

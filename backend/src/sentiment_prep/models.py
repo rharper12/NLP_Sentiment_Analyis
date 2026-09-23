@@ -118,8 +118,6 @@ class ReportContent(BaseModel):
     """
 
     sentiment: SentimentComparison | None = None
-    embedding_drift: float | None = None
-    explanation: str | None = None
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -174,7 +172,6 @@ class AnalysisProgress(BaseModel):
     signature: str = ""
     completed: list[str] = Field(default_factory=list)
     sentiment: dict[str, CachedSentiment] = Field(default_factory=dict)
-    vectors: dict[str, list[float]] = Field(default_factory=dict)
     attempts: dict[str, int] = Field(default_factory=dict)
     partial: bool = False
 
@@ -184,6 +181,8 @@ class CollectionProgress(BaseModel):
 
     request: dict[str, str | int | None]
     next_token: str | None = None
+    # Bind pagination tokens to their endpoint across request slices.
+    search_mode: Literal["recent", "all"] | None = None
     reads: int = 0
     # Missing historical accounting is unknown, never silently reported as zero.
     billed_reads: int | None = None
@@ -191,6 +190,16 @@ class CollectionProgress(BaseModel):
     complete: bool = False
     stop_reason: str | None = None
     retry_at: float = 0
+
+    def needs_more_records(self, retained: int) -> bool:
+        """Include old jobs completed before final duplicate removal reduced their count."""
+        target = self.request.get("limit")
+        return not self.complete or (
+            self.next_token is not None
+            and self.stop_reason is None
+            and isinstance(target, int)
+            and retained < target
+        )
 
 
 class CheckpointState(BaseModel):

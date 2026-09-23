@@ -41,7 +41,6 @@ def main() -> int:
     print(f"credentials : {source}")
     print(f"region      : {settings.aws_region}")
     print(f"comprehend  : {'enabled' if settings.comprehend_enabled else 'disabled'}")
-    print(f"bedrock     : {'enabled' if settings.bedrock_enabled else 'disabled'}")
 
     try:
         session = deps.boto_session()

@@ -38,8 +38,9 @@ def test_invalid_limits_are_controlled(client, limit):
         b"text\n" + b"a" * 140000,
     ],
 )
-def test_bad_content_returns_4xx(client, content):
-    response = client.post("/dataset/upload", files={"file": ("innocent.csv", content, "text/csv")})
+@pytest.mark.parametrize("path", ["/dataset/upload", "/dataset/upload/validate"])
+def test_bad_content_returns_4xx(client, content, path):
+    response = client.post(path, files={"file": ("innocent.csv", content, "text/csv")})
     assert response.status_code == 400
 
 
@@ -69,7 +70,8 @@ def test_csv_content_is_authoritative_and_truncation_is_explicit(client):
     )
 
 
-def test_body_is_bounded_before_multipart_parsing_without_content_length():
+@pytest.mark.parametrize("path", ["/dataset/upload", "/dataset/upload/validate"])
+def test_body_is_bounded_before_multipart_parsing_without_content_length(path):
     calls = 0
     messages = []
 
@@ -85,8 +87,6 @@ def test_body_is_bounded_before_multipart_parsing_without_content_length():
     async def send(message):
         messages.append(message)
 
-    asyncio.run(
-        UploadLimitMiddleware(parser)({"type": "http", "path": "/dataset/upload"}, receive, send)
-    )
+    asyncio.run(UploadLimitMiddleware(parser)({"type": "http", "path": path}, receive, send))
     assert calls == MAX_UPLOAD_BODY_BYTES // 65536 + 1
     assert messages[0]["status"] == 413

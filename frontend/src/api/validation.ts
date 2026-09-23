@@ -15,6 +15,8 @@ import { z } from "zod";
 
 import type {
   CheckpointInfo,
+  CsvValidation,
+  LocalDatasetPage,
   CheckpointList,
   DatasetMetrics,
   DatasetSummary,
@@ -103,8 +105,6 @@ const sentimentComparisonSchema: z.ZodType<SentimentComparison> = z.looseObject(
 const impactReportSchema: z.ZodType<ImpactReport> = z.looseObject({
   steps: z.array(stepResultSchema),
   sentiment: maybe(sentimentComparisonSchema),
-  embedding_drift: maybe(z.number()),
-  explanation: maybe(z.string()),
   warnings: z.array(z.string()).optional(),
 });
 
@@ -196,6 +196,7 @@ export const labelSummarySchema: z.ZodType<LabelSummary> = z.looseObject({
 });
 
 export const reviewPageSchema: z.ZodType<ReviewPage> = z.looseObject({
+  reviewed: z.number().default(0),
   total: z.number(),
   offset: z.number(),
   items: z.array(recordSchema),
@@ -241,7 +242,6 @@ export const historyRunSchema: z.ZodType<HistoryRun> = z.looseObject({
   vocab_before: z.number(),
   vocab_after: z.number(),
   sentiment_agreement: z.union([z.number(), z.null()]),
-  embedding_drift: z.union([z.number(), z.null()]),
   duration_ms: maybe(z.number()),
   created_at: z.string(),
 });
@@ -258,7 +258,21 @@ export const healthSchema: z.ZodType<HealthResponse> = z.looseObject({
   database_ephemeral: maybe(z.boolean()),
   checkpoints: maybe(z.enum(["local", "s3"])),
   comprehend_enabled: maybe(z.boolean()),
-  bedrock_enabled: maybe(z.boolean()),
+  local_datasets_available: maybe(z.boolean()),
 });
 
 export const saveResponseSchema = z.looseObject({ uri: maybe(z.string()) });
+
+export const csvValidationSchema: z.ZodType<CsvValidation> = z.looseObject({
+  record_count: z.number().int().positive(),
+  skipped_empty: z.number().int().nonnegative(),
+  labelled_count: z.number().int().nonnegative(),
+  preview: z.array(recordSchema),
+});
+
+export const localDatasetPageSchema: z.ZodType<LocalDatasetPage> = z.looseObject({
+  total: z.number().int().nonnegative(),
+  items: z.array(z.looseObject({
+    dataset_id: z.string(), filename: z.string(), modified_at: z.string(), bytes: z.number().int().nonnegative(),
+  })),
+});

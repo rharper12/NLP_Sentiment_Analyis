@@ -3,7 +3,6 @@ import json
 from openpyxl import load_workbook
 
 from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer
-from sentiment_prep.analysis.embeddings import EmbeddingDrift, cosine
 from sentiment_prep.analysis.metrics import compute_metrics
 from sentiment_prep.export.csv_export import to_csv
 from sentiment_prep.export.excel_export import to_excel
@@ -11,7 +10,7 @@ from sentiment_prep.models import DatasetBundle, ImpactReport
 from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_REGISTRY, Pipeline
 from sentiment_prep.report import render_report
 from sentiment_prep.storage.s3_store import S3Store
-from tests.conftest import FakeBedrock, FakeComprehend, make_dataset
+from tests.conftest import FakeComprehend, make_dataset
 
 
 def processed_bundle() -> DatasetBundle:
@@ -69,10 +68,27 @@ def test_comprehend_compare_aligns_by_id():
     assert sum(cmp.distribution_after.values()) == 6
 
 
-def test_embedding_drift_zero_for_identity():
-    ds = make_dataset()
-    assert EmbeddingDrift(FakeBedrock(), "m", 5).compute(ds, ds) == 0.0
-    assert cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
+def test_legacy_analysis_loads_without_retired_fields_and_reuses_paid_cache():
+    from sentiment_prep.api.schemas import PreprocessRequest
+    from sentiment_prep.api.service import run_preprocessing
+    from sentiment_prep.config import Settings
+
+    request = PreprocessRequest(steps=["lowercase"])
+    provider = FakeComprehend()
+    settings = Settings(_env_file=None, comprehend_enabled=True)
+    b = DatasetBundle(dataset_id="legacy", original=make_dataset(["I LOVED it", "Not good"]))
+    saved, _, _ = run_preprocessing(b, request, settings, provider)
+    payload = saved.model_dump()
+    payload["analysis"].update(signature="old-signature", vectors={"old": [1.0]})
+    payload["report"].update(embedding_drift=0.1, explanation="Retired generated prose")
+    legacy = DatasetBundle.model_validate(payload)
+    before = provider.calls
+    resumed, _, _ = run_preprocessing(legacy, request, settings, provider)
+    assert provider.calls == before
+    assert resumed.report.sentiment == saved.report.sentiment
+    assert "embedding_drift" not in resumed.report.model_dump()
+    assert "explanation" not in resumed.report.model_dump()
+    assert "vectors" not in resumed.analysis.model_dump()
 
 
 def test_exports_and_report(s3_bucket):
@@ -86,8 +102,6 @@ def test_exports_and_report(s3_bucket):
 
     md = render_report(b)
     assert "reviewed by the author" not in md
-    if b.report and b.report.explanation:
-        assert "review this interpretation before quoting it" in md
     assert "## Strengths and limitations" in md and "Remove stopwords" in md
     assert b"label_source" in csv_bytes
 
@@ -102,15 +116,3 @@ def test_exports_and_report(s3_bucket):
     )
     assert manifest["record_count_original"] == 8
     assert uri.startswith(f"s3://{bucket}/datasets/abc/")
-
-
-def test_generated_explanations_never_receive_operator_timings_or_hints():
-    from sentiment_prep.analysis.bedrock_explainer import BedrockExplainer
-
-    bundle = processed_bundle()
-    bundle.report.warnings = ["internal-only-configuration-hint"]
-    fake = FakeBedrock()
-    BedrockExplainer(fake, "model").explain(bundle.report, bundle.applied_steps)
-    assert "duration_ms" not in fake.last_prompt
-    assert "internal-only-configuration-hint" not in fake.last_prompt
-    assert "sample_diffs" not in fake.last_prompt

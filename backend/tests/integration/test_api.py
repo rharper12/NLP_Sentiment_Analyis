@@ -8,11 +8,10 @@ from sentiment_prep.api import deps
 from sentiment_prep.api.app import create_app
 from sentiment_prep.sources.huggingface import HuggingFaceSource
 from sentiment_prep.storage.repository import InMemoryRepository
-from tests.conftest import FakeBedrock, FakeComprehend
+from tests.conftest import FakeComprehend
 
 REPOSITORY_DEPENDENCY = deps.get_repository
 REAL_COMPREHEND_GETTER = deps.get_comprehend_client
-REAL_BEDROCK_GETTER = deps.get_bedrock_client
 REAL_RATE_GETTER = deps.get_comprehend_rate
 
 
@@ -45,7 +44,6 @@ def client(monkeypatch):
     monkeypatch.setattr(deps, "get_repository", lambda: repo)
     monkeypatch.setattr(deps, "get_hf_source", fake_hf)
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: FakeComprehend())
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: FakeBedrock())
     monkeypatch.setattr(deps, "get_comprehend_rate", lambda: None)  # offline: no price known
     app = create_app()
     app.dependency_overrides[REPOSITORY_DEPENDENCY] = lambda: repo
@@ -130,7 +128,6 @@ def test_health_hides_operator_fields_without_diagnostics(client, monkeypatch):
             "database_ephemeral",
             "checkpoints",
             "comprehend_enabled",
-            "bedrock_enabled",
         )
         assert all(k not in body for k in hidden)
     finally:
@@ -144,19 +141,16 @@ def test_steps_catalogue(client):
 
 
 def test_preprocess_without_selected_steps_preserves_original_text(client, monkeypatch):
-    def unexpected_explanation(*args, **kwargs):
-        pytest.fail("Unchecked explanation must not call Bedrock Converse")
-
-    monkeypatch.setattr(FakeBedrock, "converse", unexpected_explanation)
     loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 10}).json()
     response = client.post(
         f"/dataset/{loaded['dataset_id']}/preprocess",
-        json={"steps": [], "explain": False, "options": {"keep_negations": False}},
+        json={"steps": [], "options": {"keep_negations": False}},
     )
     assert response.status_code == 200
     result = response.json()
     assert result["applied_steps"] == result["report"]["steps"] == []
-    assert result["report"]["explanation"] is None
+    assert "explanation" not in result["report"]
+    assert "embedding_drift" not in result["report"]
     assert result["metrics_before"] == result["metrics_after"]
     assert result["preview"] == loaded["preview"]
 
@@ -171,7 +165,7 @@ def test_load_preprocess_export_flow(client):
     )
     assert run.status_code == 200
     body = run.json()
-    # Production-sized vectors may exhaust a request slice while progress is persisted.
+    # Paid comparison may exhaust a request slice while progress is persisted.
     for _ in range(5):
         if not body["partial"]:
             break
@@ -184,7 +178,7 @@ def test_load_preprocess_export_flow(client):
     assert not body["partial"]
     assert body["applied_steps"] == ["lowercase", "tokenize", "stopwords"]
     assert body["report"]["sentiment"]["agreement"] is not None
-    assert body["report"]["explanation"] == "Vocabulary shrank; negations kept."
+    assert "explanation" not in body["report"]
     assert body["metrics_after"]["vocab_size"] <= body["metrics_before"]["vocab_size"]
 
     page = client.get(
@@ -394,7 +388,6 @@ def test_diagnostics_policy_covers_json_routes_and_exports(
     monkeypatch.setenv("DIAGNOSTICS", str(diagnostics).lower())
     get_settings.cache_clear()
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: None)
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
     s3, bucket = s3_bucket
     monkeypatch.setattr(deps, "get_s3_store", lambda: S3Store(bucket, "datasets", s3))
     try:
@@ -406,12 +399,11 @@ def test_diagnostics_policy_covers_json_routes_and_exports(
         assert run.status_code == 200
         assert ("duration_ms" in run.json()["report"]["steps"][0]) is diagnostics
         assert ("COMPREHEND_ENABLED" in run.text) is diagnostics
-        assert ("BEDROCK_ENABLED" in run.text) is diagnostics
+        assert "BEDROCK_ENABLED" not in run.text
         assert ("runtime" in operator.get("/health").json()) is diagnostics
         history = operator.get("/history").json()
         assert history and all(("duration_ms" in row) is diagnostics for row in history)
         assert history[0]["sentiment_agreement"] is None
-        assert history[0]["embedding_drift"] is None
         listed = operator.get(f"{root}/checkpoints")
         converted = operator.post(f"{root}/checkpoints/processed/parquet")
         assert listed.status_code == converted.status_code == (200 if diagnostics else 404)
@@ -503,7 +495,6 @@ def test_failed_comparison_remains_unavailable_in_json_and_report(
     monkeypatch.setenv("DIAGNOSTICS", str(diagnostics).lower())
     get_settings.cache_clear()
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: fake)
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
     try:
         dataset_id = operator.post(
             "/dataset/upload", files={"file": ("s.csv", b"text\nbad rejected document\n")}
@@ -554,10 +545,7 @@ def test_duplicate_uploaded_ids_are_rejected_before_collection(client):
 
 
 @pytest.mark.parametrize("failure", ["profile", "credentials", "session", "client", "region"])
-@pytest.mark.parametrize("stage", ["sentiment", "embedding", "explanation"])
-def test_optional_aws_initialization_keeps_cleaning_and_local_metrics(
-    client, monkeypatch, failure, stage
-):
+def test_optional_aws_initialization_keeps_cleaning_and_local_metrics(client, monkeypatch, failure):
     from botocore.exceptions import (
         CredentialRetrievalError,
         InvalidRegionError,
@@ -583,24 +571,14 @@ def test_optional_aws_initialization_keeps_cleaning_and_local_metrics(
     monkeypatch.setattr(
         deps,
         "get_settings",
-        lambda: Settings(_env_file=None, comprehend_enabled=True, bedrock_enabled=True),
+        lambda: Settings(_env_file=None, comprehend_enabled=True),
     )
     if failure in ("profile", "session"):
         monkeypatch.setattr(deps, "boto_session", fail)
     else:
         monkeypatch.setattr(deps, "_boto_client", fail)
     # Restore the real getter for the failing service, so initialization itself is exercised.
-    if stage == "sentiment":
-        monkeypatch.setattr(deps, "get_comprehend_client", REAL_COMPREHEND_GETTER)
-    else:
-        real = REAL_BEDROCK_GETTER
-        attempts = [0]
-
-        def bedrock():
-            attempts[0] += 1
-            return FakeBedrock() if stage == "explanation" and attempts[0] == 1 else real()
-
-        monkeypatch.setattr(deps, "get_bedrock_client", bedrock)
+    monkeypatch.setattr(deps, "get_comprehend_client", REAL_COMPREHEND_GETTER)
     loaded = client.post("/dataset/load", json={"source": "huggingface", "limit": 1}).json()
     result = client.post(
         f"/dataset/{loaded['dataset_id']}/preprocess", json={"steps": ["lowercase"]}
@@ -608,17 +586,8 @@ def test_optional_aws_initialization_keeps_cleaning_and_local_metrics(
     assert result.status_code == 200 and calls
     body = result.json()
     assert body["record_count"] == body["metrics_after"]["record_count"] == 1
-    assert any(f"{stage} unavailable" in w for w in body["report"]["warnings"])
-    assert (
-        body["report"][
-            {
-                "sentiment": "sentiment",
-                "embedding": "embedding_drift",
-                "explanation": "explanation",
-            }[stage]
-        ]
-        is None
-    )
+    assert any("sentiment unavailable" in w for w in body["report"]["warnings"])
+    assert body["report"]["sentiment"] is None
     assert (
         client.get(f"/dataset/{loaded['dataset_id']}/records")
         .json()["items"][0]["processed"]["text"]

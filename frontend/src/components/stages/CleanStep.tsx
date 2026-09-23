@@ -12,7 +12,6 @@ interface Props {
   onToggle: (name: string) => void;
   onMove: (name: string, direction: -1 | 1) => void;
   onOptions: (options: Partial<PipelineConfig["options"]>) => void;
-  onExplain: (value: boolean) => void;
   onRun: () => void;
   onBack: () => void;
 }
@@ -24,7 +23,7 @@ const GROUPS: { id: StepInfo["group"]; title: string; blurb: string }[] = [
 ];
 
 /** Stage 2. Pick steps, see their trade-offs, then run. */
-export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, onExplain, onRun, onBack }: Props) {
+export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, onRun, onBack }: Props) {
   const byName = new Map(steps.map((s) => [s.name, s]));
   const active = config.order.filter((n) => config.enabled[n]);
   // A blank placeholder would leave the record empty and defeat the step, so the run is blocked
@@ -136,10 +135,6 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                 {active.map((n, i) => <li key={n}><span className="text-muted">{i + 1}.</span> {byName.get(n)?.title ?? n}</li>)}
               </ol>
             )}
-            <label className="flex items-start gap-2 border-t border-rule pt-3 text-sm">
-              <input type="checkbox" className="mt-1 accent-accent" checked={config.explain} onChange={(e) => onExplain(e.target.checked)} />
-              <span>Ask the model to explain the results in plain English <span className="text-muted">(uses Bedrock)</span></span>
-            </label>
             <button type="button" className="btn-primary" disabled={busy || !fillValid} onClick={onRun}>
               {busy ? "Running…" : "Continue to Analyze →"}
             </button>

@@ -51,6 +51,7 @@ class PipelineRun(Base):
     vocab_before: Mapped[int] = mapped_column(Integer)
     vocab_after: Mapped[int] = mapped_column(Integer)
     sentiment_agreement: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Legacy nullable column retained for existing databases; no longer populated or exposed.
     embedding_drift: Mapped[float | None] = mapped_column(Float, nullable=True)
     duration_ms: Mapped[float] = mapped_column(Float)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list)

@@ -81,7 +81,7 @@ inside a `<dl>` that the narrower list had missed.
 
 ## Operator-only UI
 
-Anything that reveals deployment internals (checkpoint paths, whether Comprehend/Bedrock are
+Anything that reveals deployment internals (checkpoint paths, whether Comprehend are
 enabled, the runtime) renders only when `/health` reports `diagnostics: true`. That is the local
 runtime by default; the `DIAGNOSTICS` setting overrides it. The values are not merely hidden with
 CSS: the API omits protected fields and requires diagnostics authorization for checkpoint APIs.

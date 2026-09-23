@@ -57,11 +57,8 @@ figure drop.
 ## 5. Modern models: embeddings
 
 Neural models replace the sparse count vector with a dense **embedding**: a few hundred to a few
-thousand numbers per document, learned so that similar meanings land close together. The app uses
-Amazon Titan Embed v2 (1,024 dimensions) to measure **embedding drift**: the cosine distance
-between the original and processed text. Cosine distance is 0 when two vectors point the same way
-and 1 when they are orthogonal; for text, values above ~0.3 mean the model now sees a materially
-different sentence.
+thousand numbers per document, learned so that similar meanings land close together.
+This app does not compute embeddings or embedding drift.
 
 Important consequence: embedding models were trained on raw, cased, punctuated text. Aggressive
 preprocessing can *hurt* them. Lowercasing and stopword removal help a bag-of-words model and may
@@ -86,30 +83,20 @@ report per-class F1, not accuracy alone.
 
 ## 7. Where labels come from
 
-Supervised sentiment models need a label per document. Hand-labelling everything is the gold
-standard and the slowest. **Distant supervision** uses an existing model or heuristic (here,
-Amazon Comprehend) to label at scale, then checks a human-reviewed sample to estimate how noisy
-those labels are. If reviewers agree with Comprehend 90% of the time, a model trained on Comprehend
-labels inherits roughly that ceiling; report the agreement figure and evaluate Task 2 on the
-reviewed subset, never on Comprehend's own labels.
+Supervised sentiment models need a label per document. Human review needs consistent criteria
+and may still contain disagreements. Comprehend can provide machine labels at scale.
+Reviewing its lowest-confidence predictions helps find likely errors, but the selected posts
+are not representative of the dataset. Reviewer agreement is not an accuracy ceiling. Evaluate
+a trained model against independently labelled, held-out data; keep that test set out of training.
 
 ## 8. What this app measures and why
 
 | Number | What it tells you |
 |---|---|
-| Vocabulary before → after | how much sparsity the steps removed |
+| Vocabulary before → after | distinct token counts in each representation; affected by tokenization |
 | Tokens per record | how much text remains for the model to use |
 | Type–token ratio | vocabulary / total tokens; higher means more unique words per token, i.e. sparser |
-| Sentiment agreement | fraction of records where a fixed classifier (Comprehend) gave the same label before and after; low agreement means the steps changed meaning as a real model sees it |
-| Embedding drift | how far the steps moved records in embedding space |
+| Sentiment agreement | fraction of records where a fixed classifier (Comprehend) gave the same label before and after; lower agreement flags predictions to inspect, not proven loss of meaning |
 
-None of these say "better" or "worse" on their own. A step that halves the vocabulary while
-keeping 98% sentiment agreement is a clear win for a bag-of-words model. A step that keeps
-vocabulary but drops agreement to 80% destroyed signal. Read them together.
-
-## 9. Further reading
-
-- Jurafsky & Martin, *Speech and Language Processing*, chapters 2 (text normalisation), 4 (naive
-  Bayes and sentiment), 6 (vector semantics). Free online.
-- The NLTK book, chapter 3, for tokenization and normalisation in code.
-- Pang & Lee, *Opinion Mining and Sentiment Analysis* (2008), for the history of the field.
+None of these establish better sentiment accuracy or preserved meaning. Read actual changed
+posts and compare downstream performance on a held-out human-labelled test set.

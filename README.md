@@ -8,15 +8,15 @@ throughout.
 
 A guided five-stage flow:
 
-1. **Collect.** Search any topic on X (last 7 days, spend-capped), load a labelled sample dataset,
+1. **Collect.** Search any topic on X (recent or historical dates, spend-capped), load a labelled sample dataset,
    or upload a CSV.
 2. **Clean.** Choose cleaning steps (case, punctuation), NLP normalisation steps
    (tokenize, stopwords, lemmatize), and a final empty-record sweep, each with its trade-offs stated inline.
 3. **Analyze.** Run it and read the impact in a sortable, filterable AG Grid table: vocabulary and token changes, a per-step waterfall,
-   baseline sentiment agreement (Amazon Comprehend), embedding drift (Titan Embed v2), a generated
-   explanation (Bedrock), and a word-level diff for any post.
+   prediction consistency and sentiment distributions (Amazon Comprehend), and word-level diffs
+   for changed posts. Agreement does not establish accuracy or preserved meaning.
 4. **Label.** Comprehend labels every post (live-priced estimate shown and confirmed first, resumable, checkpointed
-   after each slice); then review none, a sample (count or percent) or all by hand with keyboard
+   after each slice); then review low-confidence predictions first, a random sample (count or percent), all, or none with keyboard
    shortcuts. The app reports reviewer-vs-Comprehend agreement.
 5. **Export.** Parquet, CSV, Excel, a Markdown report for the write-up, S3 save, and stage
    checkpoints (collected / processed / labelled) with one-click Parquet conversion.
@@ -32,18 +32,37 @@ API types generated from the backend's OpenAPI schema and every response validat
 ```bash
 make setup        # backend deps + NLTK corpora + frontend packages + backend/.env
 make dev          # API on :8000 (Swagger at /docs) and UI on :5173, together
+make stop         # stop this project's local servers, including Vite fallback ports
 ```
 
 `make` on its own lists every target, grouped. The UI proxies `/api` to the backend and says so
 plainly if it cannot reach it. See [docs/deployment.md](docs/deployment.md#troubleshooting) if a `make` target
 cannot find `uvicorn` or Docker.
 
-Local CSV processing needs no paid services: Comprehend and Bedrock are off and no X token is set. Upload a CSV, or load the
+Local CSV processing needs no paid services: Comprehend is off and no X token is set. Upload a CSV, or load the
 Hugging Face dataset over the internet; AWS-backed fields are null with a stated reason.
 
 ```bash
 make check        # lint, types and both test suites; S3 via moto, AWS ML services via fakes, history on SQLite
 ```
+
+## Reusing a collected dataset
+
+In local development (`RUNTIME=local`), choose **Saved datasets** in Collect. The dropdown lists
+working JSON files from `backend/data/checkpoints/_work/` (or `CHECKPOINT_DIR/_work`) by latest save,
+newest first. Choose a file and click **Open in Clean**. Older files load in pages of 50; Refresh
+updates the list. This picker and its API are unavailable in the deployed runtime.
+
+Opening a file creates a fresh dataset and starts Step 2 with all options unchecked. Original
+rows and source labels are retained; later labels, cleaning, analysis, review, and billing state
+are reset. The saved file remains unchanged. **Download original dataset** still provides a
+portable JSON archive, but Saved datasets no longer accepts browser uploads.
+
+**Upload CSV** offers drag and drop or a keyboard-accessible file chooser. It checks the complete
+file and shows a preview before enabling **Import CSV**. A `text` header is required; `id` and
+`label` are optional. Use UTF-8, at most 4 MiB and 5,000 data rows. Empty text rows are reported
+and skipped; a file with no usable text is rejected. The UI warns when fewer than 500 posts are
+available. The same server parser validates the file again on import.
 
 ## Configuration
 
@@ -56,7 +75,7 @@ change:
 | `X_BEARER_TOKEN_SSM_PATH` | SSM SecureString path used in Lambda (set via `samconfig.toml`) |
 | `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | hard caps on billed reads (defaults 1000 / 3000) |
 | `AWS_PROFILE` | named profile from `~/.aws/config`, including SSO; blank uses the default chain |
-| `COMPREHEND_ENABLED`, `BEDROCK_ENABLED` | turn paid services on |
+| `COMPREHEND_ENABLED` | enable paid sentiment scoring |
 | `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (24 h fresh + 48 h stale grace; no hard-coded fallback) |
 | `API_KEY` | operator secret exchanged for a temporary browser session; scripts may use `X-API-Key`; required for internet-facing deployments |
 | `DIAGNOSTICS` | expose operator-only details in `/health` and the UI (defaults on locally, off in Lambda) |

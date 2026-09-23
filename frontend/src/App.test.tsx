@@ -11,9 +11,9 @@ import type { CollectStep } from "./components/stages/CollectStep";
 import type { CleanStep } from "./components/stages/CleanStep";
 import type { AnalyzeStep } from "./components/stages/AnalyzeStep";
 
-vi.mock("./api/client", async (original) => ({ ...await original<typeof import("./api/client")>(), api: { health: vi.fn(), steps: vi.fn(), load: vi.fn(), preprocess: vi.fn() } }));
+vi.mock("./api/client", async (original) => ({ ...await original<typeof import("./api/client")>(), api: { health: vi.fn(), steps: vi.fn(), load: vi.fn(), restoreLocal: vi.fn(), preprocess: vi.fn() } }));
 vi.mock("./components/Header", () => ({ Header: (p: ComponentProps<typeof Header>) => <output data-testid="spend">{p.spendVersion}</output> }));
-vi.mock("./components/stages/CollectStep", () => ({ CollectStep: (p: ComponentProps<typeof CollectStep>) => <><output>{p.dataset?.dataset_id}</output><button onClick={() => p.onLoadSample(500)}>Load sample</button><button onClick={() => p.onSearch("test", 500, {})}>Search test</button><button onClick={p.onCancel}>Cancel collection</button><button onClick={p.onContinue}>Continue clean</button></> }));
+vi.mock("./components/stages/CollectStep", () => ({ CollectStep: (p: ComponentProps<typeof CollectStep>) => <><output>{p.dataset?.dataset_id}</output><button onClick={() => p.onLoadSample(500)}>Load sample</button><button onClick={() => p.onSearch("test", 500, {})}>Search test</button>{p.onResume && <button onClick={p.onResume}>Resume collection</button>}<button onClick={p.onCancel}>Cancel collection</button><button onClick={() => p.onRestore("saved-id")}>Restore original</button><button onClick={p.onContinue}>Continue clean</button></> }));
 vi.mock("./components/stages/CleanStep", () => ({ CleanStep: (p: ComponentProps<typeof CleanStep>) => <><output data-testid="config">{p.config.order.join(",")}</output><button onClick={p.onRun}>Process</button></> }));
 vi.mock("./components/stages/AnalyzeStep", () => ({ AnalyzeStep: (p: ComponentProps<typeof AnalyzeStep>) => <><output data-testid="version">{p.runVersion}</output><output data-testid="result">{p.run?.dataset_id ?? "none"}</output><button onClick={p.onRerun}>Rerun</button></> }));
 
@@ -25,6 +25,33 @@ function deferred<T>() {
 const dataset = (id: string): DatasetSummary => ({ dataset_id: id, source_type: "csv", query: null, record_count: 500, labelled_count: 0, truncated_reason: null, partial: false, preview: [] });
 // These stage stubs only inspect dataset identity; the API's full shapes are covered in client tests.
 const processed = (id: string) => ({ dataset_id: id }) as PreprocessResponse;
+
+it("keeps the stable request for a 499-post budget pause and removes resume after reaching 500", async () => {
+  vi.mocked(api.load).mockResolvedValueOnce({
+    ...dataset("paused"), source_type: "x", record_count: 499, partial: true,
+    truncated_reason: "request budget reached; resume to continue", retry_at: null,
+  }).mockResolvedValueOnce({ ...dataset("finished"), source_type: "x" });
+  render(<App />);
+  fireEvent.click(screen.getByText("Search test"));
+  await screen.findByText("paused");
+  const requestId = vi.mocked(api.load).mock.calls[0][5];
+  expect(requestId).toBeTruthy();
+  fireEvent.click(screen.getByText("Resume collection"));
+  await screen.findByText("finished");
+  expect(api.load).toHaveBeenLastCalledWith("x", 500, "test", {}, expect.any(AbortSignal), requestId);
+  expect(screen.queryByText("Resume collection")).toBeNull();
+});
+
+it("does not offer resume for a terminal provider query rejection", async () => {
+  vi.mocked(api.load).mockResolvedValueOnce({
+    ...dataset("rejected"), source_type: "x", record_count: 499, partial: false,
+    truncated_reason: "X rejected the query. (X API returned HTTP 400); correct the request and start a new search",
+  });
+  render(<App />);
+  fireEvent.click(screen.getByText("Search test"));
+  await screen.findByText("rejected");
+  expect(screen.queryByText("Resume collection")).toBeNull();
+});
 
 beforeEach(() => {
   localStorage.setItem("sentiment-prep.theme", "light");
@@ -40,7 +67,7 @@ async function enterAnalyze() {
   fireEvent.click(screen.getByText("Continue clean"));
   fireEvent.click(screen.getByText("Process"));
   expect(api.preprocess).toHaveBeenLastCalledWith(
-    "old", [], expect.objectContaining({ keep_negations: false }), false, expect.any(AbortSignal),
+    "old", [], expect.objectContaining({ keep_negations: false }), expect.any(AbortSignal),
   );
 }
 
@@ -49,7 +76,7 @@ it("dataset replacement invalidates an old processing result and its version fol
   vi.mocked(api.preprocess).mockReturnValueOnce(old.promise).mockResolvedValue(processed("new"));
   render(<App />);
   await enterAnalyze();
-  const signal = vi.mocked(api.preprocess).mock.calls[0][4]!;
+  const signal = vi.mocked(api.preprocess).mock.calls[0][3]!;
   fireEvent.click(screen.getByRole("button", { name: /Collect/ }));
   vi.mocked(api.load).mockResolvedValue(dataset("new"));
   fireEvent.click(screen.getByText("Load sample"));
@@ -100,4 +127,36 @@ it("Strict Mode's obsolete steps response cannot reinitialize pipeline configura
   expect(screen.getByTestId("config").textContent).toBe("current");
   await act(async () => old.resolve([{ name: "obsolete" } as StepInfo]));
   expect(screen.getByTestId("config").textContent).toBe("current");
+});
+
+
+it("restoring originals opens Clean without collection or processing calls", async () => {
+  vi.mocked(api.restoreLocal).mockResolvedValue(dataset("restored"));
+  render(<App />);
+  fireEvent.click(screen.getByText("Restore original"));
+  await screen.findByText("Process");
+  expect(api.load).not.toHaveBeenCalled();
+  expect(api.preprocess).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText("Process"));
+  expect(api.preprocess).toHaveBeenCalledWith("restored", [], expect.objectContaining({ keep_negations: false }), expect.any(AbortSignal));
+});
+
+it("failed restore stays on Collect", async () => {
+  vi.mocked(api.restoreLocal).mockRejectedValue(new Error("Invalid saved dataset"));
+  render(<App />);
+  fireEvent.click(screen.getByText("Restore original"));
+  await waitFor(() => expect(api.restoreLocal).toHaveBeenCalledOnce());
+  expect(screen.queryByText("Process")).toBeNull();
+  expect(screen.getByText("Restore original")).toBeTruthy();
+});
+
+it("a cancelled restore cannot advance to Clean when its response arrives", async () => {
+  const pending = deferred<DatasetSummary>();
+  vi.mocked(api.restoreLocal).mockReturnValue(pending.promise);
+  render(<App />);
+  fireEvent.click(screen.getByText("Restore original"));
+  fireEvent.click(screen.getByText("Cancel collection"));
+  await act(async () => pending.resolve(dataset("obsolete")));
+  expect(screen.queryByText("Process")).toBeNull();
+  expect(screen.queryByText("obsolete")).toBeNull();
 });

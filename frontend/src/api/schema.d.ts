@@ -91,6 +91,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dataset/upload/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a CSV without creating a dataset
+         * @description Use the import parser for a read-only preview; import validates the file again.
+         */
+        post: operations["validate_csv_dataset_upload_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/local-datasets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List local saved JSON datasets
+         * @description Page through local working files by modification time without loading their contents.
+         */
+        get: operations["local_datasets_local_datasets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/local-datasets/{dataset_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open a local original dataset in Clean
+         * @description Validate a local working file and create a fresh run from its original rows.
+         */
+        post: operations["restore_local_dataset_local_datasets__dataset_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dataset/{dataset_id}": {
         parameters: {
             query?: never;
@@ -164,7 +224,7 @@ export interface paths {
          * Run preprocessing and measure impact
          * @description Apply steps in order. Always re-runs from the original data, so toggles are idempotent.
          *
-         *     Comprehend, Titan embeddings and Bedrock are best-effort: if any is disabled or fails the
+         *     Comprehend comparisons are best-effort: if the service is disabled or fails the
          *     corresponding report field is null and ``report.warnings`` says why. The ``processed``
          *     checkpoint is rewritten on every run.
          */
@@ -332,6 +392,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dataset/{dataset_id}/original.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download original data for a new cleaning run
+         * @description Portable original records/provenance, with no processing or paid-work state.
+         */
+        get: operations["download_original_dataset__dataset_id__original_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dataset/{dataset_id}/export.csv": {
         parameters: {
             query?: never;
@@ -484,6 +564,11 @@ export interface components {
             /** File */
             file: string;
         };
+        /** Body_validate_csv_dataset_upload_validate_post */
+        Body_validate_csv_dataset_upload_validate_post: {
+            /** File */
+            file: string;
+        };
         /**
          * CheckpointInfo
          * @description One stored file.
@@ -546,6 +631,20 @@ export interface components {
              * @default false
              */
             confirm_cost: boolean;
+        };
+        /**
+         * CsvValidation
+         * @description Read-only validation results before any collection or checkpoint writes.
+         */
+        CsvValidation: {
+            /** Record Count */
+            record_count: number;
+            /** Skipped Empty */
+            skipped_empty: number;
+            /** Labelled Count */
+            labelled_count: number;
+            /** Preview */
+            preview: components["schemas"]["Record"][];
         };
         /**
          * DatasetMetrics
@@ -661,8 +760,8 @@ export interface components {
             checkpoints?: ("local" | "s3") | null;
             /** Comprehend Enabled */
             comprehend_enabled?: boolean | null;
-            /** Bedrock Enabled */
-            bedrock_enabled?: boolean | null;
+            /** Local Datasets Available */
+            local_datasets_available?: boolean | null;
         };
         /**
          * HistoryRun
@@ -687,8 +786,6 @@ export interface components {
             vocab_after: number;
             /** Sentiment Agreement */
             sentiment_agreement: number | null;
-            /** Embedding Drift */
-            embedding_drift: number | null;
             /** Duration Ms */
             duration_ms?: number | null;
             /** Created At */
@@ -882,7 +979,7 @@ export interface components {
             query?: string | null;
             /**
              * Start Time
-             * @description Oldest post to return (X only). Clamped to seven days ago, the limit of recent search.
+             * @description Oldest post to return (X only). Dates older than seven days automatically use full-archive search, requiring pay-per-use or Enterprise access.
              */
             start_time?: string | null;
             /**
@@ -890,6 +987,33 @@ export interface components {
              * @description Newest post to return (X only). Clamped to a few seconds ago.
              */
             end_time?: string | null;
+        };
+        /**
+         * LocalDatasetFile
+         * @description Picker metadata; record contents are read only when a file is selected.
+         */
+        LocalDatasetFile: {
+            /** Dataset Id */
+            dataset_id: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Modified At
+             * Format: date-time
+             */
+            modified_at: string;
+            /** Bytes */
+            bytes: number;
+        };
+        /**
+         * LocalDatasetPage
+         * @description A bounded page of local JSON files, newest modification first.
+         */
+        LocalDatasetPage: {
+            /** Total */
+            total: number;
+            /** Items */
+            items: components["schemas"]["LocalDatasetFile"][];
         };
         /**
          * ManualLabelItem
@@ -923,12 +1047,6 @@ export interface components {
              */
             steps: string[];
             options?: components["schemas"]["StepOptions"];
-            /**
-             * Explain
-             * @description Ask Bedrock for a prose explanation.
-             * @default true
-             */
-            explain: boolean;
         };
         /**
          * PreprocessResponse
@@ -960,10 +1078,6 @@ export interface components {
          */
         PublicImpactReport: {
             sentiment?: components["schemas"]["SentimentComparison"] | null;
-            /** Embedding Drift */
-            embedding_drift?: number | null;
-            /** Explanation */
-            explanation?: string | null;
             /** Warnings */
             warnings?: string[];
             /** Steps */
@@ -1059,6 +1173,11 @@ export interface components {
             total: number;
             /** Offset */
             offset: number;
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
             /** Items */
             items: components["schemas"]["Record"][];
         };
@@ -1071,7 +1190,7 @@ export interface components {
              * Mode
              * @enum {string}
              */
-            mode: "none" | "all" | "sample";
+            mode: "none" | "all" | "sample" | "low_confidence";
             /**
              * Size
              * @default 150
@@ -1370,6 +1489,138 @@ export interface operations {
                 "multipart/form-data": components["schemas"]["Body_upload_dataset_dataset_upload_post"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSummary"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    validate_csv_dataset_upload_validate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_validate_csv_dataset_upload_validate_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CsvValidation"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    local_datasets_local_datasets_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LocalDatasetPage"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    restore_local_dataset_local_datasets__dataset_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -1917,6 +2168,49 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CheckpointInfo"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    download_original_dataset__dataset_id__original_json_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Client Error */

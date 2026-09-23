@@ -1,9 +1,7 @@
 """Unicode preparation and untrusted provider payload regression coverage."""
 
-import json
 import math
 from copy import deepcopy
-from io import BytesIO
 from types import SimpleNamespace
 
 import httpx
@@ -11,8 +9,6 @@ import pytest
 
 from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer, billable_units
 from sentiment_prep.analysis.comprehend_text import prepare_text
-from sentiment_prep.analysis.embeddings import cosine
-from sentiment_prep.analysis.payloads import ConverseResponse
 from sentiment_prep.api.schemas import PreprocessRequest
 from sentiment_prep.api.service import run_preprocessing
 from sentiment_prep.config import Settings
@@ -21,7 +17,7 @@ from sentiment_prep.labeling.service import estimate, label_with_comprehend
 from sentiment_prep.models import DatasetBundle
 from sentiment_prep.sources.huggingface import HuggingFaceSource
 from sentiment_prep.sources.x_search import XSearchSource
-from tests.conftest import FakeBedrock, FakeComprehend, make_dataset
+from tests.conftest import FakeComprehend, make_dataset
 from tests.unit.test_sources import guard, ledger_of, post, x_client
 
 
@@ -78,10 +74,9 @@ def test_analysis_discloses_prefix_sentiment():
     bundle = DatasetBundle(dataset_id="prefix", original=make_dataset(["É" * 3000]))
     saved, _, _ = run_preprocessing(
         bundle,
-        PreprocessRequest(steps=["lowercase"], explain=False),
+        PreprocessRequest(steps=["lowercase"]),
         Settings(_env_file=None),
         FakeComprehend(),
-        None,
     )
     assert any("5,000 UTF-8 bytes" in warning for warning in saved.report.warnings)
 
@@ -132,91 +127,6 @@ def test_missing_sentiment_result_is_explicit_and_indices_can_arrive_out_of_orde
     payload["ResultList"].pop()
     labels = ComprehendScorer(client).label_texts(["a", "b"])
     assert labels[0].error_code == "missing_result" and labels[1].label == "negative"
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"embedding": []},
-        {"embedding": [0.0] * 26},
-        {"embedding": "bad"},
-        *[
-            {"embedding": [bad] + [0.0] * 1023}
-            for bad in (None, "1", True, float("nan"), float("inf"), -float("inf"))
-        ],
-    ],
-)
-def test_bad_titan_payload_degrades_without_persisting_vectors_or_metrics(payload):
-    client = SimpleNamespace(
-        invoke_model=lambda **kwargs: {"body": BytesIO(json.dumps(payload).encode())}
-    )
-    bundle = DatasetBundle(dataset_id="titan", original=make_dataset(["LOUD TEXT"]))
-    saved, before, after = run_preprocessing(
-        bundle,
-        PreprocessRequest(steps=["lowercase"], explain=False),
-        Settings(_env_file=None),
-        None,
-        client,
-    )
-    assert saved.processed.records[0].text == "loud text"
-    assert before.record_count == after.record_count == 1
-    assert saved.report.embedding_drift is None and not saved.analysis.vectors
-    assert any("embedding unavailable" in w for w in saved.report.warnings)
-    assert "NaN" not in saved.model_dump_json()
-
-
-def test_large_finite_embedding_values_cannot_overflow_cosine():
-    assert cosine([1e308] * 1024, [1e308] * 1024) == 1
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {},
-        {"output": {}},
-        {"output": {"message": {}}},
-        *[
-            {"output": {"message": {"content": content}}}
-            for content in (
-                None,
-                [],
-                [None],
-                [{"text": None}],
-                [{"text": 12}],
-                [{"text": "  "}],
-                [{"toolUse": {}}],
-            )
-        ],
-    ],
-)
-def test_bad_converse_degrades(payload):
-    class Provider(FakeBedrock):
-        def converse(self, **kwargs):
-            return payload
-
-    bundle = DatasetBundle(dataset_id="converse", original=make_dataset(["LOUD"]))
-    saved, _, _ = run_preprocessing(
-        bundle, PreprocessRequest(steps=["lowercase"]), Settings(_env_file=None), None, Provider()
-    )
-    assert saved.report.embedding_drift is not None
-    assert saved.report.explanation is None
-    assert any("explanation unavailable" in w for w in saved.report.warnings)
-
-
-def test_converse_finds_text_after_non_text_block():
-    assert (
-        ConverseResponse.model_validate(
-            {
-                "output": {
-                    "message": {
-                        "content": [{"toolUse": {}}, {"text": " Valid "}, {"text": "second"}]
-                    }
-                }
-            }
-        ).text()
-        == "Valid\nsecond"
-    )
 
 
 @pytest.mark.parametrize(

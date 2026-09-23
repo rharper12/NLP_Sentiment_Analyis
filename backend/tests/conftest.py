@@ -1,10 +1,9 @@
-"""Shared fixtures. AWS is never contacted: S3 uses moto, Comprehend/Bedrock use fakes."""
+"""Shared fixtures. AWS is never contacted: S3 uses moto, Comprehend uses fakes."""
 
 from __future__ import annotations
 
 import json
 import os
-from io import BytesIO
 from typing import Any
 
 import boto3
@@ -28,7 +27,6 @@ def database_ready():
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
 os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/sentiment_prep_test.sqlite3")
 os.environ.setdefault("COMPREHEND_ENABLED", "false")
-os.environ.setdefault("BEDROCK_ENABLED", "false")
 os.environ.setdefault("CHECKPOINT_DIR", "/tmp/sentiment_prep_test_checkpoints")
 os.environ.setdefault("PRICING_ENABLED", "false")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
@@ -89,28 +87,6 @@ class FakeComprehend:
             scores[label.capitalize()] = 0.85
             results.append({"Index": index, "Sentiment": label, "SentimentScore": scores})
         return {"ResultList": results, "ErrorList": []}
-
-
-class FakeBedrock:
-    """Embeds by character histogram; explains with a fixed string."""
-
-    def invoke_model(
-        self, modelId: str, body: str, contentType: str, accept: str
-    ) -> dict[str, Any]:
-        text = json.loads(body)["inputText"]
-        vector = [0.0] * json.loads(body)["dimensions"]
-        for ch in text.lower():
-            if "a" <= ch <= "z":
-                vector[ord(ch) - 97] += 1.0
-        return {"body": BytesIO(json.dumps({"embedding": vector}).encode())}
-
-    def converse(
-        self, modelId: str, messages: list[dict[str, Any]], inferenceConfig: dict[str, Any]
-    ) -> dict[str, Any]:
-        self.last_prompt = messages[0]["content"][0]["text"]
-        return {
-            "output": {"message": {"content": [{"text": "Vocabulary shrank; negations kept."}]}}
-        }
 
 
 class FakePricing:

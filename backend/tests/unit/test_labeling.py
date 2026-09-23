@@ -134,6 +134,28 @@ def test_review_modes():
     assert total == 20 and [r.id for r in page] == ["r5", "r6", "r7"]
 
 
+def test_priority_review_ranks_missing_and_low_scores_and_excludes_manual():
+    b = bundle([f"unique post {i}" for i in range(7)])
+    for record, confidence in zip(
+        b.original.records, [0.99, 0.42, None, 0.0, 0.42, 0.1, None], strict=True
+    ):
+        record.comprehend_label = "neutral" if confidence is not None else None
+        record.comprehend_confidence = confidence
+    b = labeling.apply_manual_labels(b, [ManualLabel(id="r5", label="positive")])
+    selected = labeling.choose_review(b, "low_confidence", 100, "count", 1)
+    assert selected.review_ids == ["r2", "r6", "r3", "r1", "r4", "r0"]
+    assert labeling.choose_review(b, "low_confidence", 50, "percent", 999).review_ids == [
+        "r2",
+        "r6",
+        "r3",
+    ]
+    assert labeling.choose_review(b, "low_confidence", 1, "count", 7).review_ids == ["r2"]
+    reviewed = labeling.apply_manual_labels(
+        b, [ManualLabel(id=r.id, label="neutral") for r in b.original.records]
+    )
+    assert labeling.choose_review(reviewed, "low_confidence", 100, "percent", 1).review_ids == []
+
+
 def test_local_checkpoints_and_parquet_conversion(tmp_path):
     store = LocalCheckpointStore(tmp_path)
     b = checkpoint_bundle(store, bundle(["one two three"]), "collected")

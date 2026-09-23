@@ -93,6 +93,8 @@ class CsvUploadSource:
                     source_type="csv",
                 )
             )
+        if not records:
+            raise ValidationError("CSV must contain at least one non-empty text row")
         logger.info("csv_parsed", returned=len(records), skipped_empty=skipped)
         return Dataset(
             records=records,

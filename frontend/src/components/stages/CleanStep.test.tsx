@@ -13,7 +13,7 @@ const submit = vi.fn();
 function Harness() {
   const { config, dispatch, activeSteps } = usePipelineConfig();
   useEffect(() => { dispatch({ type: "init", steps }); }, [dispatch]);
-  return <CleanStep steps={steps} config={config} busy={false} onToggle={(name) => dispatch({ type: "toggle", name })} onMove={(name, direction) => dispatch({ type: "move", name, direction })} onOptions={(options) => dispatch({ type: "options", options })} onExplain={(value) => dispatch({ type: "explain", value })} onBack={vi.fn()} onRun={() => submit(activeSteps, config.explain)} />;
+  return <CleanStep steps={steps} config={config} busy={false} onToggle={(name) => dispatch({ type: "toggle", name })} onMove={(name, direction) => dispatch({ type: "move", name, direction })} onOptions={(options) => dispatch({ type: "options", options })} onBack={vi.fn()} onRun={() => submit(activeSteps)} />;
 }
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -23,13 +23,12 @@ it("starts unchecked and lets both continue buttons analyze unchanged text", () 
   for (const button of screen.getAllByRole("button", { name: /Continue to Analyze/ })) {
     expect(button.hasAttribute("disabled")).toBe(false);
     fireEvent.click(button);
-    expect(submit).toHaveBeenLastCalledWith([], false);
+    expect(submit).toHaveBeenLastCalledWith([]);
   }
   fireEvent.click(screen.getByLabelText(steps.find((s) => s.name === "stopwords")!.title));
   expect(screen.getByRole<HTMLInputElement>("checkbox", { name: /Keep negations/ }).checked).toBe(false);
-  fireEvent.click(screen.getByRole("checkbox", { name: /Ask the model/ }));
   fireEvent.click(screen.getAllByRole("button", { name: /Continue to Analyze/ })[0]);
-  expect(submit).toHaveBeenLastCalledWith(["stopwords"], true);
+  expect(submit).toHaveBeenLastCalledWith(["stopwords"]);
 });
 
 it("does not block continuing for an invalid option on a disabled step", () => {
@@ -41,7 +40,7 @@ it("does not block continuing for an invalid option on a disabled step", () => {
   expect(screen.getAllByRole("button", { name: /Continue to Analyze/ })[0].hasAttribute("disabled")).toBe(true);
   fireEvent.click(missing);
   fireEvent.click(screen.getAllByRole("button", { name: /Continue to Analyze/ })[0]);
-  expect(submit).toHaveBeenLastCalledWith([], false);
+  expect(submit).toHaveBeenLastCalledWith([]);
 });
 
 it.each(steps.flatMap((step, index) => ([-1, 1] as const).map((direction) => ({ step, index, direction }))))("matches display and submitted order when moving $step.name $direction", ({ step, index, direction }) => {
@@ -59,5 +58,5 @@ it.each(steps.flatMap((step, index) => ([-1, 1] as const).map((direction) => ({ 
   expect(displayed()).toEqual(expected.map((s) => s.title));
   expect(expected.at(-1)?.name).toBe("missing_data");
   fireEvent.click(screen.getAllByRole("button", { name: /Continue to Analyze/ })[0]);
-  expect(submit).toHaveBeenLastCalledWith(expected.map((s) => s.name), false);
+  expect(submit).toHaveBeenLastCalledWith(expected.map((s) => s.name));
 });

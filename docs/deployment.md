@@ -7,7 +7,6 @@ container image because NLTK corpora and pyarrow exceed the zip limit; the
 ## Prerequisites
 
 - AWS CLI and SAM CLI, Docker running.
-- Bedrock model access enabled in the target region for the two model ids in the template.
 - An X developer account with credits (pay-per-use; roughly $0.005 per post read).
 
 ## Secrets
@@ -64,7 +63,6 @@ The role in the template grants exactly the actions the code calls:
 | `s3:ListBucket` | the one data bucket |
 | `comprehend:BatchDetectSentiment` | `*` (Comprehend has no resource-level permissions) |
 | `pricing:GetProducts` | `*` (Price List API has no resource-level permissions; endpoint is us-east-1 regardless of deploy region) |
-| `bedrock:InvokeModel` | the two model ARNs from the parameters |
 | `ssm:GetParameter` | the two (or three) exact parameter ARNs |
 
 No `kms:Decrypt` is needed: SecureStrings use the AWS-managed `aws/ssm` key, whose key policy
@@ -113,7 +111,7 @@ With diagnostics enabled and valid authentication, `GET /health` reports `compre
 503 saying to run `aws sso login` rather than a generic error.
 
 Least privilege for a local run is `comprehend:BatchDetectSentiment`, plus
-`bedrock:InvokeModel` and `pricing:GetProducts` if those are enabled.
+`pricing:GetProducts` if price lookup is enabled.
 
 ## Troubleshooting
 

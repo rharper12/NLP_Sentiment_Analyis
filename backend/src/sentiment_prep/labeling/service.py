@@ -34,7 +34,7 @@ from sentiment_prep.storage.checkpoints import checkpoint_warnings, invalidate_c
 
 logger = get_logger(__name__)
 
-ReviewMode = Literal["none", "all", "sample"]
+ReviewMode = Literal["none", "all", "sample", "low_confidence"]
 SampleUnit = Literal["count", "percent"]
 MAX_LABEL_ATTEMPTS = 3
 
@@ -278,8 +278,8 @@ def choose_review(
 ) -> DatasetBundle:
     """Fix the set of records to review, in a stable order for the given seed.
 
-    ``size`` is a count or a percent of the dataset depending on ``unit``. Sampling is uniform;
-    stratifying by Comprehend label would hide the classes Comprehend gets wrong most.
+    Random sampling is uniform. Priority review excludes already reviewed posts, puts missing
+    scores first, then orders by ascending confidence; it is not a representative sample.
     """
     records = bundle.original.records
     if mode == "none":
@@ -287,13 +287,27 @@ def choose_review(
     elif mode == "all":
         ids = [r.id for r in records]
     else:
+        if mode == "low_confidence":
+            records = [r for r in records if r.label_source != "manual"]
         if unit == "percent":
             if not 0 < size <= 100:
                 raise ValidationError("percent must be between 1 and 100")
             size = max(1, round(len(records) * size / 100))
         if size < 1:
             raise ValidationError("sample size must be at least 1")
-        ids = [r.id for r in random.Random(seed).sample(records, min(size, len(records)))]
+        if mode == "low_confidence":
+            ranked = sorted(
+                records,
+                key=lambda r: (
+                    r.comprehend_confidence
+                    if r.comprehend_label and r.comprehend_confidence is not None
+                    else -1,
+                    r.id,
+                ),
+            )
+            ids = [r.id for r in ranked[:size]]
+        else:
+            ids = [r.id for r in random.Random(seed).sample(records, min(size, len(records)))]
     logger.info("review_sample_chosen", mode=mode, size=len(ids))
     return bundle.model_copy(update={"review_ids": ids})
 

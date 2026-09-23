@@ -23,7 +23,6 @@ flowchart LR
 
     x["X API v2<br/>configured cost per billed read"]
     comp["Amazon Comprehend<br/>live price / nullable estimate"]
-    bed["Amazon Bedrock<br/>Titan embed · Claude"]
     price["AWS Price List API<br/>free"]
     hf["Hugging Face<br/>datasets-server, free"]
 
@@ -33,12 +32,11 @@ flowchart LR
     fn --> ssm
     fn -->|paid| x
     fn -->|paid| comp
-    fn -->|paid| bed
     fn --> price
     fn --> hf
 
     classDef paid fill:#fde2e1,stroke:#b42318,stroke-width:2px;
-    class x,comp,bed paid
+    class x,comp paid
 ```
 
 Red edges cost money. Paid requests are budgeted; estimates can be unavailable. Committed progress is persisted
@@ -124,7 +122,7 @@ sequenceDiagram
             DB-->>G: cap reached
             G-->>API: SpendCapReachedError → partial dataset
         else reserved
-            API->>X: GET /2/tweets/search/recent
+            API->>X: GET /2/tweets/search/recent or /all (historical dates)
             X-->>API: up to 100 posts (billed)
             API->>G: record(actual)
             G->>DB: audit row + release the unused reservation

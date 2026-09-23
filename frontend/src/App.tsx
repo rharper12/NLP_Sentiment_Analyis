@@ -20,7 +20,7 @@ const HistoryDialog = lazy(() => import("./components/HistoryDialog"));
 const order = (s: Stage) => STAGES.findIndex((x) => x.id === s);
 
 /**
- * A guided four-stage flow. State lives here; each stage is a presentational component that
+ * A guided five-stage flow. State lives here; each stage is a presentational component that
  * receives what it needs. A stage is reachable once the previous one has produced its result.
  */
 export default function App() {
@@ -48,7 +48,7 @@ export default function App() {
   const reached: Stage = dataset.loading ? "collect" : run.loading ? "analyze" : labelled ? "export" : run.data ? "label" : dataset.data ? "clean" : "collect";
   const go = (s: Stage) => { if (!reviewActive && order(s) <= order(reached)) setStage(s); };
 
-  const collect = async (task: (signal: AbortSignal) => Promise<DatasetSummary>) => {
+  const collect = async (task: (signal: AbortSignal) => Promise<DatasetSummary>, openClean = false) => {
     run.reset();
     setLabelled(false);
     setRunVersion((v) => v + 1);
@@ -57,6 +57,11 @@ export default function App() {
       setSpendVersion((v) => v + 1);
       if (!result.partial) setXRequest(null);
     }
+    if (result && openClean) {
+      dispatch({ type: "init", steps: steps.data ?? [] });
+      dispatch({ type: "options", options: { keep_negations: false, missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]" } });
+      setStage("clean");
+    }
   };
 
   const runPipeline = async () => {
@@ -64,7 +69,7 @@ export default function App() {
     if (!current) return;
     setStage("analyze");
     const result = await run.run((signal) =>
-      api.preprocess(current.dataset_id, activeSteps, config.options, config.explain, signal),
+      api.preprocess(current.dataset_id, activeSteps, config.options, signal),
     );
     if (result) setRunVersion((v) => v + 1);
   };
@@ -82,6 +87,7 @@ export default function App() {
             <CollectStep
               busy={dataset.loading} error={dataset.error} dataset={dataset.data}
               costPerRead={health.data?.x_cost_per_read_usd}
+              localDatasetsAvailable={health.data?.local_datasets_available === true}
               xConfigured={health.data?.x_configured ?? true}
               onSearch={(q, n, window) => {
                 const id = crypto.randomUUID();
@@ -91,6 +97,7 @@ export default function App() {
               onResume={xRequest ? () => void collect((s) => api.load("x", xRequest.limit, xRequest.query, xRequest.window, s, xRequest.id)) : undefined}
               onLoadSample={(n) => { setXRequest(null); void collect((s) => api.load("huggingface", n, "", undefined, s)); }}
               onUpload={(f) => { setXRequest(null); void collect((s) => api.upload(f, s)); }}
+              onRestore={(f) => { setXRequest(null); void collect((s) => api.restoreLocal(f, s), true); }}
               onCancel={dataset.cancel}
               onContinue={() => setStage("clean")}
             />
@@ -101,7 +108,6 @@ export default function App() {
               onToggle={(name) => dispatch({ type: "toggle", name })}
               onMove={(name, direction) => dispatch({ type: "move", name, direction })}
               onOptions={(options) => dispatch({ type: "options", options })}
-              onExplain={(value) => dispatch({ type: "explain", value })}
               onRun={() => void runPipeline()}
               onBack={() => setStage("collect")}
             />

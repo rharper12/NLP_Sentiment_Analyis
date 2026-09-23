@@ -2,6 +2,8 @@
 
 from collections import Counter
 
+import pytest
+
 from sentiment_prep.models import Record
 from sentiment_prep.sources.dedupe import deduplicate, normalise
 
@@ -68,6 +70,18 @@ def test_threshold_of_one_keeps_near_duplicates():
         threshold=1.0,
     )
     assert len(kept) == 2 and not dropped
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("size,threshold", [(10, 0.9), (20, 0.95), (100, 0.99)])
+def test_near_duplicate_exactly_at_threshold_is_not_lost_to_rounding(reverse, size, threshold):
+    shorter = " ".join(f"word{i}" for i in range(size - 1))
+    texts = [shorter, f"{shorter} extra"]
+    if reverse:
+        texts.reverse()
+    kept, dropped = deduplicate(posts(*texts), threshold=threshold)
+    assert [r.id for r in kept] == ["0"]
+    assert dropped == {"near_duplicate": 1}
 
 
 def test_short_posts_sharing_common_words_are_not_treated_as_duplicates():

@@ -13,8 +13,10 @@ import asyncio
 import csv
 import io
 import json
+import os
 import pathlib
 import random
+import re
 import sys
 from typing import Any
 
@@ -26,7 +28,7 @@ AXE = pathlib.Path(__file__).resolve().parents[1] / "frontend/node_modules/axe-c
 # the only one that fires is focus-order-semantics against AG Grid's roving-tabindex grid DOM,
 # which is the standard accessible-grid pattern and not a WCAG requirement.
 TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]
-UI = "http://localhost:5173/"
+UI = os.environ.get("A11Y_UI_URL", "http://localhost:5173/")
 SAMPLE_TEXTS = [
     "I absolutely LOVED this movie, best of the year!!!",
     "Not good. Not good at all. The plot was boring.",
@@ -119,7 +121,12 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     """Collect → Clean → Analyze → Label → Export, auditing each screen."""
 
     async def audit(screen: str) -> None:
-        await run_axe(page, f"{theme}/{screen}", findings)
+        width = (page.viewport_size or {})["width"]
+        await run_axe(page, f"{theme}-{width}/{screen}", findings)
+        if screen.startswith(("csv-", "saved-")):
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (
+                screen + " overflows the viewport"
+            )
         # Opaque surfaces guarantee the same contrast without browser filter support.
         assert await page.locator(".glass-panel, .glass-bar").evaluate_all(
             "elements => elements.every(e => /^rgb\\(/.test(getComputedStyle(e).backgroundColor))"
@@ -129,10 +136,10 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
                 "* { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }"
             )
         )
-        await run_axe(page, f"{theme}/{screen}-fallback", findings)
+        await run_axe(page, f"{theme}-{width}/{screen}-fallback", findings)
         await fallback.evaluate("element => element.remove()")
         if shots:
-            await page.screenshot(path=f"/tmp/a11y_{theme}_{screen}.png")
+            await page.screenshot(path=f"/tmp/a11y_{theme}_{width}_{screen}.png")
 
     await page.goto(UI)
     await page.wait_for_selector("text=Search and collect", timeout=15000)
@@ -141,15 +148,56 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
         await page.wait_for_timeout(200)
     await audit("collect")
 
-    await page.click("[role=tab]:has-text('Upload CSV')")
-    await page.set_input_files(
-        "input[type=file]", {"name": "d.csv", "mimeType": "text/csv", "buffer": sample_csv()}
+    await page.get_by_role("tab", name="Search X").focus()
+    await page.keyboard.press("ArrowRight")
+    await page.keyboard.press("ArrowRight")
+    await expect(page.get_by_role("tab", name="Upload CSV")).to_be_focused()
+    await audit("csv-empty")
+    await page.get_by_text("CSV example and formatting rules").click()
+    await audit("csv-guidance")
+    # The visible button must open the file chooser with keyboard activation.
+    await page.get_by_role("button", name="Choose CSV file", exact=True).focus()
+    async with page.expect_file_chooser() as chooser:
+        await page.keyboard.press("Enter")
+    await (await chooser.value).set_files(
+        {"name": "invalid.csv", "mimeType": "text/csv", "buffer": b"body\nmissing text header\n"}
     )
+    await expect(page.get_by_role("alert")).to_contain_text("text")
+    await expect(page.get_by_role("button", name="Import CSV")).to_be_disabled()
+    await audit("csv-error")
+    transfer = await page.evaluate_handle(
+        """text => {
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([text], "d.csv", {type: "text/csv"}));
+        return transfer;
+    }""",
+        sample_csv().decode(),
+    )
+    dropzone = page.locator("input[type=file]").locator("..")
+    await dropzone.dispatch_event("dragover", {"dataTransfer": transfer})
+    await audit("csv-drag")
+    await dropzone.dispatch_event("drop", {"dataTransfer": transfer})
+    await expect(page.get_by_role("status").filter(has_text="CSV validated")).to_be_visible()
+    await expect(page.get_by_role("button", name="Import CSV")).to_be_enabled()
+    await audit("csv-ready")
     await page.click("button[type=submit]")
     await page.wait_for_selector("text=posts collected", timeout=15000)
     await audit("collected")
 
-    await page.click("text=Continue to Clean")
+    # Keep the archive download covered, then open the automatically saved local JSON.
+    async with page.expect_download() as original_download:
+        await page.get_by_role("button", name="Download original dataset").click()
+    downloaded = await original_download.value
+    original_path = await downloaded.path()
+    assert original_path
+    await page.get_by_role("tab", name="Saved datasets").click()
+    await audit("saved-dataset")
+    picker = page.get_by_role("combobox", name="Saved dataset", exact=True)
+    await expect(picker).to_be_enabled()
+    await expect(page.get_by_role("button", name="Open in Clean →")).to_be_disabled()
+    await picker.select_option(index=1)
+    await audit("saved-selected")
+    await page.locator("button[type=submit]").click()
     await page.wait_for_selector("text=Normalise for NLP")
     await audit("clean")
     assert await page.locator("main input[type=checkbox]:checked").count() == 0
@@ -192,8 +240,28 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await page.wait_for_timeout(150)
     await audit("reviewing")
 
-    await page.click("button:has-text('Stop here')")
-    await page.wait_for_selector("text=Labels ready", timeout=15000)
+    # Advancing without a decision must not inflate completion.
+    await page.get_by_role("button", name="Next →", exact=True).click()
+    await expect(page.get_by_text("1 of 6 reviewed", exact=False)).to_be_visible()
+    await page.get_by_role("button", name="Save and pause review").click()
+    await page.get_by_role("heading", name="Review paused — labels saved").wait_for()
+    await audit("review-paused")
+    await page.get_by_role("button", name="Return to selected review").click()
+    await page.locator("blockquote").wait_for()
+    await expect(page.get_by_role("button", name=re.compile(r"^negative", re.I))).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    # Correct the first saved decision, then complete the selection with scoped shortcuts.
+    for _ in range(6):
+        await page.keyboard.press("1")
+    await expect(page.get_by_role("status").filter(has_text="All 6 selected")).to_be_visible()
+    await audit("review-unsaved-end")
+    await page.get_by_role("button", name="Save and finish review").click()
+    await page.get_by_role("heading", name="Review complete — labels saved").wait_for()
+    await expect(
+        page.get_by_text("6 of 6 selected posts have saved manual labels.", exact=False)
+    ).to_be_visible()
+    await audit("review-complete")
     await page.click("text=Continue to Export")
     await page.wait_for_selector("h2:has-text('Export')", timeout=15000)
     await page.wait_for_timeout(600)
@@ -210,9 +278,11 @@ async def main() -> int:
             await walk_stages(page, theme, findings, shots="--screenshots" in sys.argv)
             await page.close()
         phone = await browser.new_page(
-            viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True
+            viewport={"width": 390, "height": 844},
+            device_scale_factor=2,
+            is_mobile=True,
         )
-        await walk_stages(phone, "dark", findings, shots=False)
+        await walk_stages(phone, "dark", findings, shots="--screenshots" in sys.argv)
         await phone.close()
         await browser.close()
 

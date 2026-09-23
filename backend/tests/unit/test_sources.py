@@ -84,13 +84,14 @@ def test_x_spend_cap_truncates_without_raising():
     assert g.reads_this_fetch == 100
 
 
-def test_x_retries_on_429(monkeypatch):
+@pytest.mark.parametrize("start_time", [None, datetime(2020, 1, 1, tzinfo=UTC)])
+def test_x_retries_on_429(monkeypatch, start_time):
     monkeypatch.setattr("sentiment_prep.sources.x_search.time.sleep", lambda s: None)
     pages = [
         httpx.Response(429, headers={"x-rate-limit-reset": "0"}),
         httpx.Response(200, json={"data": [post(i) for i in range(10)], "meta": {}}),
     ]
-    ds = XSearchSource(guard(), x_client(pages)).fetch(10, query="q")
+    ds = XSearchSource(guard(), x_client(pages), start_time=start_time).fetch(10, query="q")
     assert len(ds.records) == 10
 
 
@@ -332,14 +333,14 @@ def test_search_window_is_sent_and_recorded():
     assert ds.truncated_reason == "no more matching posts in the selected window"
 
 
-def test_window_is_clamped_to_what_recent_search_can_serve():
-    """X rejects a start older than seven days or an end at the present instant; clamp, not fail."""
+def test_window_preserves_history_and_clamps_near_present_end():
+    """Archive dates survive unchanged; a near-present end still needs a short lag."""
     from sentiment_prep.sources.x_search import clamp_window
 
     now = datetime.now(UTC)
     start, end = clamp_window(now - timedelta(days=30), now + timedelta(hours=1))
 
-    assert start is not None and start > now - timedelta(days=7)
+    assert start == now - timedelta(days=30)
     assert end is not None and end < now
     assert clamp_window(None, None) == (None, None)
 

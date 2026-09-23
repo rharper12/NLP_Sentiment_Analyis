@@ -7,10 +7,16 @@ git clone <repo> && cd sentiment-prep
 make setup          # Python deps, NLTK corpora, npm packages, .env from .env.example
 make test           # backend/frontend regression suites; no AWS credentials needed
 make dev            # API on :8000 and UI on :5173, together
+make stop           # stop all this checkout's local servers, including fallback ports
 make dev-web       # http://localhost:5173 (proxies /api to :8000)
 ```
 
-With the default `.env`, Comprehend and Bedrock are off and no X token is set. CSV processing
+Run `make stop` from another terminal in this checkout to stop its API and Vite servers,
+including leftover instances on fallback ports. It also handles jobs suspended with Ctrl-Z
+and force-stops processes that do not exit within three seconds. Other checkouts and unrelated
+applications are left running. Ctrl-C in the `make dev` terminal also stops both servers.
+
+With the default `.env`, Comprehend is off and no X token is set. CSV processing
 works offline; loading the Hugging Face dataset requires internet access. Turn services on one
 at a time as you get credentials.
 
@@ -23,13 +29,13 @@ backend/
                     service.py (orchestration), deps.py (client construction), security.py
     sources/        DataSource adapters + SpendGuard
     preprocessing/  one module per step, pipeline.py, STEP_REGISTRY in __init__.py
-    analysis/       metrics, Comprehend (shared scorer), Titan embeddings, Bedrock explainer
+    analysis/       metrics, Comprehend (shared scorer)
     labeling/       estimate, Comprehend slices, review sampling, manual labels, summary
     pricing/        Price List lookup with a 24 h cache and 48 h stale grace
     export/         csv, xlsx, parquet; rows.py is the shared row shape
     storage/        repository (local journal | S3; in-memory test adapter), checkpoints (local | S3), s3_store (saves)
     history/        SQLAlchemy models, db (engine/session), services (incl. DbLedger)
-    resources/      rationale.yaml, explain_prompt.txt
+    resources/      rationale.yaml
     config.py       every env var; logging_config.py: structlog; models.py; report.py
   tests/            unit/ mirrors src; integration/ hits routes via TestClient
   pyproject.toml    dependencies, ruff, mypy, pytest
@@ -37,7 +43,7 @@ backend/
 frontend/
   src/api/          schema.d.ts (generated), types.ts (derived), validation.ts (Zod), client.ts
   src/hooks/        useAsync, usePipelineConfig, useTheme
-  src/components/   stages/ (one per step of the flow), label/, ui/
+  src/components/   stages/ (one per step of the flow), collect/ (CSV validation, local picker), label/, ui/
 infrastructure/stack_request/   template.yaml, samconfig.toml, env.local.json
 tools/              a11y_audit.py
 docs/               you are here
@@ -65,7 +71,7 @@ justification; `DTZ` bans timezone-naive datetimes (this code deals in money and
 exc_info=True)` is intentional; `.exception()` would duplicate the message).
 
 **Types.** `mypy --strict` passes. AWS clients are typed with `boto3-stubs`
-(`ComprehendClient`, `S3Client`, `BedrockRuntimeClient`, `PricingClient`) imported under
+(`ComprehendClient`, `S3Client`, `PricingClient`) imported under
 `TYPE_CHECKING`, so stubs cost nothing at runtime. External payloads require runtime validation;
 SDK/ORM boundary casts alone do not validate provider responses.
 
@@ -128,7 +134,7 @@ they do not reach into global state.
 ## Testing
 
 - `make test` runs both suites; `cd backend && pytest -q` runs the backend suite. Wall-clock
-  assertions are marked `slow` and can be skipped with `pytest -m "not slow"`. S3 uses `moto`; Comprehend and Bedrock use
+  assertions are marked `slow` and can be skipped with `pytest -m "not slow"`. S3 uses `moto`; Comprehend uses
   the fakes in `tests/conftest.py`; history uses a fresh SQLite file under `/tmp` each session.
 - Integration tests build the app with `create_app()` and monkeypatch `api.deps` functions. Do the
   same for a new external dependency rather than reaching for network mocks.

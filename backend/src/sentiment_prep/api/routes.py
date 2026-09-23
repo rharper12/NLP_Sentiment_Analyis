@@ -15,12 +15,14 @@ from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated
 
 import anyio
 from botocore.exceptions import BotoCoreError
 from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError as ModelValidationError
 
 from sentiment_prep import __version__
 from sentiment_prep.api import deps
@@ -28,6 +30,7 @@ from sentiment_prep.api.aws_errors import translated
 from sentiment_prep.api.schemas import (
     CheckpointList,
     ComprehendLabelRequest,
+    CsvValidation,
     DatasetSummary,
     HealthResponse,
     HistoryRun,
@@ -50,9 +53,10 @@ from sentiment_prep.api.security import (
     create_session,
     require_api_key,
     require_diagnostics,
+    require_local_datasets,
 )
 from sentiment_prep.api.service import run_preprocessing
-from sentiment_prep.api.upload_limit import PayloadTooLargeError
+from sentiment_prep.api.upload_limit import read_csv_upload
 from sentiment_prep.budget import can_start
 from sentiment_prep.config import Settings, get_settings
 from sentiment_prep.errors import (
@@ -81,8 +85,9 @@ from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_GROUPS
 from sentiment_prep.presentation import public_report
 from sentiment_prep.report import load_rationale, render_report
 from sentiment_prep.sources.base import DataSource
-from sentiment_prep.sources.csv_upload import MAX_UPLOAD_BYTES, MAX_UPLOAD_RECORDS, CsvUploadSource
+from sentiment_prep.sources.csv_upload import MAX_UPLOAD_RECORDS, CsvUploadSource
 from sentiment_prep.sources.dedupe import deduplicate
+from sentiment_prep.sources.saved_dataset import export_original, original_only
 from sentiment_prep.storage.checkpoints import (
     CheckpointInfo,
     CheckpointStore,
@@ -92,6 +97,7 @@ from sentiment_prep.storage.checkpoints import (
     checkpoint_warnings,
     invalidate_checkpoints,
 )
+from sentiment_prep.storage.local_repository import LocalDatasetPage, LocalRepository
 from sentiment_prep.storage.repository import BundleRepository
 
 router = APIRouter()
@@ -145,6 +151,7 @@ def health(settings: SettingsDep, request: Request) -> HealthResponse:
             diagnostics = False
     return HealthResponse(
         status="ok",
+        local_datasets_available=settings.local_datasets_available,
         version=__version__,
         diagnostics=diagnostics,
         x_cost_per_read_usd=settings.x_cost_per_read_usd,
@@ -157,7 +164,6 @@ def health(settings: SettingsDep, request: Request) -> HealthResponse:
         database_ephemeral=db.is_ephemeral() if diagnostics else None,
         checkpoints=deps.checkpoint_location() if diagnostics else None,
         comprehend_enabled=settings.comprehend_enabled if diagnostics else None,
-        bedrock_enabled=settings.bedrock_enabled if diagnostics else None,
     )
 
 
@@ -236,15 +242,83 @@ async def upload_dataset(
     limit: int = Query(MAX_UPLOAD_RECORDS, ge=1, le=MAX_UPLOAD_RECORDS),
 ) -> DatasetSummary:
     """CSV with a ``text`` column and optional ``label``/``id`` columns."""
-    content = bytearray()
-    while chunk := await file.read(min(65536, MAX_UPLOAD_BYTES + 1 - len(content))):
-        content.extend(chunk)
-        if len(content) > MAX_UPLOAD_BYTES:
-            raise PayloadTooLargeError("CSV exceeds the 4 MiB upload limit")
+    content = await read_csv_upload(file)
     bind_context(source="csv", filename=file.filename, bytes=len(content))
     return await anyio.to_thread.run_sync(
-        lambda: _store(CsvUploadSource(bytes(content)).fetch(limit=limit), repo, checkpoints)
+        lambda: _store(CsvUploadSource(content).fetch(limit=limit), repo, checkpoints)
     )
+
+
+@router.post(
+    "/dataset/upload/validate",
+    tags=["dataset"],
+    response_model=CsvValidation,
+    summary="Validate a CSV without creating a dataset",
+)
+async def validate_csv(file: Annotated[UploadFile, File()]) -> CsvValidation:
+    """Use the import parser for a read-only preview; import validates the file again."""
+    content = await read_csv_upload(file)
+    dataset = await anyio.to_thread.run_sync(
+        lambda: CsvUploadSource(content).fetch(limit=MAX_UPLOAD_RECORDS)
+    )
+    return CsvValidation(
+        record_count=len(dataset.records),
+        skipped_empty=dataset.filtered_out.get("empty_text", 0),
+        labelled_count=sum(record.label is not None for record in dataset.records),
+        preview=dataset.records[:3],
+    )
+
+
+@router.get(
+    "/local-datasets",
+    tags=["dataset"],
+    response_model=LocalDatasetPage,
+    dependencies=[Depends(require_local_datasets)],
+    summary="List local saved JSON datasets",
+)
+def local_datasets(
+    settings: SettingsDep,
+    response: Response,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+) -> LocalDatasetPage:
+    """Page through local working files by modification time without loading their contents."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return LocalRepository(Path(settings.checkpoint_dir) / "_work").list_files(offset, limit)
+    except OSError as exc:
+        logger.warning("local_dataset_listing_failed", error_type=type(exc).__name__)
+        raise ValidationError(
+            "Could not read saved datasets. Check the local folder permissions."
+        ) from exc
+
+
+@router.post(
+    "/local-datasets/{dataset_id}/restore",
+    tags=["dataset"],
+    response_model=DatasetSummary,
+    dependencies=[Depends(require_local_datasets)],
+    summary="Open a local original dataset in Clean",
+)
+def restore_local_dataset(
+    dataset_id: str,
+    settings: SettingsDep,
+    repo: RepoDep,
+    checkpoints: CheckpointDep,
+) -> DatasetSummary:
+    """Validate a local working file and create a fresh run from its original rows."""
+    try:
+        saved = LocalRepository(Path(settings.checkpoint_dir) / "_work").get(dataset_id)
+    except (ModelValidationError, OSError) as exc:
+        logger.warning(
+            "local_dataset_restore_failed", dataset_id=dataset_id, error_type=type(exc).__name__
+        )
+        raise ValidationError(
+            "Could not open this saved dataset. It must be a valid local dataset JSON file."
+        ) from exc
+    if not 1 <= len(saved.original.records) <= MAX_UPLOAD_RECORDS:
+        raise ValidationError("Saved dataset must contain between 1 and 5,000 original records")
+    return _store(original_only(saved.original), repo, checkpoints, dedupe=False)
 
 
 @router.get(
@@ -315,7 +389,7 @@ def preprocess(
 ) -> PreprocessResponse | Response:
     """Apply steps in order. Always re-runs from the original data, so toggles are idempotent.
 
-    Comprehend, Titan embeddings and Bedrock are best-effort: if any is disabled or fails the
+    Comprehend comparisons are best-effort: if the service is disabled or fails the
     corresponding report field is null and ``report.warnings`` says why. The ``processed``
     checkpoint is rewritten on every run.
     """
@@ -327,7 +401,6 @@ def preprocess(
             request,
             settings,
             deps.get_comprehend_client,
-            deps.get_bedrock_client,
             persist=edit.save,
         )
         if can_start():
@@ -474,8 +547,11 @@ def review_page(
     limit: int = Query(25, ge=1, le=200),
 ) -> ReviewPage:
     """Records chosen for review, in review order, with whatever labels they currently carry."""
-    total, items = labeling.review_page(repo.get(dataset_id), offset, limit)
-    return ReviewPage(total=total, offset=offset, items=items)
+    bundle = repo.get(dataset_id)
+    total, items = labeling.review_page(bundle, offset, limit)
+    return ReviewPage(
+        total=total, offset=offset, items=items, reviewed=labeling.summary(bundle).reviewed
+    )
 
 
 @router.post(
@@ -555,6 +631,20 @@ def convert_checkpoint(
 
 
 # --- export -----------------------------------------------------------------------------------
+
+
+@router.get(
+    "/dataset/{dataset_id}/original.json",
+    tags=["export"],
+    summary="Download original data for a new cleaning run",
+)
+def download_original(dataset_id: str, repo: RepoDep) -> Response:
+    """Portable original records/provenance, with no processing or paid-work state."""
+    return _download(
+        export_original(repo.get(dataset_id).original),
+        "application/json",
+        f"{dataset_id}.original.json",
+    )
 
 
 @router.get(
@@ -715,7 +805,7 @@ def _collect_x(
         bundle = edit.bundle
         if bundle.collection is None or bundle.collection.request != identity:
             raise ValidationError("request_id already belongs to a different collection request")
-        if not bundle.collection.complete:
+        if bundle.collection.needs_more_records(len(bundle.original.records)):
 
             def persist(dataset: Dataset, progress: CollectionProgress) -> None:
                 nonlocal bundle
@@ -734,22 +824,8 @@ def _collect_x(
                 resume=bundle.original,
                 progress=bundle.collection,
                 persist=persist,
+                dedupe_similarity=settings.dedupe_similarity if settings.dedupe_enabled else None,
             )
-        if bundle.collection and bundle.collection.complete and settings.dedupe_enabled:
-            kept, removed = deduplicate(bundle.original.records, settings.dedupe_similarity)
-            if removed:
-                invalidate_checkpoints(bundle, "collected")
-                bundle = bundle.model_copy(
-                    update={
-                        "original": bundle.original.model_copy(
-                            update={
-                                "records": kept,
-                                "filtered_out": {**bundle.original.filtered_out, **removed},
-                            }
-                        )
-                    }
-                )
-                edit.save(bundle)
         if can_start():
             bundle = checkpoint_bundle(checkpoints, bundle, "collected")
             edit.save(bundle)
@@ -758,7 +834,7 @@ def _collect_x(
 
 
 def _store(
-    dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore
+    dataset: Dataset, repo: BundleRepository, checkpoints: CheckpointStore, *, dedupe: bool = True
 ) -> DatasetSummary:
     """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
 
@@ -766,7 +842,7 @@ def _store(
     the pipeline so the record count is fixed for every preprocessing configuration that follows.
     """
     settings = get_settings()
-    if settings.dedupe_enabled:
+    if dedupe and settings.dedupe_enabled:
         kept, removed = deduplicate(dataset.records, settings.dedupe_similarity)
         if removed:
             dataset = dataset.model_copy(
@@ -786,11 +862,18 @@ def _store(
 
 def _summary(bundle: DatasetBundle) -> DatasetSummary:
     dataset = bundle.original
+    partial = bundle.collection is not None and bundle.collection.needs_more_records(
+        len(dataset.records)
+    )
     warnings: list[str] = checkpoint_warnings(bundle)
     if len(dataset.records) < MIN_RECORDS_FOR_TASK:
         warnings.append(
             f"only {len(dataset.records)} records; Task 1 needs at least {MIN_RECORDS_FOR_TASK}. "
-            "Try a broader query or the Hugging Face source."
+            + (
+                "Resume collection to continue from saved progress."
+                if partial
+                else "Try a broader query or the Hugging Face source."
+            )
         )
     return DatasetSummary(
         dataset_id=bundle.dataset_id,
@@ -801,12 +884,13 @@ def _summary(bundle: DatasetBundle) -> DatasetSummary:
         record_count=len(dataset.records),
         labelled_count=sum(1 for r in dataset.records if r.label),
         filtered_out=dataset.filtered_out,
-        truncated_reason=dataset.truncated_reason,
+        truncated_reason=dataset.truncated_reason
+        or ("more unique posts needed; resume collection" if partial else None),
         billed_reads=bundle.collection.billed_reads if bundle.collection else None,
         committed_cost_usd=float(bundle.collection.committed_cost_usd)
         if bundle.collection and bundle.collection.committed_cost_usd is not None
         else None,
-        partial=bundle.collection is not None and not bundle.collection.complete,
+        partial=partial,
         resume_request_id=bundle.dataset_id.removeprefix("x-") if bundle.collection else None,
         retry_at=bundle.collection.retry_at or None if bundle.collection else None,
         warnings=warnings,

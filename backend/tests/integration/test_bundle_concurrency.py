@@ -32,7 +32,6 @@ def setup(request, s3_bucket, tmp_path, monkeypatch):
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[deps.get_repository] = factory
     app.dependency_overrides[deps.get_checkpoint_store] = lambda: LocalCheckpointStore(tmp_path)
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
     monkeypatch.setattr(deps, "get_comprehend_rate", lambda: None)
     fake = FakeComprehend()
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: fake)
@@ -57,7 +56,7 @@ def test_concurrent_writes_conflict_and_retry_preserves_changes(setup, monkeypat
         target, body = "/labels/manual", {"items": [{"id": "a", "label": "mixed"}]}
     elif owner == "preprocess":
         original = routes.run_preprocessing
-        target, body = "/preprocess", {"steps": ["lowercase"], "explain": False}
+        target, body = "/preprocess", {"steps": ["lowercase"]}
     else:
         original = fake.batch_detect_sentiment
         target, body = "/labels/comprehend", {"confirm_cost": True}

@@ -22,6 +22,9 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   const [items, setItems] = useState<PostRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [index, setIndex] = useState(0);
+  const [previouslyReviewed, setPreviouslyReviewed] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const reviewRegion = useRef<HTMLDivElement>(null);
   const [decisions, setDecisions] = useState<{ [id: string]: SentimentLabel }>({});
   const pending = useRef<{ id: string; label: SentimentLabel }[]>([]);
   const comparable = items.filter((item) => decisions[item.id] && item.comprehend_label);
@@ -45,6 +48,8 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
       if (!result) return;
       completedPages.current.add(offset);
       setTotal(result.total);
+      if (offset === 0) setPreviouslyReviewed(result.reviewed ?? result.items.filter((r) => r.label_source === "manual").length);
+      setDecisions((prev) => ({ ...Object.fromEntries(result.items.filter((r) => r.label_source === "manual" && SENTIMENT_LABELS.includes(r.label as SentimentLabel)).map((r) => [r.id, r.label as SentimentLabel])), ...prev }));
       setItems((prev) => (prev.length === offset ? [...prev, ...result.items] : prev));
     });
     return cancelPage;
@@ -85,9 +90,12 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
   }, [items, index, flush]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { const l = KEYS[e.key.toLowerCase()]; if (l && !e.metaKey && !e.ctrlKey) { e.preventDefault(); decide(l); } if (e.key === "ArrowLeft" && !finishingRef.current) setIndex((i) => Math.max(0, i - 1)); };
-    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [decide]);
+    const warn = (event: BeforeUnloadEvent) => {
+      if (pending.current.length || inFlight.current) { event.preventDefault(); event.returnValue = ""; }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, []);
 
   const finish = async () => {
     if (finishingRef.current) return;
@@ -97,26 +105,43 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
     finally { finishingRef.current = false; setFinishing(false); }
   };
   const item = items[index];
-  const finished = index >= total && total > 0;
+  const atEnd = index >= total && total > 0;
+  const reviewed = previouslyReviewed + items.filter((r) => r.label_source !== "manual" && decisions[r.id]).length;
+  const finished = total > 0 && reviewed === total;
+  useEffect(() => { heading.current?.focus(); }, [item?.id, index]);
+  const navigate = useCallback((delta: number) => { if (!finishingRef.current) setIndex((i) => Math.max(0, Math.min(total, i + delta))); }, [total]);
+  useEffect(() => {
+    // Character shortcuts operate only inside the focused review region, never globally.
+    const keydown = (e: KeyboardEvent) => {
+      if (!(e.target instanceof HTMLElement) || !reviewRegion.current?.contains(e.target)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.repeat || e.target.matches("input, textarea, select, [contenteditable=true]")) return;
+      const label = KEYS[e.key.toLowerCase()];
+      if (label) { e.preventDefault(); decide(label); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); navigate(-1); }
+      if (e.key === "ArrowRight" && item) { e.preventDefault(); navigate(1); }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [decide, item, navigate]);
 
   return (
-    <div className="glass-panel flex flex-col gap-4 p-5">
+    <div ref={reviewRegion} role="group" aria-label="Manual review" className="glass-panel flex flex-col gap-4 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">Review</h3>
-        <span className="tnum text-sm text-muted">{Math.min(index, total).toLocaleString()} of {total.toLocaleString()}{agree.compared > 0 && ` · agree with Comprehend ${Math.round((100 * agree.agreed) / agree.compared)}%`}{saving && " · saving…"}</span>
+        <h3 ref={heading} tabIndex={-1} className="font-semibold">{atEnd ? "End of selected posts" : total > 0 ? `Review post ${index + 1} of ${total}` : page.data ? "Review selection" : "Loading review"}</h3>
+        <span className="tnum text-sm text-muted">{reviewed.toLocaleString()} of {total.toLocaleString()} reviewed{agree.compared > 0 && ` · agree with Comprehend ${Math.round((100 * agree.agreed) / agree.compared)}%`}{saving && " · saving…"}</span>
       </div>
       {saveError && <div role="alert" className="text-sm text-error-ink">
         Labels have not been saved. {saveError.message}
         <button type="button" className="btn ml-2" disabled={saving || finishing} onClick={() => void flush()}>Retry save</button>
       </div>}
-      <div className="h-1.5 w-full overflow-hidden rounded bg-surface-2"><div className="h-full bg-accent" style={{ width: `${total ? (100 * Math.min(index, total)) / total : 0}%` }} /></div>
+      <div className="h-1.5 w-full overflow-hidden rounded bg-surface-2"><div className="h-full bg-accent" style={{ width: `${total ? (100 * reviewed) / total : 0}%` }} /></div>
 
       {page.error && <div role="alert" className="text-sm text-error-ink">
         Could not load review posts. {page.error.message}
         <button type="button" className="btn ml-2" onClick={() => setRetry((value) => value + 1)}>Retry loading posts</button>
       </div>}
-      {!finished && !item && !page.error && <SkeletonLines lines={3} />}
-      {!finished && item && (
+      {!atEnd && !item && !page.error && !page.data && <SkeletonLines lines={3} />}
+      {!atEnd && item && (
         <>
           <blockquote className="rounded-lg bg-surface-2 p-4 text-lg leading-relaxed">{item.text}</blockquote>
           <p className="flex items-start gap-1.5 text-xs text-muted">
@@ -124,7 +149,7 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
             <span>Showing the original text for review — labels apply to the processed version used in Task 2.</span>
           </p>
           <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
-            {item.comprehend_label ? <span>Comprehend says <strong className="text-ink">{item.comprehend_label}</strong>{item.comprehend_confidence != null && <span className="tnum"> ({Math.round(item.comprehend_confidence * 100)}%)</span>}</span> : <span>No Comprehend label for this post.</span>}
+            {item.comprehend_label ? <span>Comprehend says <strong className="text-ink">{item.comprehend_label}</strong>{item.comprehend_confidence != null && <span className="tnum"> (confidence: {Math.round(item.comprehend_confidence * 100)}%)</span>}</span> : <span>No Comprehend label for this post.</span>}
             {decisions[item.id] && <span>· you said <strong className="text-ink">{decisions[item.id]}</strong></span>}
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -134,13 +159,15 @@ export function Reviewer({ datasetId, onError, onDone }: Props) {
               </button>
             ))}
           </div>
-          <p className="text-xs text-muted">Keys 1–4 or P / N / U / M. ← goes back one. Labels save every {FLUSH_EVERY} decisions and when you finish. Use Finish or Stop to save before leaving review.</p>
+          <p className="text-xs text-muted">Within this review, use 1–4 or P / N / U / M to choose a label; ← / → moves between posts. Choosing a label advances automatically. Next does not assign a label. Decisions save every {FLUSH_EVERY} choices; save before leaving review.</p>
         </>
       )}
-      {finished && <p className="text-sm">All {total.toLocaleString()} reviewed.</p>}
+      {atEnd && <p role="status" className="text-sm">{finished ? `All ${total.toLocaleString()} selected posts have a label. Save and finish review to complete.` : `${total - reviewed} selected posts still need a label. Go back to review them, or save and pause.`}</p>}
+      {total === 0 && !page.loading && page.data && <p role="status">No posts in this review selection.</p>}
       <div className="flex flex-wrap justify-between gap-3 border-t border-rule pt-4">
-        <button type="button" className="btn" disabled={index === 0 || finishing} onClick={() => setIndex((i) => i - 1)}>← Previous</button>
-        <button type="button" className="btn-primary" disabled={finishing} onClick={() => void finish()}>{finishing ? "Saving labels…" : finished ? "Finish" : "Stop here and keep labels"}</button>
+        <button type="button" className="btn" disabled={index === 0 || finishing} onClick={() => navigate(-1)}>← Previous</button>
+        <button type="button" className="btn" disabled={!item || finishing} onClick={() => navigate(1)}>Next →</button>
+        <button type="button" className="btn-primary" disabled={finishing || page.loading} onClick={() => void finish()}>{finishing ? "Saving labels…" : finished ? "Save and finish review" : "Save and pause review"}</button>
       </div>
     </div>
   );

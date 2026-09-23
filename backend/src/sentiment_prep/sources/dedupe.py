@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from decimal import Decimal
+from math import ceil
 
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import Record
@@ -57,8 +59,10 @@ def _prefix(tokens: frozenset[str], rank: dict[str, int], threshold: float) -> l
     ``floor((1 - threshold) * size) + 1`` rarest tokens. Indexing only those is exact: it cannot
     miss a genuine match, and it keeps the candidate list short.
     """
-    size = int((1.0 - threshold) * len(tokens)) + 1
-    return sorted(tokens, key=lambda token: rank[token])[:size]
+    # Subtracting a float threshold first can turn 10 * (1 - 0.9) into 0.999999...,
+    # losing a candidate token and missing pairs exactly at the similarity threshold.
+    size = len(tokens) - ceil(Decimal(str(threshold)) * len(tokens)) + 1
+    return sorted(tokens, key=lambda token: (rank[token], token))[:size]
 
 
 def deduplicate(

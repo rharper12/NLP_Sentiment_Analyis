@@ -35,7 +35,6 @@ from sentiment_prep.storage.repository import BundleRepository, S3Repository
 from sentiment_prep.storage.s3_store import S3Store
 
 if TYPE_CHECKING:
-    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
     from mypy_boto3_comprehend.client import ComprehendClient
     from mypy_boto3_pricing.client import PricingClient
     from mypy_boto3_s3.client import S3Client
@@ -74,7 +73,7 @@ def _http_client(base_url: str, bearer_token: str | None = None) -> httpx.Client
     return client
 
 
-AwsService = Literal["s3", "comprehend", "bedrock-runtime", "pricing", "ssm"]
+AwsService = Literal["s3", "comprehend", "pricing", "ssm"]
 
 
 @lru_cache(maxsize=1)
@@ -235,14 +234,6 @@ def get_comprehend_client() -> ComprehendClient | None:
     if not settings.comprehend_enabled:
         return None
     return cast("ComprehendClient", _boto_client("comprehend", settings.aws_region))
-
-
-def get_bedrock_client() -> BedrockRuntimeClient | None:
-    """Shared by the embedder and the explainer."""
-    settings = get_settings()
-    if not settings.bedrock_enabled:
-        return None
-    return cast("BedrockRuntimeClient", _boto_client("bedrock-runtime", settings.aws_region))
 
 
 def _s3_client() -> S3Client:

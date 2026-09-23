@@ -110,22 +110,15 @@ def test_preprocessing_rerun_marks_labelled_snapshot_stale_and_public_status_is_
     from sentiment_prep.report import render_report
 
     repo, store = InMemoryRepository(), LocalCheckpointStore(tmp_path)
-    settings = Settings(
-        _env_file=None, diagnostics=False, comprehend_enabled=False, bedrock_enabled=False
-    )
+    settings = Settings(_env_file=None, diagnostics=False, comprehend_enabled=False)
     bundle = DatasetBundle(dataset_id="d", original=make_dataset(["UPPER TEXT"]))
-    bundle, _, _ = run_preprocessing(
-        bundle, PreprocessRequest(steps=["lowercase"], explain=False), settings, None, None
-    )
+    bundle, _, _ = run_preprocessing(bundle, PreprocessRequest(steps=["lowercase"]), settings, None)
     bundle = apply_manual_labels(bundle, [ManualLabel(id="r0", label="positive")])
     bundle = checkpoint_bundle(store, bundle, "labelled")
     old = store.read("d", "labelled", "csv")
     repo.save(bundle)
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: None)
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
-    response = preprocess(
-        "d", PreprocessRequest(steps=["tokenize"], explain=False), repo, store, settings
-    )
+    response = preprocess("d", PreprocessRequest(steps=["tokenize"]), repo, store, settings)
     assert b"labelled checkpoint is outdated" in response.body
     assert str(tmp_path).encode() not in response.body
     assert store.read("d", "labelled", "csv") == old
@@ -169,7 +162,6 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         dedupe_enabled=change == "deduplicate",
         dedupe_similarity=1.0,
         comprehend_enabled=False,
-        bedrock_enabled=False,
     )
     calls = []
 
@@ -183,6 +175,8 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         ]
         if change == "deduplicate" and offset == 400:
             posts[-1]["text"] = "Post 0 has enough useful words"
+        if change == "deduplicate" and offset == 500:
+            posts[-1] = {"id": "600", "text": "A new perspective with enough useful words"}
         return httpx.Response(
             200,
             json={"data": posts, "meta": {"next_token": str(offset + 100)} if offset < 500 else {}},
@@ -192,7 +186,6 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
     store = LocalCheckpointStore(tmp_path / "protected-checkpoints")
     guard = SpendGuard(InMemoryLedger(), 1000, 3000, 0.005)
     monkeypatch.setattr(deps, "get_comprehend_client", lambda: None)
-    monkeypatch.setattr(deps, "get_bedrock_client", lambda: None)
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[deps.get_repository] = lambda: repo
@@ -206,9 +199,10 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
     ):
         monkeypatch.setattr(deps, "get_x_source", lambda *a: XSearchSource(guard, provider))
         first = routes._collect_x(request, repo, store, settings, lambda: len(calls) >= 5)
-        assert first.record_count == 500 and first.partial
+        initial_rows = 499 if change == "deduplicate" else 500
+        assert first.record_count == initial_rows and first.partial
         root = f"/dataset/{first.dataset_id}"
-        preprocessing = {"steps": ["lowercase"], "explain": False}
+        preprocessing = {"steps": ["lowercase"]}
         assert client.post(f"{root}/preprocess", json=preprocessing).status_code == 200
         labels = {"items": [{"id": "0", "label": "positive"}]}
         assert client.post(f"{root}/labels/manual", json=labels).status_code == 200
@@ -233,7 +227,7 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         resumed = routes._collect_x(request, repo, store, settings, lambda: False)
         # Reopen the repository so assertions cover persisted, revalidated state.
         result = LocalRepository(tmp_path / "working").get(first.dataset_id)
-        expected_rows = {"append": 600, "deduplicate": 499, "overlap": 500}[change]
+        expected_rows = {"append": 600, "deduplicate": 500, "overlap": 500}[change]
         assert resumed.record_count == len(result.original.records) == expected_rows
         assert resumed.resume_request_id == request.request_id and not resumed.partial
         source_before = before.checkpoint_status["collected:csv"].revision
@@ -243,7 +237,7 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         assert result.original.records[0].label_source == "manual"
         if change == "append":
             assert {r.id for r in result.original.records} == {str(i) for i in range(600)}
-        assert len(result.processed.records) == 500
+        assert len(result.processed.records) == initial_rows
         expected_status = "current" if change == "overlap" else "stale"
         listed = list_checkpoints(first.dataset_id, repo, store)
         for (stage, fmt), content in prior.items():

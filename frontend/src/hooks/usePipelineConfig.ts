@@ -10,15 +10,13 @@ export interface PipelineConfig {
   groups: { [name: string]: StepInfo["group"] };
   enabled: { [name: string]: boolean };
   options: StepOptions;
-  explain: boolean;
 }
 
 type Action =
   | { type: "init"; steps: StepInfo[] }
   | { type: "toggle"; name: string }
   | { type: "move"; name: string; direction: -1 | 1 }
-  | { type: "options"; options: Partial<StepOptions> }
-  | { type: "explain"; value: boolean };
+  | { type: "options"; options: Partial<StepOptions> };
 
 /** Shared by the controls and reducer; movement stays within the server-provided group. */
 export function canMove(state: PipelineConfig, name: string, direction: -1 | 1): boolean {
@@ -49,8 +47,6 @@ function reduce(state: PipelineConfig, action: Action): PipelineConfig {
     }
     case "options":
       return { ...state, options: { ...state.options, ...action.options } };
-    case "explain":
-      return { ...state, explain: action.value };
   }
 }
 
@@ -59,7 +55,6 @@ const initialConfig: PipelineConfig = {
   groups: {},
   enabled: {},
   options: { missing_data_strategy: "drop", missing_data_fill_value: "[EMPTY]", keep_negations: false },
-  explain: false,
 };
 
 export function usePipelineConfig() {

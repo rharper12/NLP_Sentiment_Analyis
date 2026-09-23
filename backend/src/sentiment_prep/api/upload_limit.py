@@ -4,6 +4,7 @@
 even when base64 encoded. Larger datasets are not supported by this buffered upload endpoint.
 """
 
+from fastapi import UploadFile
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -26,7 +27,10 @@ class UploadLimitMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope["path"] != "/dataset/upload":
+        if scope["type"] != "http" or scope["path"] not in {
+            "/dataset/upload",
+            "/dataset/upload/validate",
+        }:
             await self.app(scope, receive, send)
             return
         consumed = 0
@@ -43,3 +47,13 @@ class UploadLimitMiddleware:
             await self.app(scope, limited_receive, send)
         except PayloadTooLargeError as exc:
             await JSONResponse({"error": exc.message}, status_code=413)(scope, receive, send)
+
+
+async def read_csv_upload(file: UploadFile) -> bytes:
+    """Bound the file itself as well as the multipart envelope before parsing."""
+    content = bytearray()
+    while chunk := await file.read(min(65536, MAX_UPLOAD_BYTES + 1 - len(content))):
+        content.extend(chunk)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise PayloadTooLargeError("CSV exceeds the 4 MiB upload limit")
+    return bytes(content)

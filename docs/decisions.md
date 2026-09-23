@@ -2,17 +2,28 @@
 
 Architecture decision records, newest first. Each says what was decided, why, and what it costs.
 
-## ADR-23: A search window that clamps rather than refuses
-X's recent search accepts `start_time` and `end_time` inside a seven-day horizon, so the UI offers
-presets and a custom date pair. Bounds outside the horizon are clamped, not rejected: the "last 7
-days" preset computes `now - 168h` in the browser and the server checks it milliseconds later, so a
-strict comparison would fail the most common path on clock skew alone. A range that runs backwards
-is a different thing — no clamping repairs it, and sending it draws a 400 from X that our error
-mapping would misattribute to the query syntax — so that is refused with a message naming the
-problem. The window is recorded on the dataset and printed in the report, because "posts about the
-launch" means nothing without the days it covers.
+## ADR-23: Date ranges select recent or full-archive search
+Custom dates can reach back to March 2006. Windows older than seven days automatically use
+full-archive search with the same bearer token, requiring pay-per-use or Enterprise access.
+Historical dates are preserved instead of silently clamped into the last week. Recent presets
+stay on recent search; the seven-day preset leaves a minute for transit. Near-present ends
+retain a 30-second lag, and invalid or reversed windows are rejected before any paid call.
+
+Both endpoints use the same spend guard, 100-post page ceiling, filtering and accounting.
+Archive calls are paced to one per second within a fetch; provider rate limits across concurrent
+jobs still use the existing 429 backoff. Pagination stores its endpoint and effective dates
+before the first call, preserving them across resumptions. Old saved cursors belong to recent
+search; if their window expires, a new search is required rather than moving a cursor between
+endpoints. The dataset and report retain the effective dates as provenance.
+
+Provider reference: [X full-archive search](https://docs.x.com/x-api/posts/search/quickstart/full-archive-search).
 
 ## ADR-22: Deduplicate at collection, with a prefix filter and a deliberately high threshold
+X applies duplicate removal after each page before comparing retained rows with the requested
+target. This lets pagination replace dropped posts within the configured spend caps. Resumption
+seeds comparison with previously retained rows, keeping duplicate counts and paid cursors.
+Older completed jobs below their retained target can reopen using their saved unused cursor.
+
 Duplicates that straddle a train/test split let a model score itself on memorised text, which on a
 600-row corpus can move accuracy several points. X is full of copypasta and quote-tweets that
 differ only in a link, so posts are deduplicated at collection: exact matching after normalising
@@ -171,8 +182,9 @@ Task 1 is about preprocessing. Scoring the same records before and after with a 
 shows how much the steps move a real model. Task 2 swaps in the trained model without touching
 anything else. Cost: a small Comprehend bill per run; cached by text hash.
 
-## ADR-2: Only numbers go to Bedrock; record text never above DEBUG in logs
-Posts are personal data. The explainer receives the `ImpactReport` with `sample_diffs` removed.
+## ADR-2: Retired generated analysis
+Bedrock explanations and embedding comparisons have been removed. Analysis now reports local
+metrics and optional Comprehend prediction consistency, with explicit limitations.
 
 ## ADR-1: Hugging Face via datasets-server REST, not the `datasets` library
 Keeps the image small and fetches only the rows needed. Guaranteed path to the 500-record minimum.

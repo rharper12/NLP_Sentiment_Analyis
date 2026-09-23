@@ -10,14 +10,36 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+
+from pydantic import BaseModel
 
 from sentiment_prep.errors import ConflictError, NotFoundError, ValidationError
 from sentiment_prep.models import DatasetBundle
 from sentiment_prep.storage.repository import BUSY, BundleEdit
+
+DATASET_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+
+
+class LocalDatasetFile(BaseModel):
+    """Picker metadata; record contents are read only when a file is selected."""
+
+    dataset_id: str
+    filename: str
+    modified_at: datetime
+    bytes: int
+
+
+class LocalDatasetPage(BaseModel):
+    """A bounded page of local JSON files, newest modification first."""
+
+    total: int
+    items: list[LocalDatasetFile]
 
 
 class LocalRepository:
@@ -28,7 +50,7 @@ class LocalRepository:
         root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, dataset_id: str) -> Path:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", dataset_id):
+        if not DATASET_ID.fullmatch(dataset_id):
             raise ValidationError("Invalid dataset id")
         return self._root / f"{dataset_id}.json"
 
@@ -67,12 +89,41 @@ class LocalRepository:
     def get(self, dataset_id: str) -> DatasetBundle:
         """Reload an isolated snapshot, revalidating record identity."""
         try:
-            bundle = DatasetBundle.model_validate_json(self._path(dataset_id).read_bytes())
+            # Refuse links and special files even if a listed file was replaced before opening.
+            descriptor = os.open(
+                self._path(dataset_id), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            )
+            with os.fdopen(descriptor, "rb") as handle:
+                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                    raise ValidationError("Saved dataset must be a regular JSON file")
+                bundle = DatasetBundle.model_validate_json(handle.read())
         except FileNotFoundError as exc:
             raise NotFoundError(f"dataset {dataset_id} not found") from exc
         if bundle.dataset_id != dataset_id:
             raise ValidationError("Stored dataset id does not match its storage key")
         return bundle
+
+    def list_files(self, offset: int, limit: int) -> LocalDatasetPage:
+        """List metadata without deserializing every potentially large working bundle."""
+        files = []
+        for path in self._root.glob("*.json"):
+            if not DATASET_ID.fullmatch(path.stem):
+                continue
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue  # Atomic replacement or removal can race a directory listing.
+            if stat.S_ISREG(info.st_mode):
+                files.append(
+                    LocalDatasetFile(
+                        dataset_id=path.stem,
+                        filename=path.name,
+                        bytes=info.st_size,
+                        modified_at=datetime.fromtimestamp(info.st_mtime, UTC),
+                    )
+                )
+        files.sort(key=lambda item: (item.modified_at, item.filename), reverse=True)
+        return LocalDatasetPage(total=len(files), items=files[offset : offset + limit])
 
     @contextmanager
     def edit(self, dataset_id: str) -> Iterator[BundleEdit]:

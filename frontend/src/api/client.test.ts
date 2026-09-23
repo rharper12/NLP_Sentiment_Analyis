@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 describe("authenticated downloads", () => {
-  it.each(["csv", "xlsx", "parquet", "md"] as const)("downloads %s only after success with the server filename and exact bytes", async (kind) => {
+  it.each(["csv", "xlsx", "parquet", "md", "original.json"] as const)("downloads %s only after success with the server filename and exact bytes", async (kind) => {
     const bytes = new Uint8Array([1, 7, 255]);
     fetchMock.mockResolvedValueOnce(new Response(bytes, { headers: {
       "Content-Disposition": `attachment; filename="server-file.${kind}"`,
@@ -42,7 +42,7 @@ describe("authenticated downloads", () => {
     } }));
     await api.download("dataset", kind);
     const [url, options] = fetchMock.mock.calls[0];
-    expect(url).toBe(kind === "md" ? "/api/dataset/dataset/report.md" : `/api/dataset/dataset/export.${kind}`);
+    expect(url).toBe(kind === "original.json" ? "/api/dataset/dataset/original.json" : kind === "md" ? "/api/dataset/dataset/report.md" : `/api/dataset/dataset/export.${kind}`);
     expect(new Headers(options?.headers).get("Authorization")).toBe("Bearer temporary-test-session");
     expect(String(url)).not.toContain("test-only-key");
     expect(clicked).toEqual([{ name: `server-file.${kind}`, href: "blob:download" }]);
@@ -55,7 +55,7 @@ describe("authenticated downloads", () => {
     expect(revoke).toHaveBeenCalledWith("blob:download");
   });
 
-  it.each(["csv", "xlsx", "parquet", "md"] as const)("uses the intended %s filename if the server omits it", async (kind) => {
+  it.each(["csv", "xlsx", "parquet", "md", "original.json"] as const)("uses the intended %s filename if the server omits it", async (kind) => {
     fetchMock.mockResolvedValueOnce(new Response("contents"));
     await api.download("dataset", kind);
     expect(clicked[0].name).toBe(kind === "md" ? "dataset-report.md" : `dataset.${kind}`);
@@ -76,6 +76,18 @@ describe("authenticated downloads", () => {
       expect(new Headers(fetchMock.mock.calls[1][1]?.headers).has("Authorization")).toBe(false);
     }
   });
+});
+
+it("restores a selected local file through the authenticated endpoint", async () => {
+  const summary = { dataset_id: "fresh", source_type: "x", query: null, truncated_reason: null, record_count: 500, labelled_count: 0, preview: [], partial: false };
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(summary)));
+  const restored = await api.restoreLocal("saved-id");
+  const [url, options] = fetchMock.mock.calls[0];
+  expect(url).toBe("/api/local-datasets/saved-id/restore");
+  expect(options?.method).toBe("POST");
+  expect(options?.body).toBeUndefined();
+  expect(new Headers(options?.headers).get("Authorization")).toBe("Bearer temporary-test-session");
+  expect(restored.dataset_id).toBe("fresh");
 });
 
 it("reuses the collection identity after an interrupted request and exposes partial progress", async () => {

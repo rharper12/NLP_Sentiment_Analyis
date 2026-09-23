@@ -36,7 +36,7 @@ DOCKER_ENV = $(shell test ! -S /var/run/docker.sock && test -S "$(DOCKER_SOCK)" 
              && echo DOCKER_HOST=unix://$(DOCKER_SOCK))
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
+.PHONY: help setup dev stop dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
         api-types validate build deploy deploy-web put-secret logs clean
 
 ##@ Getting started
@@ -63,10 +63,14 @@ dev: ## Run the API and the UI together (Ctrl-C stops both)
 	@echo
 	@# `exec` in each subshell means the recorded pid is the server itself, not a wrapper, so the
 	@# trap actually stops it. `wait` keeps make in the foreground until both exit.
-	@trap 'kill $$api $$web 2>/dev/null' INT TERM; \
+	@trap 'kill $$api $$web 2>/dev/null || true' EXIT; \
+	  trap 'exit 130' INT; trap 'exit 143' TERM; \
 	  ( cd backend && exec uvicorn sentiment_prep.api.app:app --reload --port 8000 --app-dir src ) & api=$$!; \
-	  ( cd frontend && exec npx vite ) & web=$$!; \
+	  ( cd frontend && exec ./node_modules/.bin/vite ) & web=$$!; \
 	  wait $$api $$web
+
+stop: ## Stop this project's local servers on every port (including Vite fallback ports)
+	@python tools/stop_dev.py
 
 dev-api: ## Run only the API on :8000 (Swagger at /docs)
 	@command -v uvicorn >/dev/null || { echo "uvicorn not found. Run 'make setup' first."; exit 1; }

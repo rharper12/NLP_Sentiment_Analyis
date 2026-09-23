@@ -14,6 +14,8 @@ import type {
 } from "./types";
 import {
   checkpointInfoSchema,
+  csvValidationSchema,
+  localDatasetPageSchema,
   checkpointListSchema,
   datasetSummarySchema,
   healthSchema,
@@ -152,6 +154,18 @@ export const api = {
       ),
     ),
 
+  localDatasets: (offset = 0, signal?: AbortSignal) =>
+    request(`/local-datasets?offset=${offset}&limit=50`, localDatasetPageSchema, { signal }),
+
+  restoreLocal: (datasetId: string, signal?: AbortSignal) =>
+    request(`/local-datasets/${encodeURIComponent(datasetId)}/restore`, datasetSummarySchema, { method: "POST", signal }),
+
+  validateCsv: (file: File, signal?: AbortSignal) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request("/dataset/upload/validate", csvValidationSchema, { method: "POST", body: form, signal });
+  },
+
   upload: (file: File, signal?: AbortSignal) => {
     const form = new FormData();
     form.append("file", file);
@@ -162,13 +176,12 @@ export const api = {
     datasetId: string,
     steps: string[],
     options: StepOptions,
-    explain: boolean,
     signal?: AbortSignal,
   ) =>
     request(
       `/dataset/${datasetId}/preprocess`,
       preprocessResponseSchema,
-      json({ steps, options, explain }, signal),
+      json({ steps, options }, signal),
     ),
 
   /** All records in one call; the grid holds them in memory and virtualises rows itself. */
@@ -227,9 +240,9 @@ export const api = {
 
   history: (signal?: AbortSignal) => request("/history?limit=25", z.array(historyRunSchema), { signal }),
 
-  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md", signal?: AbortSignal) => {
+  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md" | "original.json", signal?: AbortSignal) => {
     const filename = kind === "md" ? `${datasetId}-report.md` : `${datasetId}.${kind}`;
-    const path = kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
+    const path = kind === "original.json" ? `/dataset/${datasetId}/original.json` : kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
     const response = await authorizedFetch(path, { signal });
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition");

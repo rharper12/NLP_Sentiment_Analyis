@@ -10,13 +10,25 @@ stage state; each stage is a component under `components/stages/`).
 
 ## 1. Loading data
 
+During local development, **Saved datasets → Open in Clean** selects a working JSON from
+`CHECKPOINT_DIR/_work`. `/local-datasets` lists metadata only, paged newest first. The selected
+file is validated by `storage/local_repository.py`, and `sources/saved_dataset.py` strips
+later annotations. `/local-datasets/{id}/restore` saves a fresh copy without deduplicating again.
+Both endpoints enforce the local runtime. The original file remains intact; restoration opens
+Clean with all options unchecked. **Download original dataset** still creates a JSON archive.
+
+CSV selection uses `components/collect/CsvUpload.tsx`: drop a file or use the visible chooser.
+`/dataset/upload/validate` runs the same parser as import, with no persistence. The component
+shows errors, row counts, warnings, and a short preview before enabling Import CSV. Replacing
+a file or leaving the tab cancels validation, so an old response cannot approve a different file.
+
 In the **Collect** stage (`components/stages/CollectStep.tsx`) the person types a topic and presses
 **Search and collect** (or loads the sample dataset, or uploads a CSV). The UI calls `POST /dataset/load` (or `/dataset/upload` for CSV) via
 `frontend/src/api/client.ts`, passing an `AbortSignal` so the **Cancel** button can stop the request.
 
 On the server, `api/routes.py::load_dataset` picks an adapter from `sources/`:
 
-- `x_search.py` calls X's recent-search endpoint page by page. Before each page it asks the
+- `x_search.py` calls X's recent or full-archive search endpoint for the selected dates, page by page. Before each page it asks the
   `SpendGuard` (`sources/spend_guard.py`) whether the reads fit under the per-fetch and per-day
   caps; after each page it records what was billed in the SQLAlchemy ledger
   (`history/services.py::DbLedger`). It also polls `should_stop()`, which the route sets when
@@ -36,7 +48,7 @@ row for the history tab, and returns a `DatasetSummary` with a 20-row preview an
 sweep; display and movement eligibility use the same group metadata.
 Each step expands to show what it helps and what it costs: the reducer in `hooks/usePipelineConfig.ts` tracks order, on/off state, and the
 two per-step options (negation handling, missing-data strategy). All Clean-screen checkboxes start
-unchecked, including the optional model explanation and keep-negations option. **Continue to
+unchecked, including the keep-negations option. **Continue to
 Analyze** runs the selected steps and opens the results; with none selected, it analyzes the
 original text unchanged. A run may call the enabled analysis services.
 
@@ -50,16 +62,15 @@ original text unchanged. A run may call the enabled analysis services.
    duration, and five sample diffs, producing one `StepResult` per step.
 3. Computes deterministic `DatasetMetrics` (`analysis/metrics.py`) for the original and processed
    datasets.
-4. Optionally enriches: Comprehend labels both versions and reports agreement
-   (`analysis/comprehend_scorer.py`); Titan embeds a seeded sample and reports cosine drift
-   (`analysis/embeddings.py`); Bedrock writes a prose explanation from the numbers only
-   (`analysis/bedrock_explainer.py`, prompt in `resources/explain_prompt.txt`). Each is wrapped in
-   a try/except that appends to `report.warnings` instead of failing the request.
+4. Optionally compares Comprehend predictions on both versions and reports agreement and
+   distributions (`analysis/comprehend_scorer.py`). Successful results are cached and persisted;
+   provider failures append to `report.warnings` instead of discarding deterministic output.
 
 The route saves the updated bundle, records a `PipelineRun` row, and returns metrics plus the
 `ImpactReport`. The **Analyze** stage (`AnalyzeStep.tsx`) renders the before/after table, the
-"meaning preserved" panel, the vocabulary waterfall (`StepWaterfall.tsx`), the explanation, and
-the records.
+prediction consistency panel, the vocabulary waterfall (`StepWaterfall.tsx`), and the records.
+Agreement measures consistency, not accuracy or proof that meaning was preserved. Token counts
+depend on the selected tokenization.
 
 ![Analyze](images/3-analyze.png)
 
@@ -86,13 +97,20 @@ combine them:
   or cancel; provider success immediately before persistence remains ambiguous, and re-running skips records that already have a
   Comprehend label. Records with a label from the source keep it; Comprehend's opinion is stored
   beside it as `comprehend_label`.
-- **Manual review.** Choose none, everything, or a random sample (count or percent, fixed seed).
+- **Manual review.** Choose lowest-confidence first (recommended after Comprehend), none, everything, or a
+  random sample (count or percent, fixed seed). Priority review excludes previously reviewed
+  posts and puts missing scores first, followed by ascending confidence.
   The reviewer shows one post at a time — always the **original** text, with a caption saying so,
   because a reviewer should judge what a human would actually read — alongside Comprehend's
   suggestion and confidence; keys 1–4 (or P/N/U/M) decide. The sample-size field accepts a post
   count or a percent and shows both readings ("100 posts (17% of 600)"), clamped to the dataset. Decisions flush every ten and on finish. A manual label sets
   `label_source="manual"` and never erases `comprehend_label`, which is how the summary computes
-  reviewer-vs-Comprehend agreement, the number to quote in the write-up.
+  reviewer-vs-Comprehend agreement. This describes reviewed posts only; prioritizing low scores
+  is a targeted error check, not an estimate of overall accuracy. Previous/Next and arrow keys
+  move without assigning a label. Review completion counts decisions, not posts visited.
+  Save and pause/finish waits for all queued decisions; only then does the summary confirm saved
+  labels. Return to selected review reopens the queue with saved choices. Corrections are used in
+  CSV, Excel, Parquet, reports, and labelled checkpoints; original text and machine scores remain.
 
 ## 6. Checkpoints
 

@@ -1,6 +1,6 @@
 import { useId } from "react";
 
-/** Presets cover the common cases; Custom exposes the two dates X's recent search accepts. */
+/** Presets cover recent searches; Custom also supports the full archive. */
 type RangePreset = "7d" | "3d" | "24h" | "custom";
 
 export interface TimeRange {
@@ -23,16 +23,14 @@ const PRESETS: [RangePreset, string][] = [
 const isoDate = (daysAgo: number): string =>
   new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
 
-/** The earliest date X will accept: recent search reaches back seven days. */
-const earliestDate = (): string => isoDate(6);
+const ARCHIVE_START = "2006-03-01";
 export const today = (): string => isoDate(0);
 
 /**
  * Resolve a range into the timestamps the API takes.
  *
  * Dates are sent as UTC instants: the start of the "from" day and the end of the "to" day, so a
- * range of 9th–13th includes everything posted on the 13th. The server clamps anything outside
- * what recent search can serve, so an out-of-range date degrades rather than failing.
+ * range of 9th–13th includes everything posted on the 13th. Older windows use full-archive search.
  */
 export function toWindow(range: TimeRange): { start?: string; end?: string } {
   if (range.preset === "custom") {
@@ -42,7 +40,9 @@ export function toWindow(range: TimeRange): { start?: string; end?: string } {
     };
   }
   const hours = range.preset === "24h" ? 24 : range.preset === "3d" ? 72 : 168;
-  return { start: new Date(Date.now() - hours * 3_600_000).toISOString(), end: undefined };
+  // Leave a minute for transit so the seven-day preset stays inside recent search's horizon.
+  const margin = range.preset === "7d" ? 60_000 : 0;
+  return { start: new Date(Date.now() - hours * 3_600_000 + margin).toISOString(), end: undefined };
 }
 
 /** True when a custom range is incomplete or the wrong way round. */
@@ -50,7 +50,8 @@ export function rangeError(range: TimeRange): string | null {
   if (range.preset !== "custom") return null;
   if (!range.from || !range.to) return "Choose both a start and an end date.";
   if (range.from > range.to) return "The start date must come before the end date.";
-  if (range.from < earliestDate()) return "X only serves the last 7 days.";
+  if (range.from < ARCHIVE_START) return "X's searchable archive starts in March 2006.";
+  if (range.to > today()) return "Choose dates on or before today.";
   return null;
 }
 
@@ -88,7 +89,7 @@ export function TimeRangePicker({ value, onChange }: Props) {
               id={ids.from}
               type="date"
               className="field w-44"
-              min={earliestDate()}
+              min={ARCHIVE_START}
               max={today()}
               value={value.from}
               onChange={(e) => onChange({ ...value, from: e.target.value })}
@@ -100,7 +101,7 @@ export function TimeRangePicker({ value, onChange }: Props) {
               id={ids.to}
               type="date"
               className="field w-44"
-              min={value.from || earliestDate()}
+              min={value.from || ARCHIVE_START}
               max={today()}
               value={value.to}
               onChange={(e) => onChange({ ...value, to: e.target.value })}
@@ -110,7 +111,7 @@ export function TimeRangePicker({ value, onChange }: Props) {
       )}
 
       <p className={`text-xs ${error ? "text-warn-ink" : "text-muted"}`}>
-        {error ?? "X serves the last 7 days only. Dates are treated as whole UTC days."}
+        {error ?? "Dates older than 7 days use full-archive search (pay-per-use or Enterprise). Existing spend caps apply. Dates are whole UTC days."}
       </p>
     </fieldset>
   );

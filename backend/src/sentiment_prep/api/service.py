@@ -1,6 +1,6 @@
 """Orchestrates a preprocessing run: pipeline, metrics, and optional AWS enrichments.
 
-Enrichments (Comprehend, embeddings, Bedrock) are best-effort. A failure records a warning and
+Comprehend comparisons are best-effort. A failure records a warning and
 leaves the field ``None``; the user still gets the deterministic results.
 """
 
@@ -11,10 +11,8 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from sentiment_prep.analysis.bedrock_explainer import BedrockExplainer
 from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer
 from sentiment_prep.analysis.comprehend_text import TRUNCATION_WARNING, prepare_text
-from sentiment_prep.analysis.embeddings import EmbeddingDrift
 from sentiment_prep.analysis.metrics import DatasetMetrics, compute_metrics
 from sentiment_prep.api.schemas import PreprocessRequest
 from sentiment_prep.budget import BudgetExhaustedError, can_start
@@ -28,7 +26,6 @@ from sentiment_prep.preprocessing.missing_data import MissingDataStep
 from sentiment_prep.preprocessing.stopwords import StopwordStep
 
 if TYPE_CHECKING:
-    from mypy_boto3_bedrock_runtime.client import BedrockRuntimeClient
     from mypy_boto3_comprehend.client import ComprehendClient
 
 from sentiment_prep.storage.checkpoints import invalidate_checkpoints
@@ -65,7 +62,6 @@ def run_preprocessing(
     request: PreprocessRequest,
     settings: Settings,
     comprehend: ComprehendClient | Callable[[], ComprehendClient | None] | None,
-    bedrock: BedrockRuntimeClient | Callable[[], BedrockRuntimeClient | None] | None,
     *,
     persist: Callable[[DatasetBundle], None] | None = None,
 ) -> tuple[DatasetBundle, DatasetMetrics, DatasetMetrics]:
@@ -80,11 +76,7 @@ def run_preprocessing(
         (
             request.model_dump_json()
             + json.dumps([(record.id, record.text) for record in updated.original.records])
-            + settings.embed_model_id
-            + settings.bedrock_text_model_id
-            + str(settings.embed_sample_size)
             + str(settings.comprehend_enabled)
-            + str(settings.bedrock_enabled)
         ).encode()
     ).hexdigest()
     if state.signature != signature or updated.processed is None or updated.report is None:
@@ -110,11 +102,8 @@ def run_preprocessing(
                 raise ProgressPersistenceError("Could not save analysis progress") from exc
 
     save()
-    for stage in ("sentiment", "embedding", "explanation"):
+    for stage in ("sentiment",):
         if stage in state.completed:
-            continue
-        if stage == "explanation" and not request.explain:
-            state.completed.append(stage)
             continue
         if not can_start():
             state.partial = True
@@ -146,25 +135,6 @@ def run_preprocessing(
                     if scorer.retry_pending:
                         state.partial = True
                         break
-            else:
-                model_client = bedrock() if callable(bedrock) else bedrock
-                if model_client is None:
-                    report.warnings.append(
-                        "embedding drift and explanation disabled (BEDROCK_ENABLED=false)"
-                    )
-                elif stage == "embedding":
-                    report.embedding_drift = EmbeddingDrift(
-                        model_client,
-                        settings.embed_model_id,
-                        settings.embed_sample_size,
-                        cache=state.vectors,
-                        attempts=state.attempts,
-                        persist=save,
-                    ).compute(updated.original, processed)
-                else:
-                    report.explanation = BedrockExplainer(
-                        model_client, settings.bedrock_text_model_id
-                    ).explain(report, request.steps)
         except ProgressPersistenceError:
             raise
         except BudgetExhaustedError:

@@ -26,7 +26,7 @@ function deferred() {
 }
 
 async function start(count: number) {
-  vi.mocked(api.reviewPage).mockResolvedValue({ total: count, offset: 0, items: Array.from({ length: count }, (_, i) => ({ id: `r${i}`, text: `Post ${i}`, source_type: "csv" })) });
+  vi.mocked(api.reviewPage).mockResolvedValue({ total: count, reviewed: 0, offset: 0, items: Array.from({ length: count }, (_, i) => ({ id: `r${i}`, text: `Post ${i}`, source_type: "csv" })) });
   render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
   await screen.findByText("Post 0");
 }
@@ -42,10 +42,10 @@ it("a failed final save prevents completion and keeps decisions retryable", asyn
   vi.mocked(api.manualLabels).mockRejectedValueOnce(new Error("offline"));
   await start(1);
   choose(1);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("offline"));
   expect(onDone).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(api.manualLabels).toHaveBeenNthCalledWith(2, "dataset", [{ id: "r0", label: "positive" }]);
 });
@@ -56,7 +56,7 @@ it("Finish waits for an automatic save even when the pending buffer is empty", a
   await start(10);
   choose(10);
   expect(api.manualLabels).toHaveBeenCalledTimes(1);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   expect(onDone).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Saving labels…" }).hasAttribute("disabled")).toBe(true);
   await act(async () => first.resolve());
@@ -68,13 +68,13 @@ it("multiple failures remain actionable until an explicit retry succeeds", async
   vi.mocked(api.manualLabels).mockRejectedValueOnce(new Error("first failure")).mockRejectedValueOnce(new Error("second failure"));
   await start(1);
   choose(1);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await screen.findByText(/first failure/);
   fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
   await screen.findByText(/second failure/);
   expect(onDone).not.toHaveBeenCalled();
   expect(onError).toHaveBeenCalledTimes(2);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(api.manualLabels).toHaveBeenCalledTimes(3);
   for (const [, batch] of vi.mocked(api.manualLabels).mock.calls) expect(batch).toEqual([{ id: "r0", label: "positive" }]);
@@ -87,7 +87,7 @@ it("serializes a correction behind the earlier in-flight decision", async () => 
   choose(10);
   for (let i = 0; i < 10; i++) fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
   fireEvent.click(screen.getByRole("button", { name: /^negative/i }));
-  fireEvent.click(screen.getByRole("button", { name: "Stop here and keep labels" }));
+  fireEvent.click(screen.getByRole("button", { name: /Save and (pause|finish) review/ }));
   expect(api.manualLabels).toHaveBeenCalledTimes(1);
   expect(onDone).not.toHaveBeenCalled();
   await act(async () => first.resolve());
@@ -103,7 +103,7 @@ it("drains both the automatic batch and trailing decisions before completion", a
   vi.mocked(api.manualLabels).mockReturnValueOnce(first.promise).mockReturnValueOnce(tail.promise);
   await start(11);
   choose(11);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   expect(api.manualLabels).toHaveBeenCalledTimes(1);
   await act(async () => first.resolve());
   await waitFor(() => expect(api.manualLabels).toHaveBeenCalledTimes(2));
@@ -118,11 +118,11 @@ it("a failed in-flight automatic save cannot be bypassed by Finish", async () =>
   vi.mocked(api.manualLabels).mockReturnValueOnce(first.promise);
   await start(10);
   choose(10);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await act(async () => first.reject(new Error("automatic save failed")));
   await screen.findByText(/automatic save failed/);
   expect(onDone).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(vi.mocked(api.manualLabels).mock.calls[1][1]).toHaveLength(10);
 });
@@ -134,15 +134,15 @@ it("replaces the request aborted by Strict Mode and accepts only its replacement
   expect(pages).toHaveLength(2);
   expect(pages[0].signal.aborted).toBe(true);
   expect(pages[1].signal.aborted).toBe(false);
-  await act(async () => { pages[0].resolve({ total: 1, offset: 0, items: [{ id: "old", text: "Obsolete post", source_type: "csv" }] }); });
+  await act(async () => { pages[0].resolve({ total: 1, reviewed: 0, offset: 0, items: [{ id: "old", text: "Obsolete post", source_type: "csv" }] }); });
   expect(screen.queryByText("Obsolete post")).toBeNull();
-  await act(async () => { pages[1].resolve({ total: 1, offset: 0, items: [{ id: "new", text: "Replacement post", source_type: "csv" }] }); });
+  await act(async () => { pages[1].resolve({ total: 1, reviewed: 0, offset: 0, items: [{ id: "new", text: "Replacement post", source_type: "csv" }] }); });
   expect(screen.getByText("Replacement post")).toBeTruthy();
   expect(api.reviewPage).toHaveBeenCalledTimes(2);
 });
 
 it.each([0, 2])("retries a failed page at offset %i without refetching successful pages", async (offset) => {
-  const page = (start: number, count: number): ReviewPage => ({ total: offset + 1, offset: start, items: Array.from({ length: count }, (_, i) => ({ id: `r${start + i}`, text: `Post ${start + i}`, source_type: "csv" })) });
+  const page = (start: number, count: number): ReviewPage => ({ total: offset + 1, reviewed: 0, offset: start, items: Array.from({ length: count }, (_, i) => ({ id: `r${start + i}`, text: `Post ${start + i}`, source_type: "csv" })) });
   if (offset) vi.mocked(api.reviewPage).mockResolvedValueOnce(page(0, offset));
   vi.mocked(api.reviewPage).mockRejectedValueOnce(new Error("page offline")).mockResolvedValueOnce(page(offset, 1));
   render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
@@ -152,7 +152,7 @@ it.each([0, 2])("retries a failed page at offset %i without refetching successfu
   fireEvent.click(screen.getByRole("button", { name: "Retry loading posts" }));
   await screen.findByText(`Post ${offset}`);
   choose(1);
-  fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
   await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
   expect(vi.mocked(api.reviewPage).mock.calls.map((call) => call[1])).toEqual(offset ? [0, offset, offset] : [0, 0]);
   expect(vi.mocked(api.manualLabels).mock.calls.flatMap((call) => call[1])).toHaveLength(offset + 1);
@@ -172,7 +172,7 @@ it("aborts an outstanding page on unmount and ignores late failure", async () =>
 });
 
 it("counts final unique decisions, not repeated corrections, for live agreement", async () => {
-  vi.mocked(api.reviewPage).mockResolvedValue({ total: 2, offset: 0, items: [{ id: "a", text: "Machine scored", source_type: "csv", comprehend_label: "positive" }, { id: "b", text: "Manual only", source_type: "csv" }] });
+  vi.mocked(api.reviewPage).mockResolvedValue({ total: 2, reviewed: 0, offset: 0, items: [{ id: "a", text: "Machine scored", source_type: "csv", comprehend_label: "positive" }, { id: "b", text: "Manual only", source_type: "csv" }] });
   render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
   await screen.findByText("Machine scored");
   fireEvent.click(screen.getByRole("button", { name: /^positive/i }));
@@ -181,4 +181,40 @@ it("counts final unique decisions, not repeated corrections, for live agreement"
   expect(screen.getByText(/agree with Comprehend/).textContent).toContain("0%");
   fireEvent.click(screen.getByRole("button", { name: /^positive/i }));
   expect(screen.getByText(/agree with Comprehend/).textContent).toContain("0%");
+});
+
+it("Next and Previous navigate without marking skipped posts reviewed", async () => {
+  await start(2);
+  expect(document.activeElement?.textContent).toBe("Review post 1 of 2");
+  fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  expect(screen.getByText("0 of 2 reviewed")).toBeTruthy();
+  choose(1);
+  expect(screen.getByRole("status").textContent).toContain("1 selected posts still need a label");
+  expect(screen.queryByRole("button", { name: "Save and finish review" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+  expect(screen.getByRole("button", { name: /^positive/i }).getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: /Previous/ }));
+  choose(1);
+  expect(screen.getByText("2 of 2 reviewed")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save and finish review" }));
+  await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+  expect(api.manualLabels).toHaveBeenCalledWith("dataset", [{ id: "r1", label: "positive" }, { id: "r0", label: "positive" }]);
+});
+
+it("reopens saved choices and does not double-count a corrected saved label", async () => {
+  vi.mocked(api.reviewPage).mockResolvedValue({ total: 2, reviewed: 1, offset: 0, items: [
+    { id: "a", text: "Saved post", source_type: "csv", label: "mixed", label_source: "manual", comprehend_label: "positive", comprehend_confidence: 0.4 },
+    { id: "b", text: "Unreviewed post", source_type: "csv" },
+  ] });
+  render(<Reviewer datasetId="dataset" onError={onError} onDone={onDone} />);
+  await screen.findByText("Saved post");
+  expect(screen.getByRole("button", { name: /^mixed/i }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText(/1 of 2 reviewed/)).toBeTruthy();
+  fireEvent.keyDown(window, { key: "1" });
+  expect(screen.getByText("Saved post")).toBeTruthy();
+  fireEvent.keyDown(document.activeElement!, { key: "2" });
+  expect(screen.getByText("Unreviewed post")).toBeTruthy();
+  expect(screen.getByText(/1 of 2 reviewed/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Save and pause review" }));
+  await waitFor(() => expect(api.manualLabels).toHaveBeenCalledWith("dataset", [{ id: "a", label: "negative" }]));
 });

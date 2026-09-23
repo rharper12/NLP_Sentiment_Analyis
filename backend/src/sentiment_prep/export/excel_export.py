@@ -48,7 +48,6 @@ def to_excel(bundle: DatasetBundle, *, diagnostics: bool = False) -> bytes:
                 ["sentiment_comparable_records", bundle.report.sentiment.comparable_records]
             )
             impact.append(["sentiment_shared_records", bundle.report.sentiment.shared_records])
-        impact.append(["embedding_drift", bundle.report.embedding_drift])
 
     buffer = io.BytesIO()
     workbook.save(buffer)

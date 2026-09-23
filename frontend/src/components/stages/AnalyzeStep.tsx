@@ -30,13 +30,12 @@ interface Props {
 const fmt = (n: number) => n.toLocaleString();
 const pct = (a: number, b: number) => (a === 0 ? null : ((b - a) / a) * 100);
 
-/** Stage 3. The numbers first, then a chart, then the prose, then the evidence (records). */
+/** Stage 3. The numbers first, then a chart, then the evidence (records). */
 export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
   const [selected, setSelected] = useState<{ pair: RecordPair; trigger?: HTMLElement } | null>(null);
   const selectRecord = useCallback((pair: RecordPair, trigger?: HTMLElement) => setSelected({ pair, trigger }), []);
   const records = useAsync<RecordPair[]>();
   const { run: loadRecords } = records;
-  const [copied, setCopied] = useState(false);
   // `warnings` is optional in the schema (it has a server-side default), so normalise once.
   const allWarnings = [...(run?.report.warnings ?? []), ...(run?.warnings ?? [])];
   const warnings = allWarnings.filter((w) => !w.includes("disabled"));
@@ -44,17 +43,15 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
 
   const rows = run ? [
     { label: "Posts", a: run.metrics_before.record_count, b: run.metrics_after.record_count, f: fmt },
-    { label: "Vocabulary", a: run.metrics_before.vocab_size, b: run.metrics_after.vocab_size, f: fmt, help: "unique tokens the model must learn" },
+    { label: "Vocabulary", a: run.metrics_before.vocab_size, b: run.metrics_after.vocab_size, f: fmt, help: "distinct tokens counted in this representation" },
     { label: "Tokens per post", a: run.metrics_before.avg_tokens, b: run.metrics_after.avg_tokens, f: (n: number) => n.toFixed(1) },
-    { label: "Type–token ratio", a: run.metrics_before.type_token_ratio, b: run.metrics_after.type_token_ratio, f: (n: number) => n.toFixed(3), help: "vocabulary ÷ total tokens; higher is sparser" },
+    { label: "Type–token ratio", a: run.metrics_before.type_token_ratio, b: run.metrics_after.type_token_ratio, f: (n: number) => n.toFixed(3), help: "distinct tokens ÷ total tokens" },
   ] : [];
 
   // Reload whenever a pipeline run finishes so the processed column reflects the latest run.
   useEffect(() => {
     void loadRecords((signal) => api.allRecords(datasetId, recordCount, signal));
   }, [datasetId, recordCount, runVersion, loadRecords]);
-
-  const copy = async () => { if (run?.report.explanation) { await navigator.clipboard.writeText(run.report.explanation); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
   return (
     <section className="mx-auto flex max-w-5xl flex-col gap-6">
@@ -75,37 +72,42 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
         <div className="glass-panel p-5">
           <h3 className="mb-3 font-semibold">Dataset</h3>
           <table className="tnum w-full text-sm">
+            <thead><tr><th scope="col" className="text-left">Metric</th><th scope="col" className="pl-3 text-right">Original</th><th scope="col" className="pl-3 text-right">Processed</th><th scope="col" className="pl-3 text-right">Change</th></tr></thead>
             <tbody>
-              {busy && rows.length === 0 && Array.from({ length: 4 }, (_, i) => <tr key={i}><td className="py-2 text-muted"><Skeleton className="w-24" /></td><td className="py-2 text-right"><Skeleton className="w-12" /></td><td className="w-8" /><td className="py-2 text-right"><Skeleton className="w-14" /></td><td className="py-2 pl-3 text-right"><Skeleton className="w-10" /></td></tr>)}
+              {busy && rows.length === 0 && Array.from({ length: 4 }, (_, i) => <tr key={i}><td className="py-2 text-muted"><Skeleton className="w-24" /></td><td className="py-2 text-right"><Skeleton className="w-12" /></td><td className="py-2 text-right"><Skeleton className="w-14" /></td><td className="py-2 pl-3 text-right"><Skeleton className="w-10" /></td></tr>)}
               {rows.map((r) => { const d = pct(r.a, r.b); return (
                 <tr key={r.label} className="border-t border-rule first:border-0">
-                  <th scope="row" className="py-2 pr-2 text-left font-medium text-muted">{r.label}{r.help && <span className="block text-xs font-normal">{r.help}</span>}</th>
-                  <td className="py-2 text-right">{r.f(r.a)}</td>
-                  <td className="w-8 text-center text-muted">→</td>
-                  <td className="py-2 text-right text-lg font-semibold">{r.f(r.b)}</td>
-                  <td className={`py-2 pl-3 text-right text-xs ${d != null && d < 0 ? "text-removed" : "text-muted"}`}>{d == null ? "" : `${d > 0 ? "+" : ""}${d.toFixed(0)}%`}</td>
+                  <th scope="row" className="py-2 pr-2 text-left font-medium text-muted">{r.label}{r.help && <span className="block max-w-[24ch] text-xs font-normal">{r.help}</span>}</th>
+                  <td className="py-2 pl-3 text-right">{r.f(r.a)}</td>
+                  <td className="py-2 pl-3 text-right text-lg font-semibold">{r.f(r.b)}</td>
+                  <td className={`py-2 pl-3 text-right text-xs ${d != null && d < 0 ? "text-removed" : "text-muted"}`}>{d == null ? "" : `${d > 0 ? "+" : ""}${d.toFixed(1)}%`}</td>
                 </tr>); })}
             </tbody>
           </table>
+          <p className="mt-3 text-xs text-muted">Token counts depend on how the text is split. Selecting tokenization can increase vocabulary and token counts even when words are unchanged. These metrics do not measure sentiment accuracy.</p>
         </div>
 
         <div className="glass-panel p-5">
-          <h3 className="mb-3 font-semibold">Meaning preserved?</h3>
+          <h3 className="mb-3 font-semibold">Prediction consistency</h3>
           {busy && !run && <div className="flex flex-col gap-3"><Skeleton className="w-3/4" /><Skeleton className="w-1/2" /></div>}
           {run && (
             <>
             <dl className="flex flex-col gap-3 text-sm">
               <div>
-                <dt className="text-muted">Baseline classifier agreement <span className="text-xs">(Amazon Comprehend, before vs after)</span></dt>
+                <dt className="text-muted">Same prediction before and after <span className="text-xs">(Amazon Comprehend, before vs after)</span></dt>
                 <dd className="tnum text-2xl font-semibold">{run.report.sentiment?.agreement != null ? `${(run.report.sentiment.agreement * 100).toFixed(1)}%` : <span className="text-base font-normal text-muted">not measured</span>}</dd>
                 {run.report.sentiment && <dd className="text-xs text-muted">{run.report.sentiment.comparable_records ?? 0} successfully scored comparable posts of {run.report.sentiment.shared_records ?? 0} shared posts. Agreement is unavailable when none were scored successfully.</dd>}
               </div>
-              <div>
-                <dt className="text-muted">Embedding drift <span className="text-xs">(Titan Embed v2, cosine distance)</span></dt>
-                <dd className="tnum text-2xl font-semibold">{run.report.embedding_drift != null ? run.report.embedding_drift.toFixed(3) : <span className="text-base font-normal text-muted">not measured</span>}</dd>
-                {run.report.embedding_drift != null && <dd className="text-xs text-muted">0 = identical to an embedding model; above ~0.3 means materially different text.</dd>}
-              </div>
             </dl>
+            <p className="mt-3 text-sm text-muted">Agreement measures consistency, not accuracy or proof that meaning was preserved. Comprehend can make the same mistake on both versions. It predicts overall post sentiment, which may differ from sentiment toward your subject.</p>
+            {run.report.sentiment && <>
+              {run.report.sentiment.agreement != null && <p className="mt-3 text-sm">{(run.report.sentiment.comparable_records ?? 0) - Math.round(run.report.sentiment.agreement * (run.report.sentiment.comparable_records ?? 0))} comparable posts changed prediction.</p>}
+              <table className="tnum mt-3 w-full text-sm">
+                <caption className="mb-2 text-left text-muted">Comprehend predictions on successfully scored posts</caption>
+                <thead><tr><th scope="col" className="text-left">Sentiment</th><th scope="col" className="pl-3 text-right">Original</th><th scope="col" className="pl-3 text-right">Processed</th></tr></thead>
+                <tbody>{["positive", "negative", "neutral", "mixed"].map((label) => <tr key={label}><th scope="row" className="text-left font-normal capitalize">{label}</th><td className="text-right">{run.report.sentiment?.distribution_before[label] ?? 0}</td><td className="text-right">{run.report.sentiment?.distribution_after[label] ?? 0}</td></tr>)}</tbody>
+              </table>
+            </>}
             {diagnostics && disabledNote.length > 0 && (
               <p className="mt-3 text-xs text-muted">{disabledNote.join(" ")} Enable in .env to measure.</p>
             )}
@@ -122,18 +124,6 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
         </div>
       )}
 
-      {run && (
-        <div className="glass-panel p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="font-semibold">In plain English</h3>
-            {run.report.explanation && <button type="button" className="btn-link" onClick={copy}>{copied ? "Copied" : "Copy"}</button>}
-          </div>
-          {run.report.explanation ? (
-            <><p className="mt-2 max-w-[72ch] leading-relaxed">{run.report.explanation}</p><p className="mt-2 text-xs text-muted">Generated from the numbers above; review before quoting.</p></>
-          ) : <p className="mt-2 text-sm text-muted">No explanation for this run. {allWarnings.filter((w) => w.includes("explanation")).join(" ")}</p>}
-        </div>
-      )}
-
       <div className="glass-panel p-5">
         {records.data ? (
           <RecordsGrid pairs={records.data} theme={theme} hasRun={!!run} onSelect={selectRecord} />
@@ -145,7 +135,7 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
 
       {run && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">
-          <p className="text-sm text-muted">Happy with the result? Next, give every post a label.</p>
+          <p className="text-sm text-muted">Inspect changed posts before assigning or reviewing sentiment labels.</p>
           <button type="button" className="btn-primary" disabled={busy} onClick={onContinue}>Continue to Label →</button>
         </div>
       )}

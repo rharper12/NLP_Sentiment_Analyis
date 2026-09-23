@@ -9,6 +9,8 @@ type S = components["schemas"];
 
 /** One collected post. Named PostRecord so it cannot shadow TypeScript's built-in Record<K, V>. */
 export type PostRecord = S["Record"];
+export type CsvValidation = S["CsvValidation"];
+export type LocalDatasetPage = S["LocalDatasetPage"];
 export type DatasetSummary = S["DatasetSummary"];
 export type StepInfo = S["StepInfo"];
 export type StepResult = S["PublicStepResult"];
