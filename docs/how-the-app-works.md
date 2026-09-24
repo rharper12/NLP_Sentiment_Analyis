@@ -72,12 +72,12 @@ prediction consistency panel, the vocabulary waterfall (`StepWaterfall.tsx`), an
 Agreement measures consistency, not accuracy or proof that meaning was preserved. Token counts
 depend on the selected tokenization.
 
-![Analyze](images/3-analyze.png)
+![Analyze with synthetic demonstration data](images/readme/analyze.png)
 
 ## 4. Reading the results
 
-The records section of Analyze uses AG Grid Community (`RecordsGrid.tsx`), fetching all records
-once via `GET /dataset/{id}/records`, which joins original and processed
+The records section of Analyze uses AG Grid Community (`RecordsGrid.tsx`), fetching all pages
+once per run via `GET /dataset/{id}/records`, which joins original and processed
 records by id (dropped records show as "dropped"). Sorting, filtering and pagination happen in the browser.
 Only changed or dropped records offer **View changes**. Activating that button with Enter/Space,
 or clicking a changed row, opens `DiffDialog.tsx`. It compares the exact text in order, highlighting
@@ -127,7 +127,7 @@ Parquet revisions, and preprocessing reruns invalidate labelled snapshots.
 
 The **Export** stage (`ExportStep.tsx`) offers CSV, Excel, Parquet, and Markdown downloads plus the S3 save.
 
-![Export](images/5-export.png)
+![Export with synthetic demonstration data](images/readme/export.png)
 
 `export/rows.py` defines one flat row shape used by all three outputs so they never disagree:
 `csv_export.py`, `excel_export.py` (adds an `impact` sheet), and `storage/s3_store.py`

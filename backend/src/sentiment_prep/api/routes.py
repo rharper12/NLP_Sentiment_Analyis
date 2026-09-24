@@ -1,9 +1,8 @@
 """All endpoints, grouped by tag so Swagger reads as the workflow: collect, clean, label, export.
 
-Sync handlers run in FastAPI's threadpool, which is what SQLAlchemy sessions and boto3 expect.
-The one async handler, ``load_dataset``, is async so it can notice a client disconnect and stop
-a paid X fetch at the next page boundary. Checkpoints are written the moment paid or expensive
-data exists: after collect, after preprocessing, and after every labelling call.
+Sync handlers run in FastAPI's threadpool. Async collection watches for disconnects; async CSV
+handlers read uploads before moving parsing and persistence to a worker thread. Stage checkpoints
+follow collection, preprocessing and labelling; working bundles also save paid batch progress.
 """
 
 from __future__ import annotations
@@ -113,7 +112,6 @@ MIN_RECORDS_FOR_TASK = 500
 # How often the disconnect watcher polls while a paid fetch runs. Short enough to stop the next
 # page promptly, long enough not to spin.
 DISCONNECT_POLL_SECONDS = 0.25
-# Upper bound on rows accepted from an uploaded CSV, so a stray file cannot exhaust memory.
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 RepoDep = Annotated[BundleRepository, Depends(deps.get_repository)]
@@ -532,8 +530,8 @@ def label_comprehend(
 def choose_review(dataset_id: str, request: ReviewRequest, repo: RepoDep) -> LabelSummary:
     """Fix the review set.
 
-    ``none`` skips review, ``all`` reviews every record, ``sample`` picks ``size`` records (a
-    count or a percent) with a fixed seed so the same request always yields the same subset.
+    ``none`` skips review, ``all`` reviews every record, and ``sample`` uses a fixed seed.
+    ``low_confidence`` prioritizes unreviewed records with missing or low Comprehend scores.
     """
     with repo.edit(dataset_id) as edit:
         bundle = labeling.choose_review(
@@ -870,8 +868,8 @@ def _store(
 ) -> DatasetSummary:
     """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
 
-    Deduplication happens here rather than in each adapter so every source gets it, and before
-    the pipeline so the record count is fixed for every preprocessing configuration that follows.
+    CSV and sample imports share this boundary. X deduplicates inside its paging loop so it can
+    keep fetching until the retained-record target is met. Restoring original data skips dedupe.
     """
     settings = get_settings()
     if dedupe and settings.dedupe_enabled:

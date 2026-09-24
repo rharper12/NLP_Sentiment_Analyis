@@ -1,8 +1,8 @@
 """Remove high-frequency function words.
 
-Negations (``not``, ``no``, ``never``, ``nor``) are kept by default: removing them flips the
-polarity of phrases like "not good", which is the single most damaging stopword mistake in
-sentiment work. The UI exposes this as an option so the effect can be demonstrated.
+The class defaults to retaining negations such as ``not`` and ``never`` because removing them
+can reverse phrases such as "not good". The API passes its explicit ``keep_negations`` option;
+the Clean screen starts with every checkbox unchecked, including that option.
 """
 
 from __future__ import annotations

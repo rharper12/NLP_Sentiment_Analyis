@@ -1,4 +1,4 @@
-"""Write and read history. The only module outside ``history`` that touches these tables."""
+"""Queries and transactions for run history, the spend ledger, and cached pricing."""
 
 from __future__ import annotations
 

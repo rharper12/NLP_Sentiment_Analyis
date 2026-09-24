@@ -1,10 +1,8 @@
-"""Checkpoints: CSV snapshots written the moment data exists.
+"""Stage snapshots with explicit freshness and write-failure status.
 
-Three stages are checkpointed: ``collected`` (raw posts, possibly paid for), ``processed``
-(after the pipeline), and ``labelled`` (after Comprehend and manual review, paid for). If the
-process crashes after a paid step, the checkpoint is the receipt. Locally they live in a
-gitignored folder; in AWS they go to the data bucket through ``upload_fileobj``, which boto3
-splits into a multipart upload automatically above ``TransferConfig.multipart_threshold``.
+Collected, processed and labelled CSV snapshots supplement the required working journal.
+Snapshot failures are reported without discarding committed work. Files use local storage or
+S3; the S3 adapter uses ``upload_fileobj`` with a configured multipart threshold.
 """
 
 from __future__ import annotations

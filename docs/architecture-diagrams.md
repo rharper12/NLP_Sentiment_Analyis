@@ -1,164 +1,155 @@
 # Architecture diagrams
 
-Five views, from the outside in. Every diagram renders on GitHub without a plugin.
-Prose and the layer dependency rules live in [architecture.md](architecture.md); this file is the
-visual companion.
+These diagrams describe the current implementation. GitHub renders the Mermaid blocks directly.
+See [architecture.md](architecture.md) for storage and request-lifecycle details.
 
-## 1. System context
-
-Who talks to what, and which parts cost money.
+## 1. Deployment
 
 ```mermaid
-flowchart LR
-    person(["Person preparing a dataset"])
-
-    subgraph aws["AWS account"]
-        cf["CloudFront-less S3 site<br/>(static React bundle)"]
-        gw["API Gateway<br/>HTTP API, throttled"]
-        fn["Lambda<br/>FastAPI container"]
-        s3[("S3<br/>datasets · checkpoints")]
-        db[("SQLite on /tmp<br/>or Postgres")]
-        ssm["SSM Parameter Store<br/>API key · X token"]
-    end
-
-    x["X API v2<br/>configured cost per billed read"]
-    comp["Amazon Comprehend<br/>live price / nullable estimate"]
-    price["AWS Price List API<br/>free"]
-    hf["Hugging Face<br/>datasets-server, free"]
-
-    person --> cf --> gw --> fn
-    fn --> s3
-    fn --> db
-    fn --> ssm
-    fn -->|paid| x
-    fn -->|paid| comp
-    fn --> price
-    fn --> hf
-
-    classDef paid fill:#fde2e1,stroke:#b42318,stroke-width:2px;
-    class x,comp paid
+flowchart TB
+    accTitle: AWS deployment
+    accDescr: The browser loads the UI through CloudFront and calls API Gateway and Lambda; the backend uses S3, PostgreSQL, SSM, and configured external services.
+    Browser["Browser"] --> CDN["CloudFront<br/>HTTPS frontend"]
+    CDN --> Site["Private S3 site bucket<br/>React production build"]
+    Browser --> Gateway["API Gateway HTTP API"]
+    Gateway --> API["Lambda container<br/>FastAPI"]
+    API --> Data["S3 data bucket<br/>Working bundles, checkpoints, exports"]
+    API --> DB["PostgreSQL<br/>Shared history and X spend ledger"]
+    API --> Secrets["SSM Parameter Store<br/>Operator key, X token, database URL"]
+    API --> X["X API"]
+    API --> Comprehend["Amazon Comprehend"]
+    API --> Pricing["AWS Price List API"]
+    API --> Sample["Hugging Face datasets-server"]
 ```
 
-Red edges cost money. Paid requests are budgeted; estimates can be unavailable. Committed progress is persisted
-and checkpoint failures are reported.
+Paid X collection in Lambda requires the shared PostgreSQL ledger. SQLite on Lambda's `/tmp`
+is only an ephemeral fallback for history when paid X collection is not in use. Locally, Vite
+proxies the API during development, working bundles use local JSON files, and history defaults
+to SQLite.
 
-## 2. The five stages, and what each one persists
+## 2. Dataset workflow
 
 ```mermaid
 flowchart TD
-    A["1 · Collect<br/>search a topic, or load a sample"] --> B["2 · Clean<br/>choose and order the steps"]
-    B --> C["3 · Analyze<br/>run, then measure the change"]
-    C --> D["4 · Label<br/>Comprehend, then human review"]
-    D --> E["5 · Export<br/>Parquet · CSV · Excel · report"]
-
-    A -.writes.-> ck1[("checkpoint: collected.csv")]
-    C -.writes.-> ck2[("checkpoint: processed.csv")]
-    D -.writes after every slice.-> ck3[("checkpoint: labelled.csv")]
-    E -.on request.-> save[("s3://…/datasets/{id}/{timestamp}/")]
-
-    A -->|filtered at collection| drop["not English · no content ·<br/>duplicate · near-duplicate"]
-
-    classDef note fill:#fff6e0,stroke:#7a4b00;
-    class drop note
+    accTitle: Dataset dependencies
+    accDescr: Original records feed preprocessing and labelling; exports join original text, processed text, and current labels by record ID.
+    Collect["Collect<br/>X, sample, CSV, or local saved original"] --> Original["Original records"]
+    Original --> Clean["Choose optional preprocessing steps"]
+    Clean --> Analyze["Run preprocessing and inspect changes"]
+    Analyze --> Processed["Processed records and impact report"]
+    Analyze -->|Adjust steps| Clean
+    Original --> Label["Optional Comprehend labels<br/>and manual review"]
+    Label --> Annotations["Latest labels and their sources"]
+    Original --> Export["Join by record ID for export"]
+    Processed --> Export
+    Annotations --> Export
 ```
 
-Dropping contentless and duplicate posts **at collection** is deliberate: it fixes the record
-count, so two preprocessing configurations are compared over identical rows.
+The UI presents Collect, Clean, Analyze, Label, and Export in sequence. This diagram shows the
+data dependencies: labelling reads original text, while Analyze can compare predictions for both
+representations. Reprocessing starts from original text rather than repeatedly cleaning an
+already processed version.
 
-## 3. Module dependencies
-
-Arrows point the way imports go. Nothing points back up.
+## 3. Module responsibilities
 
 ```mermaid
 flowchart TD
-    routes["api/routes.py"] --> service["api/service.py"]
-    routes --> labeling["labeling/service.py"]
-    routes --> deps["api/deps.py<br/>builds and caches clients"]
-    routes --> exp["export/"]
-    routes --> ckpt["storage/checkpoints.py"]
-    routes --> hist["history/services.py"]
-    routes --> rep["report.py"]
-
-    service --> pre["preprocessing/"]
-    service --> ana["analysis/"]
-    labeling --> ana
-    labeling --> pricing["pricing/"]
-    pricing --> hist
-    deps --> sources["sources/"]
-    sources --> guard["sources/spend_guard.py"]
-    sources --> dedupe["sources/dedupe.py"]
-    guard --> hist
-
-    pre --> models["models.py"]
-    ana --> models
-    exp --> models
-    ckpt --> exp
-
-    classDef base fill:#e4ecfb,stroke:#1f5fe0;
-    class models base
+    accTitle: Module responsibilities
+    accDescr: API routes coordinate injected dependencies, preprocessing, analysis, labelling, exports, storage, and history services.
+    Routes["api/routes.py<br/>Request validation and orchestration"] --> Deps["api/deps.py<br/>Configured clients and repositories"]
+    Routes --> Service["api/service.py<br/>Preprocessing and analysis progress"]
+    Routes --> Labels["labeling/service.py<br/>Labels, review selection, summaries"]
+    Routes --> Storage["storage/<br/>Bundles, checkpoints, S3 exports"]
+    Routes --> Exports["export/<br/>Shared rows and file encoders"]
+    Routes --> History["history/<br/>Runs, spend ledger, pricing cache"]
+    Deps --> Sources["sources/<br/>X, Hugging Face, CSV"]
+    Service --> Pipeline["preprocessing/<br/>Record transformations"]
+    Service --> Analysis["analysis/<br/>Metrics and Comprehend scoring"]
+    Labels --> Analysis
+    Labels --> Pricing["pricing/<br/>Current rate and cached quotes"]
+    Pricing --> History
+    Sources --> Guard["SpendGuard<br/>Injected ledger interface"]
+    Storage --> Exports
 ```
 
-`models.py` depends on nothing but Pydantic, which is what lets every other module be tested
-without a network, a database or an AWS account.
+The spend guard accepts a ledger interface; dependency construction supplies `DbLedger`.
+Sources do not import the concrete history implementation. Shared Pydantic models define records,
+bundles, progress, and report shapes without starting clients or reading stored datasets.
 
-## 4. One paid request, end to end
-
-The X fetch, because it is the path where a mistake costs real money.
+## 4. X collection and pagination
 
 ```mermaid
 sequenceDiagram
-    participant UI as React UI
-    participant API as FastAPI route
-    participant G as SpendGuard
-    participant DB as spend_day (SQL)
-    participant X as X API v2
-    participant CK as Checkpoint store
+    accTitle: X collection progress
+    accDescr: The API claims a dataset, reserves reads, retrieves and filters a page, saves the cursor, settles accounting, and repeats while more retained posts are needed.
+    participant UI as Browser
+    participant API as Collection route
+    participant Store as Bundle repository
+    participant Guard as Spend guard and SQL ledger
+    participant X as X API
 
-    UI->>API: POST /dataset/load {query, limit}
-    loop until limit, or a cap, or the client disconnects
-        API->>G: reserve(page_size)
-        G->>DB: UPDATE … WHERE reads + n <= cap
-        alt no rows updated
-            DB-->>G: cap reached
-            G-->>API: SpendCapReachedError → partial dataset
-        else reserved
-            API->>X: GET /2/tweets/search/recent or /all (historical dates)
-            X-->>API: up to 100 posts (billed)
-            API->>G: record(actual)
-            G->>DB: audit row + release the unused reservation
-        end
+    UI->>API: Query, dates, retained-post limit, request ID
+    API->>Store: Create or claim the saved collection
+    loop While more unique posts are needed and budget remains
+        API->>Guard: Reserve reads before the request
+        Guard-->>API: Reservation accepted or cap reached
+        API->>X: Request page with saved cursor
+        X-->>API: Posts and next cursor
+        API->>API: Validate, filter, and deduplicate
+        API->>Store: Save retained posts and cursor
+        API->>Guard: Settle actual reads
+        API->>Store: Save accounting progress
     end
-    API->>API: filter non-English, contentless, duplicates
-    API->>CK: write collected.csv
-    API-->>UI: summary + why posts were dropped
+    API->>Store: Write collected checkpoint when time permits
+    API-->>UI: Retained count, billed reads, and resume status
 ```
 
-The reservation is claimed **before** the request goes out and released after, so two concurrent
-fetches cannot both spend the last of the day's budget.
+The implementation requests at most 100 posts per page. Filtering happens inside the loop, so
+removed posts do not satisfy the retained-post target. A partial response can be resumed with
+the same request ID. Collection is not stratified by date.
 
-## 5. How a label is produced, and where it comes from
+The sequence shows successful pages. Caps, deadlines, cancellation, invalid responses, and rate
+limits can stop a slice. An ambiguous transport failure may already have incurred a charge;
+its reservation is retained conservatively. A failed required save prevents another paid page.
+
+## 5. Labels and review
 
 ```mermaid
-stateDiagram-v2
-    [*] --> unlabelled: collected from X
-    [*] --> source_labelled: came with the dataset
-
-    unlabelled --> comprehend: Comprehend slice (paid, resumable)
-    source_labelled --> comprehend_compared: Comprehend runs anyway,<br/>stored beside the existing label
-
-    comprehend --> manual: chosen for review
-    comprehend_compared --> manual: chosen for review
-    comprehend --> [*]: exported, label_source = comprehend
-    source_labelled --> [*]: exported, label_source = source
-    manual --> [*]: exported, label_source = manual
-
-    note right of manual
-        A manual label always wins, and never
-        erases comprehend_label — the two
-        together give the agreement figure
-        the write-up quotes.
-    end note
+flowchart TD
+    accTitle: Label provenance
+    accDescr: Source labels and Comprehend predictions can be reviewed manually; manual decisions take precedence while machine predictions remain available.
+    Original["Original record"] --> Machine["Optional Comprehend prediction"]
+    Original --> Existing["Existing source label, if supplied"]
+    Machine --> Stored["Store prediction and confidence separately"]
+    Stored --> Choose["Choose review set<br/>Low confidence, random, all, or none"]
+    Existing --> Choose
+    Choose --> Human["Review original text<br/>Save manual decisions"]
+    Existing --> Final["Export label and label_source"]
+    Stored -->|Use when no label exists| Final
+    Human -->|Manual decision takes precedence| Final
 ```
 
-Task 2 trains on `label` and evaluates on the rows where `label_source = manual`, which is the
-only subset a human has confirmed.
+Manual decisions preserve the machine prediction for comparison. Pausing or finishing review
+waits for pending saves. Reviewer agreement is measured on records with both a manual decision
+and a Comprehend result; it is not a model-accuracy score. Low-confidence review intentionally
+selects difficult cases and should not be treated as a representative evaluation sample.
+
+## 6. Working files, checkpoints, and exports
+
+```mermaid
+flowchart LR
+    accTitle: Storage destinations
+    accDescr: Working journals are stored locally or in S3 by runtime; stage checkpoints and user-requested S3 export folders have separate lifecycles.
+    Bundle["Dataset bundle"] --> Local["Local journal<br/>_work / dataset ID / named JSON"]
+    Bundle --> Cloud["Lambda journal<br/>S3 _work / dataset ID.json"]
+    Bundle --> Checkpoint["Stage snapshots<br/>collected, processed, labelled"]
+    Bundle --> Save["User-requested S3 save<br/>dataset ID / filename / unique save ID"]
+    Save --> Parquet["Named Parquet file"]
+    Save --> Impact["impact.json"]
+    Save --> Manifest["manifest.json"]
+```
+
+Only the repository for the configured runtime owns working state. Local edits use filesystem
+locks and atomic replacement; S3 edits use conditional writes and an exclusive claim. Stage
+snapshots can be replaced as work progresses. User-requested S3 exports use a fresh UUID folder
+for each save, including when the filename repeats.

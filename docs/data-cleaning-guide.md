@@ -1,108 +1,71 @@
-# Data cleaning guide: which technique, and when
+# Choosing preprocessing steps
 
-Preprocessing is not a checklist to run in full every time. Each step trades signal for
-simplicity. This guide gives a decision for each step in this app, then a recipe by scenario.
+Start with the dataset and the intended model. Every Clean-screen checkbox is initially off;
+select a step only when its benefit justifies the information it removes. Original text is
+preserved, so you can compare different configurations.
 
-## Decide by model first
+## Lowercasing
 
-| Your model | Lowercase | Punctuation | Stopwords | Lemmatize |
-|---|---|---|---|---|
-| Bag of words / TF-IDF + logistic regression, naive Bayes, SVM | yes | yes | yes, keep negations | usually yes |
-| Word embeddings averaged (word2vec, GloVe) | yes | yes | often | no (embeddings already generalise) |
-| Transformer / LLM (BERT, Titan, Claude) | **no** (cased models) | mostly no | **no** | **no** |
+Lowercasing combines capitalization variants such as `Great`, `great`, and `GREAT`. That can
+reduce sparse features in a word-count or TF-IDF representation. It also removes emphasis and
+case distinctions that may matter to sentiment or a cased model. Inspect posts with capitals
+before selecting it.
 
-Tokenization and missing-data handling are always needed; the question is only *how*.
+## Punctuation and special characters
 
-## Step by step
+This step removes URLs, mentions, punctuation, and non-word symbols, including emojis. Hashtag
+words remain. Those removals can reduce incidental vocabulary, but they can also discard emotion,
+questions, and the target or context of an opinion. Preserving these features is a reasonable
+starting point for sentiment analysis of short posts.
 
-### Handle empty records — last, not first
-Social-media posts almost never *arrive* empty: the X API always returns text, and a media-only
-tweet's text is its `t.co` link. They **become** empty — a link-and-mention post has nothing left
-once URLs and mentions are stripped, an emoji-only post nothing after special characters, "I am
-what I am" nothing after stopwords. So the sweep belongs at the end of the pipeline, where the
-emptying happens, not at the start where it cannot see it.
+## Tokenization
 
-Two different problems, handled in two different places:
+The app uses NLTK's Treebank tokenizer. It creates a token list and replaces the processed text
+with those tokens joined by spaces. Contractions can become separate components, such as `do`
+and `n't`. URLs and hashtags can also split into fragments.
 
-1. **No content on arrival** (a post that is only a link) is filtered at *collection*, by counting
-   tokens after links and mentions are removed. Doing it there keeps the record count identical
-   across every preprocessing configuration you try, so two runs are compared against the same
-   denominator. Report how many were dropped and why.
-2. **Emptied by the steps** is what the pipeline's final sweep handles.
+Use this step when that representation suits subsequent analysis. A model with its own tokenizer
+may need the original text instead. Changes in vocabulary or token counts after tokenization
+reflect a change in how text is counted; they do not establish improved accuracy.
 
-**Drop** is the right default. Empty or whitespace-only text produces zero vectors and API errors. **Fill** with a placeholder when row count matters (paired
-data, fixed-size batches) or when you want to study how much was missing. Watch for missingness
-that correlates with a label: image-only posts are often positive; dropping them skews the class
-balance. Report the count either way.
+## Stopword removal
 
-### Lowercase — for count-based models
-Merges "Great"/"great"/"GREAT". Shrinks vocabulary and sparsity. **Skip** for cased transformers,
-and consider skipping when emphasis matters: ALL CAPS is a strong sentiment cue on social media.
-A compromise some teams use: lowercase but add a feature for "fraction of capitals".
+Removing frequent function words can reduce the size of a count-based representation. It can
+also remove useful context, intensity, or negation. If you select this step, consider selecting
+**Keep negations** and inspect the resulting phrases. That option starts unchecked, like the
+other Clean-screen options. Its implementation preserves a defined set of negation forms;
+it does not interpret every possible negated expression.
 
-### Punctuation and special characters — almost always, carefully
-URLs and @mentions carry no sentiment and each is a unique token: remove them. Hashtags usually
-carry the word (#disappointed): keep the word, drop the `#`. Exclamation marks and emoticons
-(":(" , "!!!") *do* carry sentiment; this app removes them for simplicity and says so in the
-report. If you keep them, treat each as a token rather than leaving it glued to a word.
+## Lemmatization
 
-### Tokenize — always, but choose the tokenizer
-Whitespace split is wrong for "movie." and "don't". Treebank (used here) splits contractions,
-which makes negation a token ("n't"). For tweets, NLTK's `TweetTokenizer` preserves emoticons and
-hashtags and shortens "soooo" to "sooo". For transformers, use the model's own tokenizer and skip
-everything else in this section.
+Lemmatization groups inflected words into dictionary forms. The app uses WordNet with
+part-of-speech tags. This can pool evidence for frequency-based models, but tagging errors and
+ambiguous forms can produce unsuitable lemmas. It also removes some tense and number information.
+Review changed words before using this representation.
 
-### Stopwords — for count-based models, and never blindly
-Removing "the", "of", "is" reduces noise for frequency-based models. Two rules:
-1. **Keep negations** ("not", "no", "never", "n't"). Removing them flips polarity.
-2. Inspect the list. NLTK's English list contains "very", "too", "only" (intensity words) and
-   "against". Whether those are noise depends on the task.
-Skip for transformers: they use function words for syntax.
+## Empty-record handling
 
-### Lemmatize — for small datasets with count-based models
-"loved"/"loves"/"loving" → "love" pools evidence when data is scarce. Needs part-of-speech tags to
-work well (this app tags with NLTK's perceptron tagger). **Stemming** is the cheap cousin: it
-chops suffixes by rule ("studies" → "studi"), faster but produces non-words. Neither helps
-transformers. Watch for tense loss: "was great" vs "is great" can matter in reviews.
+When selected, this step runs last to catch text emptied by earlier transformations. **Drop**
+removes those records; **Fill** preserves their IDs and supplies a placeholder. Filling introduces
+artificial text, and dropping may change the sample's composition. Report the number affected.
+A non-empty record can still be irrelevant, misleading, or difficult to interpret.
 
-## Techniques not in this app, and when you would add them
+Collection checks are separate. CSV import skips blank text; X collection applies a five-token
+minimum after excluding links and mentions from the length check. That heuristic can exclude
+meaningful short posts. Deduplication also runs at collection when enabled. Neither check proves
+that retained posts are relevant or representative.
 
-| Technique | Use when |
-|---|---|
-| Spelling normalisation ("soooo" → "so") | user-generated text, count-based model |
-| Emoji to text (😀 → ":grinning_face:") | emoji carry sentiment and you want them as tokens |
-| Language filtering | multilingual sources; this app filters X to `lang:en` at fetch time |
-| Deduplication / near-duplicate removal | retweets, copy-paste campaigns; inflates confidence |
-| Handling class imbalance (re-weighting, resampling) | one label dominates (trial coverage) |
-| Named-entity masking ("Lindsay Clancy" → PERSON) | names leak the topic and the model memorises them |
-| Minimum length filter | very short posts ("lol", "this") are mostly noise; this app drops < 5 tokens at X fetch |
+## Comparing configurations
 
-## Recipes
+For an initial tweet experiment, compare unchanged text with a small configuration such as
+lowercasing, tokenization, and final empty-record handling. Leave punctuation removal, stopword
+removal, and lemmatization off until you have a reason to add them. This is a starting experiment,
+not a universal recipe.
 
-**Tweets about a live topic, logistic regression on TF-IDF (Task 2 baseline).**
-lowercase → punctuation → tokenize → stopwords(keep negations) → lemmatize → missing_data(drop).
-Measure vocabulary and sentiment changes on your own dataset; these are not guaranteed outcomes.
+Use Analyze to inspect actual text differences as well as the counts. Comprehend agreement means
+that predictions stayed the same, not that either prediction was correct. Assess sentiment
+accuracy separately using independently labelled, held-out data and a consistent label definition.
+Do not treat a low-confidence review queue as a representative test set.
 
-**Same tweets, fine-tuning a transformer.**
-missing_data(drop) → dedupe → *stop*. Let the model's tokenizer do the rest. Run this app's
-pipeline only to *inspect* the data, not to feed the model.
-
-**Product reviews (longer, better spelled).**
-lowercase → punctuation → tokenize → stopwords → lemmatize → missing_data. Consider keeping
-intensity words ("very", "too") by removing them from the stopword list.
-
-**Comparing techniques for a write-up (Task 1).**
-Run the full pipeline, then re-run with one step off at a time. The waterfall shows each step's
-vocabulary effect; sentiment agreement measures prediction consistency. Export the report after each
-run; the differences are your "strengths and limitations" evidence.
-
-## How to read the app's numbers when deciding
-
-- Vocabulary dropped and agreement stayed high → inspect what was removed; these numbers alone
-  do not prove noise reduction or preserved meaning.
-- Vocabulary barely moved → the step is not doing much on this data; consider dropping it to
-  keep the pipeline simple.
-- Agreement fell noticeably → predictions changed. Look at sample diffs in the Records tab
-  for what changed; negation removal and over-aggressive lemmatization are the usual culprits.
-- Tokenization can increase counts by splitting punctuation and words differently. Compare
-  representations consistently and evaluate accuracy separately on held-out human-labelled data.
+Comprehend labelling in Step 4 uses original text. The optional comparisons in Step 3 score both
+original and processed text. Keep that distinction clear when explaining observed errors.

@@ -27,9 +27,8 @@ interface Props {
 type Phase = "method" | "labelling" | "review-choice" | "reviewing" | "summary";
 
 /**
- * Stage 4. Comprehend labels everything cheaply; a person reviews some or all of it. Every paid
- * slice is saved server-side before the next starts, and reviewer decisions are flushed in
- * small batches, so a crash or a closed tab never loses more than a few seconds of work.
+ * Stage 4 combines optional Comprehend labels with manual review. Paid batches are saved
+ * server-side. Manual decisions are queued in Reviewer and must finish saving before exit.
  */
 export function LabelStep(props: Props) {
   // A different dataset owns a fresh review queue, progress state and request lifetime.
@@ -150,7 +149,7 @@ function LabelSession({ datasetId, diagnostics, comprehendEnabled, checkpointLoc
           <div className="glass-panel flex flex-col gap-3 p-5">
             <h3 className="font-semibold">Label manually</h3>
             <p className="text-sm text-muted">Read each post and pick the label yourself. Use consistent criteria and check ambiguous posts; human labels can also be uncertain. You can label all posts or a sample.</p>
-            <button type="button" className="btn mt-auto" onClick={() => setPhase("review-choice")}>Choose what to label by hand</button>
+            <button type="button" className="btn mt-auto" disabled={!sum} onClick={() => setPhase("review-choice")}>Choose what to label by hand</button>
           </div>
           {allLabelled && (
             <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">

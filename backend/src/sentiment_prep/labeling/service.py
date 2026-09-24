@@ -200,7 +200,7 @@ def _label_batch(
     batch_ids: set[str],
     rate: PriceQuote | None = None,
 ) -> tuple[DatasetBundle, LabelProgress]:
-    """Send up to ``max_records`` pending records to Comprehend and store the results.
+    """Score the selected pending record IDs and store their results.
 
     A record that already has a source or manual label keeps it; Comprehend's answer is recorded
     alongside so the two can be compared. A record with no label adopts Comprehend's.

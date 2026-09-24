@@ -1,7 +1,7 @@
 """Remove punctuation, URLs, mentions and other non-word characters.
 
-Hashtags keep their word (``#happy`` becomes ``happy``) because the word carries sentiment.
-Mentions are dropped entirely because a username does not.
+Hashtags keep their word (``#happy`` becomes ``happy``). Removing mentions, punctuation and
+emojis can lose context or sentiment cues; this step is optional.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def clean_text(text: str) -> str:
 
 
 class PunctuationStep(PreprocessStep):
-    """Strip characters that a bag-of-words model would treat as noise."""
+    """Remove non-word characters, links and mentions from text or existing tokens."""
 
     name: ClassVar[str] = "punctuation"
 

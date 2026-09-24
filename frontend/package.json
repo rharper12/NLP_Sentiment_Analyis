@@ -2,6 +2,7 @@
   "name": "sentiment-prep-ui",
   "private": true,
   "version": "0.1.0",
+  "author": "Ron Harper",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -1,8 +1,8 @@
 """FastAPI application and Lambda entry point.
 
-Startup work happens in the ``lifespan`` handler, not at import: importing this module must never
-touch the database, the network or the filesystem, so scripts, type checkers and tests can import
-it freely. The handler creates the schema on start and closes the pooled clients on shutdown.
+Import constructs the app and reads configuration. Database initialization and external client
+construction are deferred. Local lifespan initializes the schema and closes clients on shutdown;
+Lambda initializes lazily and retains clients for warm invocations.
 
 The request middleware binds ``request_id`` into the logging context, so every line emitted while
 handling that request carries it without being passed around, and reports the duration when the

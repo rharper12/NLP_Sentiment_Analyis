@@ -5,13 +5,13 @@ is measuring and why the pipeline steps exist. Nothing here needs more than high
 
 ## 1. The problem
 
-Sentiment analysis takes a piece of text and predicts an attitude: positive, negative, neutral
-(sometimes finer grades, sometimes emotions). It is a **classification** task: input text, output
+Sentiment analysis takes a piece of text and predicts a category: positive, negative, neutral,
+or mixed in this app. It is a **classification** task: input text, output
 one of a fixed set of labels.
 
-Computers cannot read. A model only sees numbers. So the entire game is: turn text into numbers
-in a way that preserves the signal (attitude) and discards the noise (everything else), then learn
-a function from those numbers to labels.
+Models operate on numerical representations of text. The representation should preserve
+information relevant to the label being predicted; preprocessing can remove useful information
+as well as irrelevant variation.
 
 ## 2. From text to numbers: the bag of words
 
@@ -26,7 +26,8 @@ vocabulary:  [ "movie", "loved", "terrible", "not", "good" ]
 
 Each position is a **feature**. The set of all distinct words is the **vocabulary**. This is why
 the app's impact strip leads with vocabulary size: every unique token is a column the model has to
-learn a weight for, and columns that appear once (a URL, a username, "AMAZINGGG") are pure noise.
+learn a weight for. Rare features can make learning harder on a small dataset, but they can
+still carry useful information, such as emphasis or the target of an opinion.
 
 A refinement, **TF-IDF**, down-weights words that appear in most documents ("the") and up-weights
 words that are distinctive to a few. Still a bag of words, still order-blind.
@@ -50,9 +51,9 @@ string into units. "don't" → "do" + "n't" is a choice; it makes negation its o
 ## 4. Negation: the classic trap
 
 "not good" is negative. A stopword list that removes "not" turns it into "good", which is positive.
-This single mistake can cost more accuracy than every other step gains. It is why the app keeps
-negations by default and exposes the toggle: run it both ways and watch the Comprehend agreement
-figure drop.
+The app provides a **Keep negations** option when stopword removal is selected. Both checkboxes
+start unchecked. Compare the actual transformed text when choosing this option; a change in
+Comprehend agreement alone does not prove that preprocessing improved or harmed accuracy.
 
 ## 5. Modern models: embeddings
 
@@ -60,9 +61,9 @@ Neural models replace the sparse count vector with a dense **embedding**: a few 
 thousand numbers per document, learned so that similar meanings land close together.
 This app does not compute embeddings or embedding drift.
 
-Important consequence: embedding models were trained on raw, cased, punctuated text. Aggressive
-preprocessing can *hurt* them. Lowercasing and stopword removal help a bag-of-words model and may
-harm a transformer. That is the central tension the app lets you see rather than assume.
+Preprocessing should match the model's expected inputs. Some models are cased, some are uncased,
+and many supply their own tokenizer. Lowercasing or stopword removal can help a count-based
+representation in some tasks, but those choices should be evaluated rather than assumed useful.
 
 ## 6. Measuring a classifier
 
@@ -78,8 +79,8 @@ Once you have a model (Task 2), you evaluate on held-out data with a **confusion
 - **Recall** = TP / (TP + FN): of the actual positives, how many you caught.
 - **F1** = harmonic mean of precision and recall.
 
-Social-media sentiment is usually imbalanced (a murder trial produces mostly negative posts), so
-report per-class F1, not accuracy alone.
+When sentiment classes are imbalanced, report per-class results alongside overall accuracy.
+Inspect the actual label distribution rather than assuming it from the topic.
 
 ## 7. Where labels come from
 

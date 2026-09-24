@@ -1,8 +1,8 @@
 """Generate the Markdown report for the Task 1 write-up.
 
 Every number comes from the ``ImpactReport`` and ``LabelSummary``; every sentence about strengths
-and limitations comes from ``rationale.yaml``, which a human wrote. No generated interpretation
-is added at runtime.
+and limitations comes from the maintained ``rationale.yaml`` descriptions. No model-generated
+interpretation is added at runtime.
 """
 
 from __future__ import annotations

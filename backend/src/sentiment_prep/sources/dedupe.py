@@ -3,8 +3,8 @@
 Social platforms are full of repetition: copypasta, quote-tweets of the same sentence, bot posts
 that differ only in a trailing link. Left in, a duplicate that lands in both the training and the
 test split lets a model score itself on text it has memorised, which inflates accuracy on a small
-corpus. Removing them at collection, rather than mid-pipeline, also keeps the record count
-identical across every preprocessing configuration, so two runs stay comparable.
+corpus. Removing them at collection gives later preprocessing runs the same original input;
+individual steps can still remove records from their processed output.
 
 Two passes, cheapest first:
 

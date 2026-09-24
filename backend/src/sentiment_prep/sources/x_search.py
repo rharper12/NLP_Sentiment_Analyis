@@ -42,10 +42,8 @@ SEARCH_WINDOW = timedelta(days=7)
 ARCHIVE_START = datetime(2006, 3, 1, tzinfo=UTC)
 END_TIME_LAG = timedelta(seconds=30)
 PAGE_SIZE = 100
-# Minimum *content* tokens: a post whose length is made up of a link and a mention has nothing to
-# classify, and would be emptied by the cleaning steps anyway. Filtering here rather than mid-
-# pipeline keeps the record count identical across every preprocessing configuration, so two runs
-# can be compared against the same denominator.
+# Apply the minimum content length at collection so later preprocessing runs share one input.
+# This heuristic can exclude meaningful short posts; it does not establish relevance or quality.
 MIN_CONTENT_TOKENS = 5
 MAX_RETRIES = 3
 DEFAULT_QUERY_SUFFIX = "lang:en -is:retweet"
@@ -57,8 +55,7 @@ class XQueryError(ExternalServiceError):
     """The saved request was rejected; retrying the identical query/cursor cannot repair it."""
 
 
-# Links and mentions are stripped before measuring length, for the same reason the punctuation
-# step removes them later: neither carries sentiment.
+# Exclude links and mentions from this length check without changing the stored original text.
 _NOISE = re.compile(r"https?://\S+|www\.\S+|@\w+")
 
 

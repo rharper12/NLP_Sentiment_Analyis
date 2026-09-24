@@ -16,5 +16,8 @@ order below the first time, then use them as reference.
 | [Data cleaning guide](data-cleaning-guide.md) | Deciding which preprocessing techniques to use for a given dataset. |
 | [Design system](design-system.md) | Tokens, the glass surface, selected/focus states, how contrast is verified. |
 | [Decisions](decisions.md) | Why the stack looks the way it does; what was deliberately left out. |
+| [Code quality review](code-quality-review.md) | Findings, fixes, regression results, and remaining limitations from the latest review. |
 
-Screenshots live in `images/`. The Swagger UI at `/docs` is always the authoritative API contract.
+Screenshots live in `images/`; current README captures are in `images/readme/`. The Swagger UI at
+`/docs` describes the running API contract. See the repository [README](../README.md) for Ron
+Harper's project overview and setup instructions.

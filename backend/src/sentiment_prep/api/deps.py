@@ -58,7 +58,7 @@ def browser_time_zone(
         ) from exc
 
 
-# Generous read timeout for paged fetches, short connect timeout so a dead host fails fast.
+# Bound each page request so it fits within the API's request budget.
 HTTP_TIMEOUT = httpx.Timeout(3.0, connect=1.0, pool=1.0)
 
 

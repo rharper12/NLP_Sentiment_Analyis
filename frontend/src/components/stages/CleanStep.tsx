@@ -17,7 +17,7 @@ interface Props {
 }
 
 const GROUPS: { id: StepInfo["group"]; title: string; blurb: string }[] = [
-  { id: "clean", title: "Clean the text", blurb: "Remove what carries no sentiment." },
+  { id: "clean", title: "Clean the text", blurb: "Standardize text while considering which sentiment cues to preserve." },
   { id: "normalise", title: "Normalise for NLP", blurb: "Turn text into tokens and reduce variants to one form." },
   { id: "final", title: "Handle empty results", blurb: "Finally, drop or fill records emptied by earlier steps." },
 ];

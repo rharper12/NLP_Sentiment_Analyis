@@ -2,6 +2,7 @@
 name = "sentiment-prep"
 version = "0.1.0"
 description = "Dataset preparation and preprocessing-impact analysis for sentiment analysis."
+authors = [{ name = "Ron Harper" }]
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

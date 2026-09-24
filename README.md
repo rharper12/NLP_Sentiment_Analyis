@@ -1,131 +1,216 @@
 # Sentiment Prep
 
-Prepare a text dataset for sentiment analysis and measure what each preprocessing step does to
-it. FastAPI on AWS Lambda, React UI, one CloudFormation (SAM) stack, structured logging
-throughout.
+**Author: Ron Harper**
 
-![Collect stage: search a topic](docs/images/1-collect.png)
+Collect text, choose how to preprocess it, inspect the changes, and review sentiment labels
+before exporting a dataset. Sentiment Prep keeps the original text alongside the processed
+version so you can see what each decision changed.
 
-A guided five-stage flow:
+![Analyze screen showing original and processed dataset metrics and prediction consistency](docs/images/readme/analyze.png)
 
-1. **Collect.** Search any topic on X (recent or historical dates, spend-capped), load a labelled sample dataset,
-   or upload a CSV.
-2. **Clean.** Choose cleaning steps (case, punctuation), NLP normalisation steps
-   (tokenize, stopwords, lemmatize), and a final empty-record sweep, each with its trade-offs stated inline.
-3. **Analyze.** Run it and read the impact in a sortable, filterable AG Grid table: vocabulary and token changes, a per-step waterfall,
-   prediction consistency and sentiment distributions (Amazon Comprehend), and word-level diffs
-   for changed posts. Agreement does not establish accuracy or preserved meaning.
-4. **Label.** Comprehend labels every post (live-priced estimate shown and confirmed first, resumable, checkpointed
-   after each slice); then review low-confidence predictions first, a random sample (count or percent), all, or none with keyboard
-   shortcuts. The app reports reviewer-vs-Comprehend agreement.
-5. **Export.** Parquet, CSV, Excel, a Markdown report for the write-up, S3 save, and stage
-   checkpoints (collected / processed / labelled) with one-click Parquet conversion.
+*Screenshots use synthetic demo posts and test sentiment responses.*
 
-Responsive from phones to desktops, dark and light themes, cancellable requests, run history,
-and a live X spend counter. React 19 + TypeScript + Tailwind CSS v4 + AG Grid Community, with
-API types generated from the backend's OpenAPI schema and every response validated with Zod.
+## The workflow
 
-![Analyze stage](docs/images/3-analyze.png)
+```mermaid
+flowchart LR
+    accTitle: Dataset preparation workflow
+    accDescr: Collect, Clean, Analyze, Label, and Export, with a return from Analyze to Clean to adjust steps.
+    Collect["1. Collect<br/>X, sample data, or CSV"]
+    Clean["2. Clean<br/>Choose preprocessing steps"]
+    Analyze["3. Analyze<br/>Inspect metrics and changes"]
+    Label["4. Label<br/>Comprehend or manual review"]
+    Export["5. Export<br/>Download files or save to S3"]
+    Collect --> Clean --> Analyze --> Label --> Export
+    Analyze -->|Adjust steps| Clean
+```
 
-## Quick start
+| Stage | What you can do |
+| --- | --- |
+| Collect | Search X within a date range, load the Hugging Face sample, or validate and import a CSV. Local development also provides a saved-dataset picker. |
+| Clean | Select lowercasing, punctuation removal, tokenization, stopword removal, lemmatization, or empty-record handling. Every option starts unchecked. |
+| Analyze | Compare vocabulary and token counts, inspect individual text changes, and optionally compare Comprehend predictions before and after preprocessing. |
+| Label | Use Comprehend, label posts manually, or review machine predictions. Prioritize low-confidence results, choose a random sample, or review every post. |
+| Export | Download Parquet, CSV, Excel, or a Markdown report. Choose a filename or save a new snapshot to S3. |
+
+Prediction agreement measures consistency, not accuracy. Comprehend predicts overall post
+sentiment; it does not necessarily describe sentiment toward the topic you searched for.
+
+X collection stops at the requested number of retained posts, a spend cap, or the end of the
+available results. It does not sample evenly across dates. Check the collected timestamps before
+making claims about an entire search period.
+
+## Screenshots
+
+These screenshots show the current application using synthetic demonstration posts. Sentiment
+responses in this capture are test fixtures, not live Comprehend results. Click an image to see
+it at full size.
+
+### Collect and validate a CSV
+
+Drag and drop a file or use the file chooser. The server validates the complete file before
+import and shows a preview of the first posts.
+
+![CSV upload screen with a drop area, required columns, validation result, and preview](docs/images/readme/upload.png)
+
+### Choose the preprocessing steps
+
+Each technique includes its purpose and trade-offs. You can change the selection and rerun from
+the original text.
+
+![Clean screen with optional preprocessing techniques and controls for their order](docs/images/readme/clean.png)
+
+### Review labels
+
+Move between posts, correct earlier decisions, and save before pausing or finishing the review.
+Keyboard shortcuts work within the review area.
+
+![Manual review screen showing a post, sentiment choices, progress, and previous and next controls](docs/images/readme/review.png)
+
+### Export the results
+
+Filenames are editable; extensions stay fixed. Stage checkpoints show whether the saved snapshot
+is current.
+
+![Export screen with download formats, custom filename controls, and an S3 save option](docs/images/readme/export.png)
+
+## Run locally
+
+Use Python 3.12 or newer, Node.js 22.12 or newer, npm, and Make on macOS or Linux. Windows users
+can use WSL; local storage uses POSIX file locks.
 
 ```bash
-make setup        # backend deps + NLTK corpora + frontend packages + backend/.env
-make dev          # API on :8000 (Swagger at /docs) and UI on :5173, together
-make stop         # stop this project's local servers, including Vite fallback ports
+git clone https://github.com/rharper12/NLP_Sentiment_Analyis.git
+cd NLP_Sentiment_Analyis
+python3 -m venv .venv
+make setup
+make dev
 ```
 
-`make` on its own lists every target, grouped. The UI proxies `/api` to the backend and says so
-plainly if it cannot reach it. See [docs/deployment.md](docs/deployment.md#troubleshooting) if a `make` target
-cannot find `uvicorn` or Docker.
+Open [localhost:5173](http://localhost:5173) for the application or
+[localhost:8000/docs](http://localhost:8000/docs) for the API documentation.
+`make setup` installs dependencies and NLTK resources and creates `backend/.env` if it is missing.
+It preserves an existing configuration.
 
-Local CSV processing needs no paid services: Comprehend is off and no X token is set. Upload a CSV, or load the
-Hugging Face dataset over the internet; AWS-backed fields are null with a stated reason.
+Start with **Upload CSV** to try the workflow without paid services. The example configuration
+leaves Comprehend disabled and X credentials blank. **Sample dataset** loads labelled tweets
+from Hugging Face and needs an internet connection.
+
+Press Ctrl-C to stop `make dev`, or run `make stop` in another terminal to stop this checkout's
+local servers, including Vite fallback ports. Run `make` to see all available commands.
+
+### CSV format
+
+```csv
+text,id,label
+"I love this phone!",post-1,positive
+"Good camera, short battery life",post-2,mixed
+```
+
+- `text` is required. `id` and `label` are optional; other columns are ignored.
+- Use UTF-8, comma-separated columns, and a header row. Quote text containing commas or line breaks.
+- Supplied IDs must be unique. Blank IDs are generated.
+- Files can contain up to 5,000 data rows and 4 MiB. Blank text rows are reported and skipped.
+- Smaller datasets are accepted, with a reminder when fewer than 500 posts remain.
+
+### Optional services
+
+Edit [backend/.env.example](backend/.env.example)'s corresponding fields in your local
+`backend/.env`. Never commit that file.
+
+| Setting | Purpose |
+| --- | --- |
+| `X_BEARER_TOKEN` | Enable X search. See the [X query guide](https://docs.x.com/x-api/posts/search/integrate/build-a-query) for operators and examples. |
+| `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | Limit billed reads, including posts later removed by filtering. |
+| `AWS_PROFILE` | Use a named AWS profile, including an SSO profile. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Alternative AWS credentials; an explicit key pair takes precedence over a profile. |
+| `COMPREHEND_ENABLED` | Enable paid sentiment comparisons and labelling. Analyze comparisons can incur charges; Label shows a confirmation first. |
+| `PRICING_ENABLED` | Look up Comprehend pricing for estimates. An unavailable estimate is shown as unavailable. |
+| `DATA_BUCKET` | Enable S3 exports and S3 stage checkpoints. Local working JSON files still stay local. |
+| `API_KEY` | Require an operator sign-in. Required for deployed access. |
+
+`make aws-check` verifies the configured AWS identity. `PROBE=1 make aws-check` also sends a small,
+billable Comprehend request. Passing the offline tests does not verify your AWS access.
+
+## Saved data and exports
+
+In local development, working datasets are stored under
+`backend/data/checkpoints/_work/<dataset-id>/` by default. A typical filename is
+`iphone-duo-2026-09-23_13-40-17-UTC-0500.json`: topic, local creation date and time, and UTC offset.
+`CHECKPOINT_DIR` changes the storage root.
+
+Choose **Saved datasets** in Collect to open a new run from the original posts. Files are listed
+by latest save, newest first. The original saved file stays intact; previous processing and
+manual or Comprehend labels are cleared in the new run. Labels supplied by the original source
+are retained. This picker is available only in local development.
+
+Exports join original text, processed text, tokens, and the latest labels by record ID. Manual
+labels take precedence, and the Comprehend prediction remains available alongside them.
+
+| File | Contents |
+| --- | --- |
+| Parquet | Typed dataset columns; preferred for subsequent analysis or model training. |
+| CSV | Dataset rows protected against spreadsheet formula execution. This protection can add a leading apostrophe; use Parquet when exact text matters. |
+| Excel | A data sheet and an impact sheet with preprocessing statistics. |
+| Markdown report | Source details, selected steps, measured changes, and labelling summary. |
+| Original JSON | Original text and provenance without later annotations or processing state. Available from Collect. |
+
+An S3 save writes a named Parquet file, `impact.json` containing preprocessing results, and
+`manifest.json` containing dataset provenance and export metadata. Each save uses a new folder,
+so repeating a filename preserves previous exports. Internal working state and stage checkpoints
+have separate update rules; see [the storage architecture](docs/architecture.md#storage-and-process-lifecycle).
+
+## Architecture
+
+The frontend uses React, TypeScript, Vite, Tailwind CSS, and AG Grid Community. FastAPI serves the
+API; NLTK handles preprocessing, and SQLAlchemy stores run history and the X spend ledger.
+
+```mermaid
+flowchart TB
+    accTitle: Application components
+    accDescr: The React interface calls FastAPI, which coordinates sources, preprocessing, labels, storage, and the SQL history and spend ledger.
+    UI["React interface"] --> API["FastAPI"]
+    API --> Sources["X / Hugging Face / CSV"]
+    API --> Pipeline["NLTK preprocessing and metrics"]
+    API --> Labels["Comprehend and manual labels"]
+    API --> Files["Dataset repository and exports"]
+    API --> History["SQL history and spend ledger"]
+    Files --> Local["Local JSON and checkpoints"]
+    Files --> S3["S3 working state and exports"]
+```
+
+Local runs use a JSON journal and SQLite. AWS deployment uses a CloudFront site, API Gateway,
+and a Lambda container. S3 holds deployed working state; paid X collection in Lambda requires
+a shared PostgreSQL spend ledger. See the [architecture diagrams](docs/architecture-diagrams.md)
+and [deployment guide](docs/deployment.md) for those paths.
+
+## Development and verification
 
 ```bash
-make check        # lint, types and both test suites; S3 via moto, AWS ML services via fakes, history on SQLite
+make check       # Ruff, mypy, TypeScript, ESLint, pytest, and Vitest
+cd frontend
+npm run build    # production build
 ```
 
-## Reusing a collected dataset
+Tests isolate the developer's environment and use temporary storage. X uses HTTP mocks,
+Comprehend uses fakes, and S3 uses moto. The optional PostgreSQL concurrency test needs
+`TEST_POSTGRES_URL` pointing to a disposable database.
 
-In local development (`RUNTIME=local`), choose **Saved datasets** in Collect. The dropdown lists
-working JSON files from `backend/data/checkpoints/_work/` (or `CHECKPOINT_DIR/_work`) by latest save,
-newest first. Choose a file and click **Open in Clean**. Older files load in pages of 50; Refresh
-updates the list. This picker and its API are unavailable in the deployed runtime.
+Code review follows the [Broad Institute of MIT and Harvard coding and comment guide](https://mitcommlab.mit.edu/broad/commkit/coding-and-comment-style/):
+clear names, focused responsibilities, consistent structure, and comments that explain decisions.
+The repository uses Ruff's 100-column Python convention. See the
+[developer guide](docs/developer-guide.md) and [latest review](docs/code-quality-review.md) for
+conventions, findings, and verification results.
 
-New JSON filenames use the search topic and the browser's local creation time, for example
-`iphone-duo-2026-09-23_12-15-30-UTC-0500.json`. They live in dataset-ID folders within `_work`
-to avoid collisions; older flat JSON files remain available. Export uses the same default
-name for downloads and S3 data. Select **Custom filename** beside a format to change the name;
-the extension is fixed. Each S3 save gets its own folder and retains earlier saves.
+The [accessibility guide](docs/design-system.md) describes the keyboard checks and axe audit for
+all five stages in light, dark, and mobile layouts.
 
-Opening a file creates a fresh dataset and starts Step 2 with all options unchecked. Original
-rows and source labels are retained; later labels, cleaning, analysis, review, and billing state
-are reset. The saved file remains unchanged. **Download original dataset** still provides a
-portable JSON archive, but Saved datasets no longer accepts browser uploads.
+## More documentation
 
-**Upload CSV** offers drag and drop or a keyboard-accessible file chooser. It checks the complete
-file and shows a preview before enabling **Import CSV**. A `text` header is required; `id` and
-`label` are optional. Use UTF-8, at most 4 MiB and 5,000 data rows. Empty text rows are reported
-and skipped; a file with no usable text is rejected. The UI warns when fewer than 500 posts are
-available. The same server parser validates the file again on import.
-
-## Configuration
-
-All settings are environment variables (`.env` locally, SAM template in Lambda). The ones people
-change:
-
-| Variable | Purpose |
-|---|---|
-| `X_BEARER_TOKEN` | X API token for local use. **Change this line to switch accounts.** |
-| `X_BEARER_TOKEN_SSM_PATH` | SSM SecureString path used in Lambda (set via `samconfig.toml`) |
-| `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY` | hard caps on billed reads (defaults 1000 / 3000) |
-| `AWS_PROFILE` | named profile from `~/.aws/config`, including SSO; blank uses the default chain |
-| `COMPREHEND_ENABLED` | enable paid sentiment scoring |
-| `PRICING_ENABLED` | fetch the live Comprehend rate from the AWS Price List API for the estimate (24 h fresh + 48 h stale grace; no hard-coded fallback) |
-| `API_KEY` | operator secret exchanged for a temporary browser session; scripts may use `X-API-Key`; required for internet-facing deployments |
-| `DIAGNOSTICS` | expose operator-only details in `/health` and the UI (defaults on locally, off in Lambda) |
-| `CHECKPOINT_DIR` | local folder for stage snapshots when no bucket is set (gitignored) |
-| `DATABASE_URL` | shared PostgreSQL required for paid X collection in Lambda; local default SQLite |
-| `DATA_BUCKET` | S3 bucket for saves and Lambda working state |
-
-## Documentation
-
-The [`docs/`](docs/README.md) folder is written so a new engineer can contribute on day one:
-
-- [How the app works](docs/how-the-app-works.md), a walk from click to file.
-- [Architecture diagrams](docs/architecture-diagrams.md), [Architecture](docs/architecture.md) and [Decisions](docs/decisions.md).
-- [Developer guide](docs/developer-guide.md): setup, conventions, adding a step or source, PR checklist.
-- [Logging and debugging](docs/logging-and-debugging.md): structlog events and CloudWatch queries.
-- [API reference](docs/api.md) and [Deployment](docs/deployment.md) (secrets, least-privilege IAM).
-- [NLP and sentiment primer](docs/nlp-sentiment-primer.md) and [Data cleaning guide](docs/data-cleaning-guide.md).
-- [Design system](docs/design-system.md): glass tokens, selected and focus states, contrast verification.
-
-## Deploying
-
-```bash
-make put-secret NAME=api-key VALUE='<operator-secret>'
-make put-secret NAME=x-bearer-token VALUE='AAAA…'
-make deploy                  # infrastructure/stack_request/template.yaml
-make deploy-web             # build UI against ApiUrl, sync to the site bucket
-```
-
-Full details, including the IAM statement list and the Postgres option, in
-[docs/deployment.md](docs/deployment.md).
-
-## Project layout
-
-```
-backend/src/sentiment_prep/ api · sources · preprocessing · analysis · labeling · export · storage · history
-frontend/src/          React 19 + TypeScript + Vite + Tailwind; api/ hooks/ components/stages/
-infrastructure/        stack_request/ (template.yaml, samconfig.toml)
-backend/tests/         unit/ and integration/
-docs/                  guides and screenshots
-```
-
-## Code style
-
-[Broad Institute coding and comment style](https://mitcommlab.mit.edu/broad/commkit/coding-and-comment-style/):
-module docstrings state purpose and the one thing a reader must know; comments explain *why*;
-names are full words; functions do one thing. Enforced by `ruff` (pydocstyle, naming) and
-`mypy --strict`.
+- [How the app works](docs/how-the-app-works.md)
+- [API reference](docs/api.md)
+- [Preprocessing guide](docs/data-cleaning-guide.md)
+- [NLP and sentiment primer](docs/nlp-sentiment-primer.md)
+- [Logging and debugging](docs/logging-and-debugging.md)
+- [Architecture decisions](docs/decisions.md)
+- [All documentation](docs/README.md)

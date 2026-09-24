@@ -107,7 +107,7 @@ audit-a11y: ## axe over every stage in both themes; run 'make dev-api' and 'make
 
 ##@ Keeping the two halves in step
 
-api-types: ## Regenerate the frontend's API types and Zod schemas from the running backend
+api-types: ## Regenerate frontend API types; update Zod validators separately when fields change
 	cd frontend && npm run gen:api
 
 ##@ Deploying to AWS

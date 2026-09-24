@@ -1,22 +1,17 @@
-# Human-written rationale for each preprocessing step. Rendered in the UI tooltips and the
-# Task 1 report. Keep each entry honest about limits; graders read this.
+# Shared descriptions for the Clean screen and exported report. Keep behavior and limits
+# consistent with the implementation and the options exposed in the UI.
 
 missing_data:
   title: Handle empty records
   summary: Drop records with no text left, or fill them with a placeholder you choose.
   strengths: >
-    Removes rows that would otherwise produce empty token lists, zero-length embeddings, or
-    Comprehend errors. It runs last by default because posts rarely arrive empty: they become
-    empty. A post that is only a link and a mention has real text on arrival and nothing left
-    once URLs and mentions are stripped, so a sweep at the end catches what a check at the
-    start cannot.
+    Checks for empty text after earlier transformations. When selected, it runs last so it
+    can catch records emptied by punctuation or stopword removal. Dropping those records
+    avoids passing empty text to later analysis; filling preserves the row count.
   limitations: >
-    Dropping rows can bias the dataset if missingness correlates with a class (for example,
-    image-only posts skew positive). Filling keeps the row count but injects a synthetic token
-    the model must learn to ignore, so the placeholder should be a string the corpus cannot
-    contain. Posts that were *already* empty of content on arrival are filtered at collection
-    instead, so that the record count is identical across every preprocessing configuration and
-    two runs can be compared against the same denominator.
+    Non-empty text may still be irrelevant or misleading. Dropping records can change class
+    balance if empty results are more common in one class. Filling adds artificial text that
+    downstream analysis must account for. Report how many records were dropped or filled.
 
 lowercase:
   title: Lowercase
@@ -32,33 +27,34 @@ punctuation:
   title: Remove punctuation and special characters
   summary: Strip URLs, mentions, symbols, and stray characters; keep hashtag words.
   strengths: >
-    URLs and usernames carry no sentiment and inflate the vocabulary with one-off tokens.
-    Removing them cuts noise sharply on social media text.
+    Can reduce vocabulary differences caused by links, usernames, and punctuation when those
+    features are not useful for the intended analysis. Hashtag words are retained.
   limitations: >
-    Exclamation marks, question marks and emoticons like ":(" are sentiment cues that this
-    step discards. Contractions can also be damaged if the apostrophe handling is wrong.
+    Removes punctuation, emojis, and emoticons that can express sentiment. Links and mentions
+    may also provide context or identify the target of an opinion. This step is optional;
+    inspect the changed text before deciding whether the removals suit your dataset.
 
 tokenize:
   title: Tokenize
   summary: Split text into word-level tokens with the Treebank tokenizer.
   strengths: >
-    Produces the unit every downstream model consumes. Treebank splits contractions
-    ("don't" to "do" and "n't") so negation becomes its own token.
+    Creates a consistent token list for this pipeline. Treebank splits contractions
+    ("don't" to "do" and "n't"), making negation available as a separate token.
   limitations: >
-    Rule-based tokenizers handle emoji, hashtags and slang inconsistently. Splitting
-    contractions is helpful for negation handling but changes token counts in ways that
-    make before/after comparisons less intuitive.
+    Treebank can split URLs and hashtags into fragments. Space-joining its tokens changes
+    formatting and token counts, so before/after differences can reflect representation
+    changes. A downstream model may require its own tokenizer instead.
 
 stopwords:
   title: Remove stopwords
-  summary: Drop frequent function words, keeping negations by default.
+  summary: Drop frequent function words; choose whether to keep negations.
   strengths: >
     Reduces token count and sparsity, so simple models spend capacity on content words rather
     than "the" and "of".
   limitations: >
-    Standard stopword lists contain "not", "no" and "never". Removing those flips the meaning
-    of "not good". This implementation keeps negations, but the cost is that the reduction in
-    token count is smaller than a naive stopword pass would show.
+    Removing negation can reverse the meaning of phrases such as "not good". Select Keep
+    negations to retain the supported negation forms; that option starts unchecked in the UI.
+    Other removed words may convey intensity or context, so inspect the results.
 
 lemmatize:
   title: Lemmatize

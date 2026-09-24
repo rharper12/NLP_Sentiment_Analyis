@@ -194,7 +194,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
         await page.get_by_role("button", name="Download original dataset").click()
     downloaded = await original_download.value
     assert re.fullmatch(
-        r"csv-import-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-UTC-0500.json",
+        r"csv-import-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-UTC-0[56]00\.json",
         downloaded.suggested_filename,
     )
     original_path = await downloaded.path()

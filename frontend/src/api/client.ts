@@ -36,7 +36,7 @@ const BASE = import.meta.env.VITE_API_URL ?? "/api";
 let sessionToken: string | null = null;
 export const AUTH_REQUIRED = "sentiment-prep-auth-required";
 
-/** Shown whenever the request never reached the API, which is nearly always "it isn't running". */
+/** Shared message when no usable response is available, including network and proxy failures. */
 const UNREACHABLE =
   "Cannot reach the service. Please try again.";
 
@@ -80,8 +80,8 @@ async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Re
   try {
     response = await fetch(`${BASE}${path}`, { ...init, headers });
   } catch (cause) {
-    // fetch only rejects when the request never reached a server: the API is down, the origin is
-    // wrong, or the network is gone. "Failed to fetch" tells the person nothing they can act on.
+    // A rejected fetch cannot tell us whether the server committed the operation.
+    // Preserve cancellation; give other transport failures a consistent UI message.
     if (isAbort(cause)) throw cause;
     throw new ApiError(UNREACHABLE, 0, null);
   }
@@ -97,8 +97,7 @@ async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Re
       const body = (await response.json()) as { error?: string; detail?: unknown };
       message = body.error ?? JSON.stringify(body.detail ?? body);
     } catch {
-      // A 5xx with no JSON body is almost always the dev proxy reporting that nothing is
-      // listening, not the API reporting a bug. Say the useful thing.
+      // Proxies may return HTML for server failures; do not render that body as an API error.
       if (response.status >= 500) message = UNREACHABLE;
     }
     throw new ApiError(message, response.status, requestId);
@@ -185,7 +184,7 @@ export const api = {
       json({ steps, options }, signal),
     ),
 
-  /** All records in one call; the grid holds them in memory and virtualises rows itself. */
+  /** Fetch all pages; the grid holds the combined records and virtualizes visible rows. */
   allRecords: async (datasetId: string, total: number, signal?: AbortSignal) => {
     const PAGE = 1000; // server caps a page at 1000
     const items: RecordPage["items"] = [];

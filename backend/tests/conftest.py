@@ -3,34 +3,45 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 import boto3
 import pytest
 from moto import mock_aws
 
+from sentiment_prep.config import Settings, get_settings
 from sentiment_prep.models import Dataset, Record
 
 
-@pytest.fixture(scope="session", autouse=True)
-def database_ready():
-    """Fresh SQLite file per test session so history assertions are deterministic."""
-    import pathlib
-
-    from sentiment_prep.config import get_settings
-
-    pathlib.Path("/tmp/sentiment_prep_test.sqlite3").unlink(missing_ok=True)
+def pytest_configure(config):
+    """Keep developer credentials and service settings out of the offline suite."""
+    environment = pytest.MonkeyPatch()
+    config.add_cleanup(environment.undo)
+    environment.setitem(Settings.model_config, "env_file", None)
+    for name in Settings.model_fields:
+        environment.delenv(name.upper(), raising=False)
+    for name, value in {
+        "AWS_DEFAULT_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": "testing",
+        "AWS_SECRET_ACCESS_KEY": "testing",
+        "AWS_EC2_METADATA_DISABLED": "true",
+        "COMPREHEND_ENABLED": "false",
+        "PRICING_ENABLED": "false",
+    }.items():
+        environment.setenv(name, value)
     get_settings.cache_clear()
 
 
-os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
-os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/sentiment_prep_test.sqlite3")
-os.environ.setdefault("COMPREHEND_ENABLED", "false")
-os.environ.setdefault("CHECKPOINT_DIR", "/tmp/sentiment_prep_test_checkpoints")
-os.environ.setdefault("PRICING_ENABLED", "false")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+@pytest.fixture(scope="session", autouse=True)
+def database_ready(tmp_path_factory):
+    """Separate each test session's history and checkpoints, including concurrent runs."""
+    root = tmp_path_factory.mktemp("sentiment-prep")
+    with pytest.MonkeyPatch.context() as environment:
+        environment.setenv("DATABASE_URL", f"sqlite:///{root / 'history.sqlite3'}")
+        environment.setenv("CHECKPOINT_DIR", str(root / "checkpoints"))
+        get_settings.cache_clear()
+        yield
+        get_settings.cache_clear()
 
 
 SAMPLE_TEXTS = [

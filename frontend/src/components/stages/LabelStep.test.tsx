@@ -33,6 +33,23 @@ it("stops after no successful progress and displays partial failures", async () 
 const props = { diagnostics: false, comprehendEnabled: null, checkpointLocation: null, onBack: vi.fn(), onContinue: vi.fn() };
 const slice = { truncated_records: 0, labelled_in_call: 1, labelled_total: 1, remaining: 1, units_billed: 3, cost_usd: null, done: false, partial: true, failed_total: 0, attempted_in_call: 1, failed_in_call: 0 };
 
+it("waits for the dataset count before opening manual review", async () => {
+  const summary = await api.labelSummary("d");
+  let resolve!: (value: typeof summary) => void;
+  vi.mocked(api.labelSummary).mockReturnValue(new Promise((yes) => { resolve = yes; }));
+  render(<LabelStep {...props} datasetId="d" />);
+
+  const choose = screen.getByRole("button", { name: "Choose what to label by hand" });
+  expect(choose.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(choose);
+  expect(screen.queryByText("Choose review")).toBeNull();
+
+  await act(async () => resolve(summary));
+  expect(choose.hasAttribute("disabled")).toBe(false);
+  fireEvent.click(choose);
+  expect(screen.getByText("Choose review")).toBeTruthy();
+});
+
 async function launch() {
   const start = await screen.findByRole("button", { name: "Label with Comprehend…" });
   await waitFor(() => expect(start.hasAttribute("disabled")).toBe(false));
@@ -90,7 +107,9 @@ it.each(["unmount", "replace"])("ignores a late review choice after %s, includin
   vi.mocked(api.chooseReview).mockReturnValue(new Promise((yes) => { resolve = yes; }));
   const onReviewActiveChange = vi.fn();
   const view = render(<LabelStep {...props} datasetId="old" onReviewActiveChange={onReviewActiveChange} />);
-  fireEvent.click(screen.getByText("Choose what to label by hand"));
+  const choose = screen.getByRole("button", { name: "Choose what to label by hand" });
+  await waitFor(() => expect(choose.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(choose);
   fireEvent.click(screen.getByText("Skip review"));
   const signal = vi.mocked(api.chooseReview).mock.calls[0][4]!;
   if (action === "unmount") view.unmount();

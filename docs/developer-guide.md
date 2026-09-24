@@ -3,7 +3,9 @@
 ## First hour
 
 ```bash
-git clone <repo> && cd sentiment-prep
+git clone https://github.com/rharper12/NLP_Sentiment_Analyis.git
+cd NLP_Sentiment_Analyis
+python3 -m venv .venv
 make setup          # Python deps, NLTK corpora, npm packages, .env from .env.example
 make test           # backend/frontend regression suites; no AWS credentials needed
 make dev            # API on :8000 and UI on :5173, together
@@ -52,20 +54,27 @@ Makefile            runs both halves; every target cd's into the right folder
 
 ## Conventions
 
-**Code and comments** follow the Broad Institute style guide. In practice:
+**Code and comments** follow the [Broad Institute of MIT and Harvard guide](https://mitcommlab.mit.edu/broad/commkit/coding-and-comment-style/).
+It emphasizes readable naming, structure, context, and useful comments. The conventions here are
+project choices, not a claim of MIT certification:
 
-- Every module opens with a docstring stating what it is for and the one thing a reader must
-  know before editing it. Public functions get a one-line docstring; interface implementations
-  inherit documentation from the base class (`D102` is disabled for that reason).
+- Python modules state their purpose in a docstring. Document public interfaces, side effects,
+  and constraints callers need to know. Interface implementations can use the base documentation
+  (`D102` is disabled); do not add prose just to repeat a function name.
 - Comments explain *why*. If a comment restates the code, delete it. If a decision is surprising,
   say what would go wrong the other way.
-- Names are full words. `dataset_id`, not `dsid`. Functions do one thing and fit on a screen.
-- No commented-out code. No `print`. No bare `except` outside the enrichment boundary in
-  `service.py`, where it is annotated with why.
+- Use descriptive names, with familiar short names only in a small, clear scope. Keep functions
+  focused. Long orchestration functions deserve particular care around ordering and persistence.
+- Use complete sentences in explanatory comments. Remove obsolete claims and commented-out code.
+- Application code uses structured logging; command-line tools may print results. Catch specific
+  exceptions where possible. Broad catches need a clear boundary, such as rollback, cleanup,
+  or optional enrichment, and must preserve required persistence failures.
+- Ruff formats Python at 100 columns. Preserve existing language conventions instead of
+  reformatting unrelated files. Break long frontend expressions into readable blocks when editing them.
 
 **Linting is the contract, not a habit.** ruff enforces `A, ASYNC, B, BLE, C4, D, DTZ, E, F, I, N,
-PIE, PTH, RET, RUF, SIM, TRY, UP`. `BLE` means every broad `except` must carry a written
-justification; `DTZ` bans timezone-naive datetimes (this code deals in money and daily caps);
+PIE, PTH, RET, RUF, SIM, TRY, UP`. `BLE` flags broad catches that are neither handled nor explicitly
+suppressed; review their intent as well as the lint result. `DTZ` flags timezone-naive datetimes;
 `PTH` keeps filesystem work on `pathlib`. Two rules are switched off deliberately: `TRY003`
 (user-facing exception messages are written out in full) and `TRY400` (`logger.error(...,
 exc_info=True)` is intentional; `.exception()` would duplicate the message).
@@ -85,16 +94,12 @@ They become clean 4xx/503 responses. Everything else is a bug and becomes a 500 
 exact call count, "these ids were reviewed" over the order they came back in. A test that pins an
 internal constant fails when nothing is actually broken, and then gets deleted rather than fixed.
 
-**Frontend types are generated; responses are validated.** `api/validation.ts` holds a Zod schema
-per response, each annotated `z.ZodType<GeneratedType>` so a schema that drifts from the OpenAPI
-document fails to compile. Objects are loose, so a field added server-side never breaks an older
-UI, but a missing or wrong-typed field throws `ApiContractError` naming the field instead of
-letting `undefined` surface three components deep.
-
-**Frontend types are generated, never hand-written.** `src/api/schema.d.ts` comes from the
-backend's OpenAPI document (`make api-types` with the API running) and `src/api/types.ts` derives
-every exported type from it. If you change a Pydantic schema, regenerate: a field that became
-optional shows up as a type error instead of `undefined` at runtime.
+**API types are generated; runtime validators are maintained separately.** `src/api/schema.d.ts`
+comes from OpenAPI (`make api-types` with the API running), and `src/api/types.ts` derives the
+frontend's contract types. `api/validation.ts` contains the Zod response validators, checked
+against generated types with `z.ZodType<GeneratedType>`. After changing a Pydantic response model,
+regenerate the types and update the corresponding validator and tests. Extra response fields are
+accepted; missing or invalid required fields produce `ApiContractError` with the failing path.
 
 **Frontend.** Tailwind CSS v4 utilities referencing theme tokens (`bg-surface`, `text-muted`,
 `border-rule`); the tokens are CSS variables in `styles.css` and dark mode swaps their values, so
@@ -133,9 +138,12 @@ they do not reach into global state.
 
 ## Testing
 
-- `make test` runs both suites; `cd backend && pytest -q` runs the backend suite. Wall-clock
+- `make test` runs both suites; `cd backend && ../.venv/bin/pytest -q` runs the backend suite. Wall-clock
   assertions are marked `slow` and can be skipped with `pytest -m "not slow"`. S3 uses `moto`; Comprehend uses
-  the fakes in `tests/conftest.py`; history uses a fresh SQLite file under `/tmp` each session.
+  the fakes in `tests/conftest.py`. The suite ignores developer `.env` and application environment
+  settings; each session gets its own temporary SQLite database and checkpoint directory.
+  Tests can explicitly override settings. `TEST_POSTGRES_URL` is retained for the optional test
+  against a disposable PostgreSQL database.
 - Integration tests build the app with `create_app()` and monkeypatch `api.deps` functions. Do the
   same for a new external dependency rather than reaching for network mocks.
 - Keep a test that exercises every `None` path in `ImpactReport`.

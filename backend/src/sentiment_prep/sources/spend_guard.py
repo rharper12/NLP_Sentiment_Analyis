@@ -56,11 +56,9 @@ class SpendLedger(Protocol):
 
 
 class InMemoryLedger:
-    """Process-local ledger for local development and tests.
+    """Single-threaded test ledger; runtime collection uses the database-backed ledger.
 
-    Atomic in the sense that matters here: a single process with the GIL cannot interleave the
-    read and the write below. It is *not* shared between processes, so it must not be used where
-    more than one worker can bill the same account.
+    This adapter has no synchronization and must not be shared by concurrent callers.
     """
 
     def __init__(self) -> None:
