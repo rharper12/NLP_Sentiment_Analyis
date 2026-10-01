@@ -13,6 +13,7 @@ from contextlib import contextmanager
 
 from botocore.exceptions import BotoCoreError
 
+from sentiment_prep.aws import SSO_LOGIN_HINT, is_sso_session_error
 from sentiment_prep.errors import ConfigurationError, CredentialsError, ExternalServiceError
 from sentiment_prep.logging_config import get_logger
 
@@ -38,11 +39,12 @@ _CREDENTIAL_ERRORS = frozenset(
 
 
 @contextmanager
-def translated(service: str) -> Iterator[None]:
+def translated(service: str, *, local_dev: bool = False) -> Iterator[None]:
     """Re-raise AWS failures from ``service`` as errors with an actionable message.
 
     Args:
         service: Human-readable service name, used in the message shown to the operator.
+        local_dev: Include project recovery commands only for local diagnostics.
 
     Raises:
         CredentialsError: credentials are absent, expired, or the profile does not exist.
@@ -51,6 +53,9 @@ def translated(service: str) -> Iterator[None]:
     try:
         yield
     except Exception as error:
+        if local_dev and is_sso_session_error(error):
+            logger.error("aws_sso_session_unavailable", service=service, exc_info=True)
+            raise CredentialsError(f"{service} could not continue. {SSO_LOGIN_HINT}") from error
         name = type(error).__name__
         code = getattr(error, "response", {}).get("Error", {}).get("Code", "")
         if name in _CREDENTIAL_ERRORS or code in _CREDENTIAL_ERRORS:

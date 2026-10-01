@@ -44,8 +44,9 @@ class ConsumerFixture:
                 dataset_id="consumer-a11y",
                 original=Dataset(
                     source_type="x",
-                    query="iPhone Duo",
+                    query='"coffee maker"',
                     consumer_policy=ConsumerPolicy(
+                        version="consumer-reactions-v2",
                         start_date=date(2026, 9, 9),
                         end_date=date(2026, 9, 10),
                         reviewed_target=2,
@@ -55,9 +56,7 @@ class ConsumerFixture:
                             id=f"reviewed-{i}",
                             author_id=f"author-{i}",
                             source_type="x",
-                            text="I like the folding screen."
-                            if i == 0
-                            else "Product news headline.",
+                            text="I like the coffee maker." if i == 0 else "Product news headline.",
                             created_at=datetime(2026, 9, 9, 12, tzinfo=UTC),
                             eligibility="include" if i == 0 else "exclude",
                             eligibility_reviewed=True,
@@ -127,6 +126,16 @@ class ConsumerFixture:
             }
         elif path in {"/dataset/load", "/dataset/consumer-a11y"}:
             data = self.summary()
+        elif path == "/dataset/consumer-a11y/records":
+            records = self.repo.get("consumer-a11y").original.records
+            data = {
+                "total": len(records),
+                "offset": 0,
+                "items": [
+                    {"original": record.model_dump(mode="json"), "processed": None}
+                    for record in records
+                ],
+            }
         elif path == "/dataset/consumer-a11y/candidates":
             assert request.post_data_json == {"candidate_target": 21, "confirm_cost": True}
             self.additional_requests += 1
@@ -139,7 +148,7 @@ class ConsumerFixture:
                         author_id="new-author",
                         source_type="x",
                         created_at=datetime(2026, 9, 10, 12, tzinfo=UTC),
-                        text="I love the iPhone Duo screen, but the price puts me off.",
+                        text="I love the coffee maker, but the price puts me off.",
                         screening=ScreeningSuggestion(
                             decision="include",
                             evidence=["A personal consumer reaction."],
@@ -187,15 +196,44 @@ async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
     fixture = ConsumerFixture(ui)
     await page.route("**/*", fixture.respond)
     await page.goto(ui)
+    collect_heading = page.get_by_role("heading", name="Collect your dataset", exact=True)
+    await expect(collect_heading).to_be_visible()
+    await expect(collect_heading).not_to_be_focused()
     if theme == "dark":
         await page.get_by_role("button", name="Switch to dark mode").click()
     await page.get_by_label(re.compile("Collection option")).select_option("consumer")
+    await expect(page.get_by_label("Topic", exact=True)).to_have_value("")
+    await expect(page.get_by_label("From", exact=True)).to_have_value("")
+    await expect(page.get_by_label("To", exact=True)).to_have_value("")
+    await page.get_by_label("Topic", exact=True).fill('"coffee maker"')
+    await page.get_by_label("From", exact=True).fill("2026-09-09")
+    await page.get_by_label("To", exact=True).fill("2026-09-10")
+    timezone = page.get_by_role("combobox", name="Timezone", exact=True)
+    await timezone.select_option("America/Chicago")
+    await timezone.focus()
+    await page.keyboard.press("u")
+    await page.keyboard.press("Enter")
+    await expect(timezone).to_have_value("UTC")
+    await timezone.select_option("America/Chicago")
     await page.get_by_label("Final reviewed target", exact=True).fill("2")
     await page.get_by_label(re.compile("Candidate target")).fill("20")
     await audit("consumer-collect")
     await page.get_by_role("button", name="Search and collect", exact=True).click()
-    await page.get_by_role("button", name=re.compile("Label")).click()
+    await page.get_by_role("button", name="Review eligibility →", exact=True).click()
     queue = page.get_by_label(re.compile("Review queue"))
+    await page.get_by_label(re.compile("Eligibility decision")).select_option("exclude")
+    await page.get_by_label(re.compile("Eligibility reason")).select_option("off_topic")
+    await page.get_by_role("button", name="Save eligibility decision", exact=True).click()
+    await expect(page.get_by_text("0 of 2 final reviewed examples", exact=False)).to_be_visible()
+    await queue.select_option("exclude")
+    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
+    await audit("consumer-saved-exclusion")
+    await page.get_by_label(re.compile("Eligibility decision")).select_option("include")
+    await page.get_by_role("button", name="Save eligibility decision", exact=True).click()
+    await queue.select_option("sentiment")
+    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
+    await page.get_by_role("button", name="positive (1)", exact=True).click()
+    await expect(page.get_by_text("1 of 2 final reviewed examples", exact=False)).to_be_visible()
     await queue.select_option("pending")
     await expect(page.get_by_label("Additional candidate quota")).to_have_value("1")
     await expect(page.get_by_text("1 of 2 final reviewed examples", exact=False)).to_be_visible()
@@ -219,10 +257,10 @@ async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
     await page.keyboard.press("Enter")
     await expect(page.get_by_text("No records in this queue", exact=False)).to_be_visible()
     await queue.select_option("sentiment")
-    await expect(page.locator("blockquote")).to_have_text("I like the folding screen.")
+    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
     await page.get_by_role("button", name="Next →", exact=True).click()
     await expect(page.locator("blockquote")).to_have_text(
-        "I love the iPhone Duo screen, but the price puts me off."
+        "I love the coffee maker, but the price puts me off."
     )
     mixed = page.get_by_role("button", name="mixed (4)", exact=True)
     await expect(mixed).to_be_enabled()
@@ -238,6 +276,20 @@ async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
         page.get_by_role("button", name="Download Reviewed consumer Parquet", exact=True)
     ).to_be_enabled()
     await audit("consumer-export")
+    await (
+        page.get_by_role("navigation", name="Progress", exact=True)
+        .get_by_role("button", name=re.compile("Analyze"))
+        .focus()
+    )
+    await page.keyboard.press("Enter")
+    await expect(page.get_by_role("heading", name="What changed", exact=True)).to_be_focused()
+    await (
+        page.get_by_role("navigation", name="Progress", exact=True)
+        .get_by_role("button", name=re.compile("Collect"))
+        .focus()
+    )
+    await page.keyboard.press("Enter")
+    await expect(collect_heading).to_be_focused()
     assert fixture.additional_requests == 1
     assert not fixture.unexpected, fixture.unexpected
     assert len(eligibility.reviewed_records(fixture.repo.get("consumer-a11y"))) == 2

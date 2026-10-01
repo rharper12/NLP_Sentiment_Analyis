@@ -45,14 +45,28 @@ row for the history tab, and returns a `DatasetSummary` with a 20-row preview an
 
 ### Consumer reactions and a small pilot
 
+The collection selector explains both workflows before a search: **General search — sentiment
+labeling** collects matching posts for cleaning and sentiment labeling, without manual eligibility
+review or additional-candidate requests. **Consumer reactions — include/exclude + sentiment** adds
+manual relevance review, sentiment review for included posts, and optional additional requests
+toward a reviewed-record target. The choice affects a new collection, not an existing dataset.
+
 **Collect → Search X → Collection option → Consumer reactions** creates a separate dataset.
-The preset fills September 9–10, 2026, `America/Chicago`, the product query, a 100-candidate pilot,
-a final reviewed target of 500, and a limit of two included posts per known author. Calendar
-dates are inclusive; the server converts each local midnight using timezone rules. These dates
-mean `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`. They do not establish an announcement time.
+The option preserves the topic, custom dates, and candidate quota you entered. It requires an
+explicit query and completed calendar dates; it never inserts a product or announcement period.
+If no timezone was selected, it starts with the browser's timezone. The final reviewed target
+defaults to 500 and the per-author limit to two. Calendar dates are inclusive; the server converts
+each local midnight using timezone rules. For example, explicitly choosing September 9–10, 2026,
+in `America/Chicago` gives `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`.
+The timezone dropdown lists the browser's supported IANA zones plus UTC and preserves a valid
+local alias. It controls the date boundaries, not the authors' locations. The server validates
+the zone and converts the boundaries to UTC before sending the X request, accounting for daylight
+saving changes within the selected dates.
 Choose completed days; unfinished final days are rejected rather than silently shortened.
 
-The query is `("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet`.
+For the original iPhone research example, enter
+`("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet`
+yourself. Other products and topics use their own queries.
 Dates remain separate provider parameters. Searches older than seven days require the configured
 app's full-archive access; refusal stops with an actionable error and never falls back to recent
 posts. The adapter follows X's [full-archive guide](https://docs.x.com/x-api/posts/search/quickstart/full-archive-search),
@@ -72,7 +86,10 @@ This favors recent posts within each day and is a screened, bounded sample, not 
 consumer survey. Keyword search misses replies without product names. No conversation crawling,
 linked-page fetching, author histories or identity/bot scoring is added.
 
-`eligibility.py` screens complete original text before cleaning. Multiple content signals suggest
+`eligibility.py` screens complete original text before cleaning. New collections use the
+topic-neutral `consumer-reactions-v2` rules; reviewers confirm topic relevance against the saved
+query. Existing `consumer-reactions-v1` collections retain their original product-specific rules
+and saved decisions on resume. Multiple content signals suggest
 news distribution, promotion or implementation discussions; conflicting or weak signals stay
 pending. A link, a developer identity, or the word “giveaway” alone does not exclude a reaction.
 Positive, negative, mixed, neutral and sarcastic consumer reactions use the same selection rules.
@@ -101,11 +118,14 @@ To run the pilot after authorizing its cost:
    page minimums and ambiguous retries can require more reads. X's [pricing documentation](https://docs.x.com/x-api/getting-started/pricing)
    describes daily resource-charge deduplication as a soft guarantee; the local ledger conservatively
    counts returned reads and is not an invoice. Review rejections are not cost-free.
-3. Continue through Clean and Analyze, initially leaving text-changing steps off. Consumer
-   preprocessing computes local candidate metrics without automatically calling Comprehend.
-   In Label, use **All candidates** or **Pending eligibility** to inspect originals, suggestions,
+3. Click **Review eligibility →** after collection to open Label directly. Clean and Analyze remain
+   available; consumer preprocessing computes local candidate metrics without automatically calling
+   Comprehend. In Label, use **All candidates** or **Pending eligibility** to inspect originals, suggestions,
    reasons, timestamps and references. Confirm inclusion/exclusion, or leave Needs review. An
    override requires an explanation. Save status confirms persistence; merely visiting does not.
+   To drop a record from the reviewed export, select **Exclude**, choose its reason, and save.
+   Exclusions remain recoverable. Existing General search, CSV, and sample datasets use
+   sentiment-only labeling; selecting Consumer reactions for a new search does not convert them.
 4. Inspect **Human inclusions** and **Human exclusions** before scaling. Correct false positives
    and false negatives, including criticism, linked opinions and ambiguous promotions. Check the
    per-day table and author-limit holds. **Needs review / pending → Save** undoes a decision.

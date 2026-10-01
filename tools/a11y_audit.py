@@ -206,7 +206,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await audit("saved-dataset")
     picker = page.get_by_role("combobox", name="Saved dataset", exact=True)
     await expect(picker).to_be_enabled()
-    await expect(page.get_by_role("button", name="Open in Clean →")).to_be_disabled()
+    await expect(page.get_by_role("button", name="Open dataset →")).to_be_disabled()
     await picker.select_option(index=1)
     await audit("saved-selected")
     await page.locator("button[type=submit]").click()

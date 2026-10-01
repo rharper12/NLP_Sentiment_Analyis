@@ -75,7 +75,7 @@ const recordSchema: z.ZodType<PostRecord> = z.looseObject({
 });
 
 export const consumerPolicySchema: z.ZodType<ConsumerPolicy> = z.object({
-  version: z.literal("consumer-reactions-v1"), start_date: z.string(), end_date: z.string(),
+  version: z.enum(["consumer-reactions-v1", "consumer-reactions-v2"]), start_date: z.string(), end_date: z.string(),
   timezone: z.string(), per_author_limit: z.number().int().positive(),
   reviewed_target: z.number().int().positive(), duplicate_threshold: z.number(),
   selection_rule: z.literal("daily-quotas-recency;author-earliest-id"),

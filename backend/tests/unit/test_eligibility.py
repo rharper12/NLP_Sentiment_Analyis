@@ -78,6 +78,35 @@ def test_missing_metadata_does_not_mean_approved():
     ).sentiment_reviewed
 
 
+@pytest.mark.parametrize(
+    "text,decision",
+    [
+        ("I love this coffee maker!", "include"),
+        ("I hate these running shoes!", "include"),
+        ("Win a coffee maker! Follow and repost!", "exclude"),
+        ("Brand announces running shoes https://example.test/news", "exclude"),
+        ("Coffee maker https://example.test", "pending"),
+    ],
+)
+def test_new_policy_screens_consumer_content_without_a_fixed_product(text, decision):
+    suggestion = screen(record(text))
+    assert suggestion.decision == decision
+    assert suggestion.policy_version == "consumer-reactions-v2"
+
+
+def test_legacy_product_policy_remains_explicit_and_resumable():
+    item = record("I love this coffee maker!")
+    legacy = screen(item, policy_version="consumer-reactions-v1")
+    assert legacy.decision == "exclude" and legacy.reason == "off_topic"
+    assert legacy.policy_version == "consumer-reactions-v1"
+    screened = screen_candidates([item], 0.9, policy_version="consumer-reactions-v1")
+    assert screened[0].screening == legacy
+    assert (
+        screen(record("I love the iPhone Duo"), policy_version="consumer-reactions-v1").decision
+        == "include"
+    )
+
+
 def test_duplicates_remain_recoverable_and_opposites_survive():
     texts = [
         "I want the iPhone Duo.",

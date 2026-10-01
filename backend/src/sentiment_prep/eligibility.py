@@ -26,10 +26,8 @@ from sentiment_prep.models import (
 )
 from sentiment_prep.storage.checkpoints import invalidate_checkpoints
 
-CONSUMER_QUERY = (
-    '("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet'
-)
-_PRODUCT = re.compile(r"\biphone\s*duo\b|\b(?:foldable|folding)\s+iphone\b", re.I)
+# Kept only for resuming collections created with the original policy.
+_LEGACY_PRODUCT = re.compile(r"\biphone\s*duo\b|\b(?:foldable|folding)\s+iphone\b", re.I)
 _PERSONAL = re.compile(
     r"\b(?:i|i'm|i\u2019ve|i've|i\u2019d|i'd|my|me|we|our)\b|\b(?:love|hate|disappoint\w*|"
     r"excited|overpriced|beautiful|ugly|ridiculous|tempting|no thanks)\b",
@@ -50,8 +48,14 @@ _AD = re.compile(
 )
 
 
-def screen(record: Record) -> ScreeningSuggestion:
-    """Suggest content eligibility with multiple signals for aggressive exclusions."""
+def screen(record: Record, *, policy_version: str = "consumer-reactions-v2") -> ScreeningSuggestion:
+    """Screen content; general-topic relevance is confirmed by the reviewer against the query."""
+    return _content_suggestion(record, policy_version).model_copy(
+        update={"policy_version": policy_version}
+    )
+
+
+def _content_suggestion(record: Record, policy_version: str) -> ScreeningSuggestion:
     text = record.text
     personal = bool(_PERSONAL.search(text))
     if record.lang is not None and record.lang != "en":
@@ -64,7 +68,7 @@ def screen(record: Record) -> ScreeningSuggestion:
             reason="duplicate_or_repeated_template",
             evidence=["Provider identifies a repost"],
         )
-    if not _PRODUCT.search(text):
+    if policy_version == "consumer-reactions-v1" and not _LEGACY_PRODUCT.search(text):
         return ScreeningSuggestion(
             decision="pending"
             if record.references or re.search(r"\bduo\b", text, re.I)
@@ -119,7 +123,7 @@ def screen(record: Record) -> ScreeningSuggestion:
         return ScreeningSuggestion(
             decision="include",
             evidence=[
-                "Product mention and personal reaction or question; confirm context manually"
+                "Personal reaction or question; confirm relevance to the collection topic manually"
             ],
         )
     return ScreeningSuggestion(
@@ -129,7 +133,9 @@ def screen(record: Record) -> ScreeningSuggestion:
     )
 
 
-def screen_candidates(records: list[Record], threshold: float) -> list[Record]:
+def screen_candidates(
+    records: list[Record], threshold: float, *, policy_version: str = "consumer-reactions-v2"
+) -> list[Record]:
     """Annotate redundant text without deleting any candidate or changing human decisions.
 
     Only whitespace/case-identical complete text is a definite duplicate suggestion. Links,
@@ -142,7 +148,7 @@ def screen_candidates(records: list[Record], threshold: float) -> list[Record]:
     by_id = {record.id: record for record in records}
     result = []
     for record in records:
-        suggestion = record.screening or screen(record)
+        suggestion = record.screening or screen(record, policy_version=policy_version)
         if record.id in matches:
             original_id, _ = matches[record.id]
             identical = " ".join(record.text.casefold().split()) == " ".join(
@@ -157,6 +163,7 @@ def screen_candidates(records: list[Record], threshold: float) -> list[Record]:
                     else "Similar wording; meaning-changing differences require human review"
                 ],
                 duplicate_of=original_id,
+                policy_version=policy_version,
             )
         result.append(record.model_copy(update={"screening": suggestion}))
     return result

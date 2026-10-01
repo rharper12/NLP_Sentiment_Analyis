@@ -53,7 +53,8 @@ def calendar_bounds(start: date, end: date, timezone: str) -> tuple[datetime, da
 class ConsumerPolicy(BaseModel):
     """Immutable selection context; changing it requires a new collection."""
 
-    version: Literal["consumer-reactions-v1"] = "consumer-reactions-v1"
+    # Missing versions belong to the original product-specific policy; never migrate on read.
+    version: Literal["consumer-reactions-v1", "consumer-reactions-v2"] = "consumer-reactions-v1"
     start_date: date
     end_date: date
     timezone: str = "America/Chicago"
@@ -327,6 +328,7 @@ class CheckpointState(BaseModel):
 
     revision: str | None = None
     status: Literal["current", "stale", "failed"] = "stale"
+    failure_code: Literal["sso_session_unavailable"] | None = None
 
 
 class DatasetBundle(BaseModel):

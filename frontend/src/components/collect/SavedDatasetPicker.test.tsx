@@ -20,16 +20,16 @@ afterEach(() => { cleanup(); vi.resetAllMocks(); });
 it("opens the chosen local ID with an explicit selection and preserves newest-first order", async () => {
   vi.mocked(api.localDatasets).mockResolvedValue(files);
   start();
-  expect(screen.getByRole("button", { name: "Open in Clean →" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Open dataset →" }).hasAttribute("disabled")).toBe(true);
   await screen.findByRole("option", { name: /new.json/ });
   expect(screen.getAllByRole("option").slice(1).map((option) => option.getAttribute("value"))).toEqual(["new", "old"]);
   expect(screen.queryByLabelText("Saved original dataset")).toBeNull();
   fireEvent.change(screen.getByRole("combobox"), { target: { value: "old" } });
-  fireEvent.click(screen.getByRole("button", { name: "Open in Clean →" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open dataset →" }));
   expect(restore).toHaveBeenCalledWith("old");
   fireEvent.click(screen.getByRole("button", { name: "Refresh saved datasets" }));
   await waitFor(() => expect(api.localDatasets).toHaveBeenCalledTimes(2));
-  expect(screen.getByRole("button", { name: "Open in Clean →" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Open dataset →" }).hasAttribute("disabled")).toBe(true);
 });
 
 it("shows an actionable empty state", async () => {

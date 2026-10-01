@@ -43,6 +43,11 @@ fully reviewed records. If review leaves a shortfall, explicitly request another
 batch, review it, and repeat while results and budget remain available. These are bounded
 samples; date coverage and representativeness must still be assessed.
 
+Consumer reactions uses your own topic and dates. After collection, **Review eligibility →**
+opens Label directly: choose **Exclude**, select a reason, and save to leave an unwanted row
+out of the **Reviewed consumer Parquet** export. Originals remain recoverable. General search,
+CSV, and sample datasets use sentiment-only labeling.
+
 ## Screenshots
 
 These screenshots show the current application using synthetic demonstration posts. Sentiment
@@ -131,6 +136,12 @@ Edit [backend/.env.example](backend/.env.example)'s corresponding fields in your
 | `PRICING_ENABLED` | Look up Comprehend pricing for estimates. An unavailable estimate is shown as unavailable. |
 | `DATA_BUCKET` | Enable S3 exports and S3 stage checkpoints. Local working JSON files still stay local. |
 | `API_KEY` | Require an operator sign-in. Required for deployed access. |
+
+`make aws-login` renews the SSO profile configured as `AWS_PROFILE` in `backend/.env` (or the
+environment) and opens the AWS sign-in flow. Explicit static access keys take precedence, so the
+command asks you to remove that key pair before switching the app to SSO. It does not collect,
+score, or upload records. After signing in, run `make aws-check`, then resume the pending operation.
+Local diagnostics identify SSO session failures separately from permission or network errors.
 
 `make aws-check` verifies the configured AWS identity. `PROBE=1 make aws-check` also sends a small,
 billable Comprehend request. Passing the offline tests does not verify your AWS access.

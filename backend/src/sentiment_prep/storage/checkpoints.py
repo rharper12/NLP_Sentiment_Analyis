@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel
 
+from sentiment_prep.aws import SSO_LOGIN_HINT, is_sso_session_error
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import CheckpointStage, CheckpointState, DatasetBundle
 
@@ -206,7 +207,7 @@ def invalidate_checkpoints(bundle: DatasetBundle, *stages: Stage) -> None:
             state.status = "stale"
 
 
-def checkpoint_warnings(bundle: DatasetBundle) -> list[str]:
+def checkpoint_warnings(bundle: DatasetBundle, *, local_dev: bool = False) -> list[str]:
     """Public-safe status only: never include paths, provider messages or credentials."""
     warnings = []
     for stage in STAGES:
@@ -216,6 +217,8 @@ def checkpoint_warnings(bundle: DatasetBundle) -> list[str]:
                 f"The {stage} checkpoint could not be updated. "
                 "Any previous snapshot may be outdated; download a fresh export."
             )
+            if local_dev and state.failure_code == "sso_session_unavailable":
+                warnings[-1] += " " + SSO_LOGIN_HINT
         elif state and state.status == "stale":
             action = (
                 "rerun preprocessing before regenerating downstream checkpoints."
@@ -246,12 +249,17 @@ def checkpoint_bundle(store: CheckpointStore, bundle: DatasetBundle, stage: Stag
         if converted and converted.revision != revision:
             converted.status = "stale"
         info = store.save(bundle.dataset_id, stage, "csv", content)
-    except Exception:  # a snapshot failure must not discard already committed paid work
+    except Exception as error:  # a snapshot failure must not discard already committed paid work
         logger.error("checkpoint_failed", stage=stage, exc_info=True)
         converted = updated.checkpoint_status.get(f"{stage}:parquet")
         if converted:
             converted.status = "stale"
-        updated.checkpoint_status[key] = previous.model_copy(update={"status": "failed"})
+        updated.checkpoint_status[key] = previous.model_copy(
+            update={
+                "status": "failed",
+                "failure_code": "sso_session_unavailable" if is_sso_session_error(error) else None,
+            }
+        )
         return updated
     updated.checkpoints[stage] = info.uri
     # Label writes preserve valid reviewer labels, but cannot refresh an old processed input.

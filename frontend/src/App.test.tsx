@@ -38,19 +38,23 @@ vi.mock("./components/Header", () => ({
 vi.mock("./components/stages/CollectStep", () => ({
   CollectStep: (p: ComponentProps<typeof CollectStep>) => (
     <>
+      <h2>Collect your dataset</h2>
       <output>{p.dataset?.dataset_id}</output>
       <button onClick={() => p.onLoadSample(500)}>Load sample</button>
       <button onClick={() => p.onSearch("test", 500, {})}>Search test</button>
       {p.onResume && <button onClick={p.onResume}>Resume collection</button>}
       <button onClick={p.onCancel}>Cancel collection</button>
       <button onClick={() => p.onRestore("saved-id")}>Restore original</button>
-      <button onClick={p.onContinue}>Continue clean</button>
+      <button onClick={p.onContinue}>
+        {p.dataset?.consumer_policy ? "Review eligibility →" : "Continue clean"}
+      </button>
     </>
   ),
 }));
 vi.mock("./components/stages/CleanStep", () => ({
   CleanStep: (p: ComponentProps<typeof CleanStep>) => (
     <>
+      <h2>Clean dataset</h2>
       <output data-testid="config">{p.config.order.join(",")}</output>
       <button onClick={p.onRun}>Process</button>
     </>
@@ -85,6 +89,35 @@ const dataset = (id: string): DatasetSummary => ({
 });
 // These stage stubs only inspect dataset identity; the API's full shapes are covered in client tests.
 const processed = (id: string) => ({ dataset_id: id }) as PreprocessResponse;
+
+it.each([false, true])(
+  "focuses stage changes but not initial load (Strict Mode: %s)",
+  async (strict) => {
+    vi.mocked(api.load).mockResolvedValue(dataset("focus-test"));
+    render(
+      strict ? (
+        <StrictMode>
+          <App />
+        </StrictMode>
+      ) : (
+        <App />
+      ),
+    );
+    await waitFor(() => expect(api.health).toHaveBeenCalled());
+    expect(document.activeElement).toBe(document.body);
+    const search = screen.getByRole("button", { name: "Search test" });
+    search.focus();
+    fireEvent.click(search);
+    await screen.findByText("focus-test");
+    expect(document.activeElement).toBe(search);
+    fireEvent.click(screen.getByRole("button", { name: "Continue clean" }));
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Clean dataset" }));
+    fireEvent.click(screen.getByRole("button", { name: /Collect/ }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("heading", { name: "Collect your dataset" }),
+    );
+  },
+);
 
 it("manually requests the review shortfall on the same dataset and returns to review without looping", async () => {
   const counts = {
@@ -128,7 +161,7 @@ it("manually requests the review shortfall on the same dataset and returns to re
   render(<App />);
   fireEvent.click(screen.getByText("Search test"));
   await screen.findByText("consumer");
-  fireEvent.click(screen.getByRole("button", { name: /Label/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Review eligibility →" }));
   await screen.findByRole("button", { name: "Collect additional candidates" });
   expect(api.collectCandidates).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Collect additional candidates" }));
@@ -150,9 +183,7 @@ it("manually requests the review shortfall on the same dataset and returns to re
   vi.mocked(api.dataset).mockResolvedValue(consumer);
   fireEvent.click(screen.getByRole("button", { name: "Continue to Export →" }));
   await waitFor(() =>
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "Export" }),
-    ),
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Export" })),
   );
   fireEvent.click(screen.getByRole("button", { name: "← Back to Label" }));
   await waitFor(() =>

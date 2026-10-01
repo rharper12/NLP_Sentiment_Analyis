@@ -90,12 +90,16 @@ input is rejected before collection. General calendar searches retain longer arc
 
 ```json
 {"source":"x","request_id":"new-consumer-pilot","preset":"consumer_reactions",
+ "query":"\"coffee maker\"",
  "start_date":"2026-09-09","end_date":"2026-09-10","timezone":"America/Chicago",
  "limit":100,"per_author_limit":2,"reviewed_target":500}
 ```
 
-Omitting `query` uses `("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet`.
-The window is `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`, not an inferred announcement time.
+`query` is required and cannot be blank. The preset supplies no product, dates, or announcement
+assumptions. This example's window is `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`.
+New collections use `consumer-reactions-v2`: content screening is topic-neutral and the reviewer
+confirms relevance to the saved query. Existing `consumer-reactions-v1` collections retain their
+original product-specific rules and saved reviews on resume; they are not migrated implicitly.
 This preset supports 1–31 completed days, with at least ten candidates per day. `limit` is a
 candidate target, split across independent daily cursors. Short/ambiguous/non-English/promotional
 candidates remain recoverable for content review; timestamp validation still rejects out-of-window

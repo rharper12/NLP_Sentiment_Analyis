@@ -354,7 +354,11 @@ class XSearchSource:
             state.seen_ids = sorted(seen)
             filtered.update(dropped)
             if consumer_policy:
-                records = screen_candidates(records, consumer_policy.duplicate_threshold)
+                records = screen_candidates(
+                    records,
+                    consumer_policy.duplicate_threshold,
+                    policy_version=consumer_policy.version,
+                )
             elif dedupe_similarity is not None:
                 records, dropped = deduplicate(records, dedupe_similarity)
                 filtered.update(dropped)

@@ -87,8 +87,15 @@ def collect_x(
     request_id = body.request_id or uuid.uuid4().hex
     dataset_id = "x-" + request_id
     identity = body.model_dump(mode="json", exclude={"request_id"})
+    try:
+        existing = repo.get(dataset_id)
+    except NotFoundError:
+        existing = None
     policy = (
         ConsumerPolicy(
+            version=existing.original.consumer_policy.version
+            if existing and existing.original.consumer_policy
+            else "consumer-reactions-v2",
             start_date=body.start_date,
             end_date=body.end_date,
             timezone=body.timezone,
@@ -99,9 +106,7 @@ def collect_x(
         if body.preset == "consumer_reactions" and body.start_date and body.end_date
         else None
     )
-    try:
-        repo.get(dataset_id)
-    except NotFoundError:
+    if existing is None:
         bundle = DatasetBundle(
             dataset_id=dataset_id,
             file_stem=default_file_stem(body.query, "x", zone),
@@ -163,7 +168,7 @@ def collect_x(
             bundle = checkpoint_bundle(checkpoints, bundle, "collected")
             edit.save(bundle)
             history.record_dataset(bundle)
-    return summarize(bundle)
+    return summarize(bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled)
 
 
 def store_dataset(
@@ -199,16 +204,16 @@ def store_dataset(
     repo.save(bundle)
     history.record_dataset(bundle)
     logger.info("dataset_stored", records=len(dataset.records), source=dataset.source_type)
-    return summarize(bundle)
+    return summarize(bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled)
 
 
-def summarize(bundle: DatasetBundle) -> DatasetSummary:
+def summarize(bundle: DatasetBundle, *, local_dev: bool = False) -> DatasetSummary:
     """Derive response counts and resumability from the current persisted bundle."""
     dataset = bundle.original
     partial = bundle.collection is not None and bundle.collection.needs_more_records(
         len(dataset.records)
     )
-    warnings: list[str] = checkpoint_warnings(bundle)
+    warnings: list[str] = checkpoint_warnings(bundle, local_dev=local_dev)
     if len(dataset.records) < MIN_RECORDS_FOR_TASK and not dataset.consumer_policy:
         warnings.append(
             f"only {len(dataset.records)} records; Task 1 needs at least {MIN_RECORDS_FOR_TASK}. "

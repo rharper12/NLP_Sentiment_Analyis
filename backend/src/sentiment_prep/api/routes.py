@@ -349,10 +349,10 @@ def restore_local_dataset(
     if saved.original.consumer_policy:
         # Consumer review is an ongoing collection, not a new original-only cleaning exercise.
         try:
-            return summarize(repo.get(dataset_id))
+            return summarize(repo.get(dataset_id), local_dev=settings.diagnostics_enabled)
         except NotFoundError:
             repo.save(saved)
-            return summarize(saved)
+            return summarize(saved, local_dev=settings.diagnostics_enabled)
     return store_dataset(original_only(saved.original), repo, checkpoints, dedupe=False, zone=zone)
 
 
@@ -362,9 +362,11 @@ def restore_local_dataset(
     response_model=DatasetSummary,
     summary="Dataset summary",
 )
-def get_dataset(dataset_id: str, repo: RepoDep) -> DatasetSummary:
+def get_dataset(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> DatasetSummary:
     """Summary and preview of a previously loaded dataset."""
-    return summarize(repo.get(dataset_id))
+    return summarize(
+        repo.get(dataset_id), local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+    )
 
 
 @router.get(
@@ -446,7 +448,9 @@ def preprocess(
         dataset_id=dataset_id,
         applied_steps=updated.applied_steps,
         partial=updated.analysis.partial,
-        warnings=checkpoint_warnings(updated),
+        warnings=checkpoint_warnings(
+            updated, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+        ),
         record_count=len(updated.processed.records),
         metrics_before=before,
         metrics_after=after,
@@ -498,6 +502,7 @@ def review_eligibility(
     body: EligibilityRequest,
     repo: RepoDep,
     checkpoints: CheckpointDep,
+    settings: SettingsDep,
 ) -> DatasetSummary:
     """Apply explicit human decisions, including unchanged confirmations and corrections."""
     with repo.edit(dataset_id) as edit:
@@ -505,7 +510,7 @@ def review_eligibility(
         edit.save(bundle)
         bundle = checkpoint_bundle(checkpoints, bundle, "labelled")
         edit.save(bundle)
-    return summarize(bundle)
+    return summarize(bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled)
 
 
 @router.get(
@@ -514,9 +519,11 @@ def review_eligibility(
     response_model=LabelSummary,
     summary="Label coverage and agreement",
 )
-def label_summary(dataset_id: str, repo: RepoDep) -> LabelSummary:
+def label_summary(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> LabelSummary:
     """Counts by source and label, review progress, reviewer-vs-Comprehend agreement."""
-    return labeling.summary(repo.get(dataset_id))
+    return labeling.summary(
+        repo.get(dataset_id), local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+    )
 
 
 @router.get(
@@ -560,7 +567,10 @@ def label_comprehend(
     if not request.confirm_cost:
         raise ValidationError("confirm_cost must be true; the UI shows the estimate first")
     with repo.edit(dataset_id) as edit:
-        with translated("Amazon Comprehend"):
+        with translated(
+            "Amazon Comprehend",
+            local_dev=settings.runtime == "local" and settings.diagnostics_enabled,
+        ):
             try:
                 client = deps.get_comprehend_client()
             except (BotoCoreError, AppError):
@@ -582,7 +592,9 @@ def label_comprehend(
         if progress.labelled_in_call and can_start():
             bundle = checkpoint_bundle(checkpoints, bundle, "labelled")
             edit.save(bundle)
-    progress.warnings = checkpoint_warnings(bundle)
+    progress.warnings = checkpoint_warnings(
+        bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+    )
     return progress
 
 
@@ -592,7 +604,9 @@ def label_comprehend(
     response_model=LabelSummary,
     summary="Choose what to review by hand",
 )
-def choose_review(dataset_id: str, request: ReviewRequest, repo: RepoDep) -> LabelSummary:
+def choose_review(
+    dataset_id: str, request: ReviewRequest, repo: RepoDep, settings: SettingsDep
+) -> LabelSummary:
     """Fix the review set.
 
     ``none`` skips review, ``all`` reviews every record, and ``sample`` uses a fixed seed.
@@ -603,7 +617,9 @@ def choose_review(dataset_id: str, request: ReviewRequest, repo: RepoDep) -> Lab
             edit.bundle, request.mode, request.size, request.unit, request.seed
         )
         edit.save(bundle)
-    return labeling.summary(bundle)
+    return labeling.summary(
+        bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+    )
 
 
 @router.get(
@@ -633,7 +649,11 @@ def review_page(
     summary="Apply reviewer labels",
 )
 def manual_labels(
-    dataset_id: str, request: ManualLabelRequest, repo: RepoDep, checkpoints: CheckpointDep
+    dataset_id: str,
+    request: ManualLabelRequest,
+    repo: RepoDep,
+    checkpoints: CheckpointDep,
+    settings: SettingsDep,
 ) -> LabelSummary:
     """Set ``label_source="manual"`` on the given records. Comprehend's label is kept alongside."""
     bind_context(dataset_id=dataset_id)
@@ -643,7 +663,9 @@ def manual_labels(
         )
         bundle = checkpoint_bundle(checkpoints, bundle, "labelled")
         edit.save(bundle)
-    return labeling.summary(bundle)
+    return labeling.summary(
+        bundle, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+    )
 
 
 @router.get(

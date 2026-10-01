@@ -75,7 +75,7 @@ export default function App() {
 
   const collect = async (
     task: (signal: AbortSignal) => Promise<DatasetSummary>,
-    openClean = false,
+    openNextStage = false,
   ) => {
     run.reset();
     setLabelled(false);
@@ -85,7 +85,7 @@ export default function App() {
       setSpendVersion((v) => v + 1);
       if (!result.partial) setXRequest(null);
     }
-    if (result && openClean) {
+    if (result && openNextStage) {
       dispatch({ type: "init", steps: steps.data ?? [] });
       dispatch({
         type: "options",
@@ -95,7 +95,7 @@ export default function App() {
           missing_data_fill_value: "[EMPTY]",
         },
       });
-      setStage("clean");
+      setStage(result.consumer_policy ? "label" : "clean");
     }
     return result;
   };
@@ -143,7 +143,7 @@ export default function App() {
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <ErrorBoundary>
           <Suspense fallback={<p role="status">Loading {stage}…</p>}>
-            <StagePanel key={stage}>
+            <StagePanel stage={stage}>
               {stage === "collect" && (
                 <CollectStep
                   busy={dataset.loading}
@@ -193,7 +193,7 @@ export default function App() {
                     void collect((s) => api.restoreLocal(f, s), true);
                   }}
                   onCancel={dataset.cancel}
-                  onContinue={() => setStage("clean")}
+                  onContinue={() => setStage(dataset.data?.consumer_policy ? "label" : "clean")}
                 />
               )}
               {stage === "clean" && (
@@ -281,15 +281,18 @@ export default function App() {
   );
 }
 
-/** Mount inside Suspense so focus moves only after the new stage is ready. */
-function StagePanel({ children }: { children: ReactNode }) {
+/** Focus stage changes after Suspense resolves, without moving focus on initial page load. */
+function StagePanel({ stage, children }: { stage: Stage; children: ReactNode }) {
   const panel = useRef<HTMLDivElement>(null);
+  const previousStage = useRef(stage);
   useEffect(() => {
+    if (previousStage.current === stage) return;
+    previousStage.current = stage;
     const heading = panel.current?.querySelector("h2");
     if (heading) {
       heading.tabIndex = -1;
       heading.focus();
     }
-  }, []);
+  }, [stage]);
   return <div ref={panel}>{children}</div>;
 }

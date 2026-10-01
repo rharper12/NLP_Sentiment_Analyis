@@ -159,6 +159,10 @@ function LabelSession({
           predictions and save your own labels before using them in a model. These labels do not
           necessarily describe sentiment toward a particular product.
         </p>
+        <p className="mt-2 text-sm text-muted">
+          This dataset uses sentiment-only labeling. Include/Exclude eligibility review is available
+          for datasets collected with the Consumer reactions option.
+        </p>
       </div>
 
       <Notice

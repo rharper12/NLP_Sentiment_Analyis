@@ -27,6 +27,7 @@ def request_body(**changes):
             "source": "x",
             "request_id": "consumer-test",
             "preset": "consumer_reactions",
+            "query": '"iPhone Duo"',
             "start_date": "2026-09-09",
             "end_date": "2026-09-10",
             "timezone": "America/Chicago",
@@ -68,6 +69,12 @@ def test_general_calendar_search_preserves_long_archive_ranges():
         {"source": "x", "start_date": "2025-01-01", "end_date": "2025-12-31"}
     )
     assert body.end_time == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("query", [None, "", "   "])
+def test_consumer_search_requires_an_explicit_query(query):
+    with pytest.raises(ModelValidationError, match="Enter a topic"):
+        request_body(query=query)
 
 
 @pytest.fixture
@@ -114,6 +121,73 @@ def post(identifier, timestamp, **changes):
         "created_at": timestamp,
         **changes,
     }
+
+
+def test_new_collections_screen_the_requested_topic_without_iphone_rules(collection):
+    c = collection
+    c.body = request_body(query='"coffee maker"')
+
+    def reply(request):
+        day = request.url.params["start_time"][8:10]
+        return httpx.Response(
+            200,
+            json={
+                "data": [post(day, f"2026-09-{day}T12:00:00Z", text="I love this coffee maker!")],
+                "meta": {},
+            },
+        )
+
+    c.reply = reply
+    result = c.load()
+    assert result.consumer_policy.version == "consumer-reactions-v2"
+    assert c.bundle().original.records[0].screening.decision == "include"
+    assert all(
+        r.screening.policy_version == "consumer-reactions-v2" for r in c.bundle().original.records
+    )
+    assert all('"coffee maker"' in r.url.params["query"] for r in c.requests)
+    assert all("iPhone" not in r.url.params["query"] for r in c.requests)
+
+
+def test_additional_collection_keeps_the_saved_legacy_policy(collection):
+    c = collection
+
+    def reply(request):
+        day = request.url.params["start_time"][8:10]
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    post(
+                        f"{len(c.requests)}-{i}",
+                        f"2026-09-{day}T12:00:00Z",
+                        text="I love the iPhone Duo!"
+                        if len(c.requests) <= 2
+                        else "I love this coffee maker!",
+                    )
+                    for i in range(10)
+                ],
+                "meta": {"next_token": "more"},
+            },
+        )
+
+    c.reply = reply
+    c.load()
+    with c.repo.edit("x-consumer-test") as edit:
+        saved = edit.bundle
+        saved.original.consumer_policy.version = "consumer-reactions-v1"
+        for record in saved.original.records:
+            record.screening.policy_version = "consumer-reactions-v1"
+        edit.save(saved)
+    response = c.client.post(
+        "/dataset/x-consumer-test/candidates", json={"candidate_target": 40, "confirm_cost": True}
+    )
+    assert response.status_code == 200
+    assert response.json()["consumer_policy"]["version"] == "consumer-reactions-v1"
+    assert c.bundle().original.records[20].screening.reason == "off_topic"
+    assert all(
+        r.screening.policy_version == "consumer-reactions-v1"
+        for r in c.bundle().original.records[20:]
+    )
 
 
 def test_calendar_slices_preserve_originals_metadata_and_costs(collection):

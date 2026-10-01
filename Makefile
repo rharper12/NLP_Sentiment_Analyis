@@ -36,7 +36,7 @@ DOCKER_ENV = $(shell test ! -S /var/run/docker.sock && test -S "$(DOCKER_SOCK)" 
              && echo DOCKER_HOST=unix://$(DOCKER_SOCK))
 
 .DEFAULT_GOAL := help
-.PHONY: help setup lock dev stop dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
+.PHONY: help setup lock dev stop dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check aws-login \
         api-types validate build deploy deploy-web put-secret logs clean
 
 ##@ Getting started
@@ -107,6 +107,9 @@ test-web: ## vitest
 
 aws-check: ## Verify AWS credentials the way the app resolves them; PROBE=1 also calls Comprehend
 	python tools/aws_check.py
+
+aws-login: ## Renew SSO using AWS_PROFILE from backend/.env (opens AWS sign-in)
+	python tools/aws_check.py --login
 
 audit-a11y: ## General and consumer browser checks; use an isolated API and production preview
 	python tools/a11y_audit.py

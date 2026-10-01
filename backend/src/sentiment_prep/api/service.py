@@ -15,6 +15,7 @@ from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer
 from sentiment_prep.analysis.comprehend_text import TRUNCATION_WARNING, prepare_text
 from sentiment_prep.analysis.metrics import DatasetMetrics, compute_metrics
 from sentiment_prep.api.schemas import PreprocessRequest
+from sentiment_prep.aws import SSO_LOGIN_HINT, is_sso_session_error
 from sentiment_prep.budget import BudgetExhaustedError, can_start
 from sentiment_prep.config import Settings
 from sentiment_prep.errors import AppError, ValidationError
@@ -151,6 +152,16 @@ def run_preprocessing(
         except Exception as exc:
             # Optional provider failure: keep deterministic output and all committed paid units.
             logger.error("analysis_enrichment_failed", stage=stage, exc_info=True)
+            if is_sso_session_error(exc):
+                hint = (
+                    SSO_LOGIN_HINT
+                    if settings.runtime == "local" and settings.diagnostics_enabled
+                    else "AWS authentication is unavailable; contact the operator."
+                )
+                report.warnings.append(f"{stage} unavailable: {hint}")
+                state.partial = True
+                save()
+                break
             report.warnings.append(f"{stage} unavailable: {type(exc).__name__}")
             state.attempts[attempt_key] = state.attempts.get(attempt_key, 0) + 1
             if state.attempts[attempt_key] < 3:

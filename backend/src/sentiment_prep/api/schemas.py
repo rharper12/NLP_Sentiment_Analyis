@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, Field, model_validator
 
 from sentiment_prep.analysis.metrics import DatasetMetrics
-from sentiment_prep.eligibility import CONSUMER_QUERY, ConsumerCounts, EligibilityItem
+from sentiment_prep.eligibility import ConsumerCounts, EligibilityItem
 from sentiment_prep.filenames import FileStem
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
 from sentiment_prep.models import (
@@ -73,8 +73,8 @@ class LoadRequest(BaseModel):
                 raise ValueError("Consumer reactions supports at most 31 calendar days")
             if self.limit < 10 * ((self.end_date - self.start_date).days + 1):
                 raise ValueError("Allow at least 10 candidates per requested day")
-            if self.query is None:
-                self.query = CONSUMER_QUERY
+            if not self.query or not self.query.strip():
+                raise ValueError("Enter a topic or search query for Consumer reactions")
         return self
 
 

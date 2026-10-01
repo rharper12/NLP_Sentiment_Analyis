@@ -152,10 +152,19 @@ export function ConsumerReviewer({
   return (
     <section className="mx-auto flex max-w-4xl flex-col gap-5">
       <h2 className="text-2xl font-semibold">Review consumer reactions</h2>
+      {collection?.query && (
+        <p className="break-words text-sm">Collection topic / query: {collection.query}</p>
+      )}
       <p className="text-sm text-muted">
         First decide whether a post belongs in this dataset. Negative opinions, disappointment and
         sarcasm use the same eligibility rules as positive reactions. Then review sentiment for
         included posts.
+      </p>
+      <p className="text-sm text-muted">
+        To drop an unwanted record from the reviewed export, choose an eligibility queue below,
+        select Exclude, choose a reason, and save. Originals stay in Human exclusions so you can
+        undo a decision. Confirm topic relevance against the collection query; screening suggestions
+        do not establish it.
       </p>
       {page.data && (
         <ConsumerSummary counts={page.data.counts} timezone={policy.timezone ?? "UTC"} />

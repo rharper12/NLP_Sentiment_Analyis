@@ -84,6 +84,11 @@ Locally, `make dev-api` prints coloured lines; pipe through `grep request_id=<id
 
 ## Debugging checklist
 
+- Local SSO session expired or unavailable: run `make aws-login`, complete browser sign-in, then
+  `make aws-check`. Resume the pending operation only after that check succeeds. The login command
+  reads the app's `AWS_PROFILE` from `backend/.env` or the environment; it makes no scoring or S3
+  write requests. Restart the local API if it still holds expired credentials. Known SSO failures
+  show this guidance in local diagnostics; throttling, access denial, and disk failures do not.
 - 503 with "No X bearer token": check `X_BEARER_TOKEN` (local) or that the Lambda role can read the
   SSM path (`ssm:GetParameter` on the exact ARN). `GET /health` shows `x_configured`.
 - Fewer records than requested: read `truncated_reason` in the response; `x_fetch_complete` has

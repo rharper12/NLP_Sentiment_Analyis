@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 from sentiment_prep.analysis.comprehend_text import prepare_text
 from sentiment_prep.analysis.payloads import SentimentResponse
+from sentiment_prep.aws import is_sso_session_error
 from sentiment_prep.budget import require_budget
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import SENTIMENT_LABELS, CachedSentiment, Dataset, SentimentComparison
@@ -198,7 +199,11 @@ class ComprehendScorer:
             response = self._client.batch_detect_sentiment(
                 TextList=texts, LanguageCode=self._language
             )
-        except (ClientError, BotoCoreError):
+        except (ClientError, BotoCoreError) as error:
+            # Authentication blocks the whole request, not individual documents. Let the caller
+            # pause without exhausting their scoring attempts or submitting further batches.
+            if is_sso_session_error(error):
+                raise
             # Preserve earlier successful batches. These are service/transport failures, not
             # evidence that a document is invalid; the caller persists a bounded retry count.
             logger.error("comprehend_batch_failed", exc_info=True)

@@ -751,9 +751,9 @@ export interface components {
             /**
              * Version
              * @default consumer-reactions-v1
-             * @constant
+             * @enum {string}
              */
-            version: "consumer-reactions-v1";
+            version: "consumer-reactions-v1" | "consumer-reactions-v2";
             /**
              * Start Date
              * Format: date

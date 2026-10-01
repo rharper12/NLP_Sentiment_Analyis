@@ -334,7 +334,7 @@ def review_page(bundle: DatasetBundle, offset: int, limit: int) -> tuple[int, li
     return len(bundle.review_ids), [by_id[i] for i in ids if i in by_id]
 
 
-def summary(bundle: DatasetBundle) -> LabelSummary:
+def summary(bundle: DatasetBundle, *, local_dev: bool = False) -> LabelSummary:
     """Counts by source and label; review progress; reviewer/Comprehend agreement."""
     records = bundle.original.records
     review = set(bundle.review_ids)
@@ -353,7 +353,7 @@ def summary(bundle: DatasetBundle) -> LabelSummary:
         machine_scored=sum(r.comprehend_label is not None for r in records),
         comparable_records=len(both),
         agreements=agreed,
-        warnings=checkpoint_warnings(bundle),
+        warnings=checkpoint_warnings(bundle, local_dev=local_dev),
     )
 
 

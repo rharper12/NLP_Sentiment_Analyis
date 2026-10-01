@@ -88,13 +88,7 @@ column to `numeric(12,6)`. Do not delete a database containing spend history to 
 
 ## Running against AWS from your machine
 
-The app uses boto3's normal credential chain, so any working `aws` CLI setup works. For SSO:
-
-```bash
-aws sso login --profile my-profile          # renew the session (expires every few hours)
-```
-
-Then set the profile in `backend/.env` alongside everything else:
+The app uses its configured profile or keys with boto3. For SSO, set the profile in `backend/.env`:
 
 ```
 AWS_PROFILE=my-profile
@@ -102,13 +96,35 @@ AWS_REGION=us-east-1
 COMPREHEND_ENABLED=true
 ```
 
+Then sign in using the same profile as the app:
+
+```bash
+make aws-login
+make aws-check
+```
+
+`aws-login` requires AWS CLI v2 and a configured SSO profile. It reads `backend/.env`, respects
+environment overrides, and invokes `aws sso login --profile ...` without shell interpolation.
+It refuses to renew an unused profile when explicit static keys take precedence. Login and the
+default identity check do not analyze records or write S3 objects.
+
 `AWS_PROFILE` is read as a setting and applied to a `boto3.Session`, not exported to the process:
 this project's `.env` is parsed by pydantic-settings and never reaches boto3's own environment
 lookup, so exporting it in the shell also works but is not required.
 
 With diagnostics enabled and valid authentication, `GET /health` reports `comprehend_enabled`, and the first AWS call logs
-`boto_session_created` with the profile name. When the SSO session lapses, requests fail with a
-503 saying to run `aws sso login` rather than a generic error.
+`boto_session_created` with the profile name. When the SDK reports an expired or missing SSO
+session, local diagnostics direct you to `make aws-login` and `make aws-check`. Analysis pauses
+without turning that authentication failure into document errors or exhausting scoring retries;
+previously committed scores remain available on resume. Explicit labeling returns a 503 with the
+same local recovery guidance. S3 checkpoint failures retain a safe cause code and the previous
+snapshot. A successful snapshot write clears the failure. Production responses omit local Make
+commands, and unrelated permission, network, or disk failures are not described as SSO expiry.
+
+Signing in alone does not rerun analysis or regenerate a failed checkpoint. After the identity
+check succeeds, explicitly resume the pending operation. If the running API still has an expired
+session cached, restart the local API before retrying. Existing generic failures saved by older
+versions cannot be retrospectively classified as SSO failures.
 
 Least privilege for a local run is `comprehend:BatchDetectSentiment`, plus
 `pricing:GetProducts` if price lookup is enabled.

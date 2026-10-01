@@ -14,6 +14,8 @@ export interface TimeRange {
 
 export const DEFAULT_RANGE: TimeRange = { preset: "7d", from: "", to: "" };
 
+const TIMEZONES = ["UTC", ...Intl.supportedValuesOf("timeZone")];
+
 const PRESETS: [RangePreset, string][] = [
   ["7d", "Last 7 days"],
   ["3d", "Last 3 days"],
@@ -55,10 +57,17 @@ export function rangeError(range: TimeRange): string | null {
   if (range.from > range.to) return "The start date must come before the end date.";
   if (range.from < ARCHIVE_START) return "X's searchable archive starts in March 2006.";
   try {
-    const localToday = new Intl.DateTimeFormat("en-CA", { timeZone: range.timezone ?? "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    if (range.to >= localToday) return "Choose completed days before today in the selected timezone.";
+    const localToday = new Intl.DateTimeFormat("en-CA", {
+      timeZone: range.timezone ?? "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    if (range.to >= localToday)
+      return "Choose completed days before today in the selected timezone.";
+  } catch {
+    return "Choose a valid timezone, such as America/Chicago.";
   }
-  catch { return "Choose a valid timezone, such as America/Chicago."; }
   return null;
 }
 
@@ -71,48 +80,83 @@ interface Props {
 export function TimeRangePicker({ value, onChange, calendarOnly = false }: Props) {
   const ids = { from: useId(), to: useId(), zone: useId() };
   const error = rangeError(value);
+  const timezone = value.timezone ?? "UTC";
+  const timezones = [...TIMEZONES];
+  // A browser's local zone can be a valid alias omitted from its primary-zone list.
+  if (!timezones.includes(timezone)) {
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: timezone });
+      timezones.push(timezone);
+    } catch {
+      // Keep invalid values visibly unselected; the existing range validation explains why.
+    }
+  }
 
   return (
     <fieldset className="flex flex-col gap-2 border-0 p-0">
       <legend className="mb-1 text-sm text-muted">Time range</legend>
-      {!calendarOnly && <div role="group" className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        {PRESETS.map(([preset, label]) => (
-          <button
-            key={preset}
-            type="button"
-            aria-pressed={value.preset === preset}
-            onClick={() => onChange({ ...value, preset })}
-            className="selectable px-3 py-2"
-          >
-            {label}
-          </button>
-        ))}
-      </div>}
+      {!calendarOnly && (
+        <div role="group" className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+          {PRESETS.map(([preset, label]) => (
+            <button
+              key={preset}
+              type="button"
+              aria-pressed={value.preset === preset}
+              onClick={() => onChange({ ...value, preset })}
+              className="selectable px-3 py-2"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {value.preset === "custom" && (
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
-            <label htmlFor={ids.from} className="text-sm text-muted">From</label>
+            <label htmlFor={ids.from} className="text-sm text-muted">
+              From
+            </label>
             <input
               id={ids.from}
               type="date"
-              className="field w-44"
+              className="field h-11 w-44"
               min={ARCHIVE_START}
               max={today()}
               value={value.from}
               onChange={(e) => onChange({ ...value, from: e.target.value })}
             />
           </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={ids.zone} className="text-sm text-muted">Timezone</label>
-            <input id={ids.zone} className="field" value={value.timezone ?? "UTC"} onChange={(e) => onChange({ ...value, timezone: e.target.value })} placeholder="America/Chicago" />
+          <div className="flex min-w-0 max-w-full flex-col gap-1">
+            <label htmlFor={ids.zone} className="text-sm text-muted">
+              Timezone
+            </label>
+            <select
+              id={ids.zone}
+              className="field h-11 w-44"
+              title={timezone}
+              value={timezones.includes(timezone) ? timezone : ""}
+              aria-describedby={`${ids.zone}-help`}
+              onChange={(e) => onChange({ ...value, timezone: e.target.value })}
+            >
+              <option value="" disabled>
+                Choose a timezone
+              </option>
+              {timezones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label htmlFor={ids.to} className="text-sm text-muted">To</label>
+            <label htmlFor={ids.to} className="text-sm text-muted">
+              To
+            </label>
             <input
               id={ids.to}
               type="date"
-              className="field w-44"
+              className="field h-11 w-44"
               min={value.from || ARCHIVE_START}
               max={today()}
               value={value.to}
@@ -122,8 +166,16 @@ export function TimeRangePicker({ value, onChange, calendarOnly = false }: Props
         </div>
       )}
 
+      {value.preset === "custom" && (
+        <p id={`${ids.zone}-help`} className="text-xs text-muted">
+          Your dates use this timezone, including daylight saving changes. We convert them to UTC
+          for X. This does not filter posts by the author's location.
+        </p>
+      )}
+
       <p className={`text-xs ${error ? "text-warn-ink" : "text-muted"}`}>
-        {error ?? "The final date is included through the next local midnight (exclusive). Choose completed days. Older than 7 days requires full-archive access; no recent-data fallback. Existing spend caps apply."}
+        {error ??
+          "The final date is included through the next local midnight (exclusive). Choose completed days. Older than 7 days requires full-archive access; no recent-data fallback. Existing spend caps apply."}
       </p>
     </fieldset>
   );
