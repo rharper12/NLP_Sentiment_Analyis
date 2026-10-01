@@ -6,9 +6,10 @@ Changing a field here is an architectural decision, not a local edit.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,6 +21,94 @@ CheckpointStage = Literal["collected", "processed", "labelled"]
 LabelSource = Literal["source", "comprehend", "manual"]
 SentimentLabel = Literal["positive", "negative", "neutral", "mixed"]
 SENTIMENT_LABELS: tuple[str, ...] = ("positive", "negative", "neutral", "mixed")
+EligibilityDecision = Literal["include", "exclude", "pending"]
+EligibilityReason = Literal[
+    "news_or_article",
+    "giveaway_or_promotion",
+    "technical_developer_content",
+    "duplicate_or_repeated_template",
+    "off_topic",
+    "insufficient_context",
+    "not_english",
+]
+
+
+def calendar_bounds(start: date, end: date, timezone: str) -> tuple[datetime, datetime]:
+    """Resolve inclusive calendar dates to UTC without assuming fixed-length DST days."""
+    if start > end:
+        raise ValueError("The start date must come before the final included date")
+    try:
+        zone = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError("Use a valid IANA timezone, such as America/Chicago") from exc
+    try:
+        return (
+            datetime.combine(start, time.min, zone).astimezone(UTC),
+            datetime.combine(end + timedelta(days=1), time.min, zone).astimezone(UTC),
+        )
+    except OverflowError as exc:
+        raise ValueError("Calendar dates exceed the supported timestamp range") from exc
+
+
+class ConsumerPolicy(BaseModel):
+    """Immutable selection context; changing it requires a new collection."""
+
+    version: Literal["consumer-reactions-v1"] = "consumer-reactions-v1"
+    start_date: date
+    end_date: date
+    timezone: str = "America/Chicago"
+    per_author_limit: int = Field(default=2, ge=1, le=100)
+    reviewed_target: int = Field(default=500, ge=1, le=5000)
+    duplicate_threshold: float = Field(default=0.9, gt=0, le=1)
+    selection_rule: Literal["daily-quotas-recency;author-earliest-id"] = (
+        "daily-quotas-recency;author-earliest-id"
+    )
+
+    @model_validator(mode="after")
+    def valid_calendar(self) -> Self:
+        """Reject invalid zones and oversized/reversed windows before any provider work."""
+        self.bounds()
+        if not 0 <= (self.end_date - self.start_date).days < 31:
+            raise ValueError("Select an ordered range of at most 31 calendar days")
+        return self
+
+    def bounds(self) -> tuple[datetime, datetime]:
+        """Convert local midnights separately so DST days can be 23 or 25 hours."""
+        return calendar_bounds(self.start_date, self.end_date, self.timezone)
+
+
+class ScreeningSuggestion(BaseModel):
+    """Explainable machine suggestion, never evidence of completed human review."""
+
+    decision: EligibilityDecision
+    reason: EligibilityReason | None = None
+    evidence: list[str] = Field(default_factory=list)
+    duplicate_of: str | None = None
+    policy_version: str = "consumer-reactions-v1"
+
+
+class EligibilityReview(BaseModel):
+    """Recoverable operator decision and its explanation; no identity inference."""
+
+    decision: EligibilityDecision
+    reason: EligibilityReason | None = None
+    note: str = ""
+    reviewed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PostReference(BaseModel):
+    """Relationships supplied by X, without fetching related posts."""
+
+    id: str = Field(strict=True)
+    type: Literal["replied_to", "quoted", "retweeted"]
+
+
+class PostUrl(BaseModel):
+    """Only URL evidence needed for review; linked pages are never fetched."""
+
+    url: str
+    expanded_url: str | None = None
+    display_url: str | None = None
 
 
 class Record(BaseModel):
@@ -41,6 +130,20 @@ class Record(BaseModel):
     source_type: SourceType
     created_at: datetime | None = None
     tokens: list[str] | None = None
+    author_id: str | None = Field(default=None, strict=True)
+    lang: str | None = None
+    conversation_id: str | None = Field(default=None, strict=True)
+    in_reply_to_user_id: str | None = Field(default=None, strict=True)
+    references: list[PostReference] = Field(default_factory=list)
+    urls: list[PostUrl] = Field(default_factory=list)
+    screening: ScreeningSuggestion | None = None
+    eligibility: EligibilityDecision = Field(default_factory=lambda: "pending")
+    eligibility_reviewed: bool = Field(default_factory=bool)
+    eligibility_reason: EligibilityReason | None = None
+    eligibility_note: str = Field(default_factory=str)
+    eligibility_history: list[EligibilityReview] = Field(default_factory=list)
+    sentiment_reviewed: bool = Field(default_factory=bool)
+    sentiment_reviewed_at: datetime | None = None
 
     def words(self) -> list[str]:
         """Return tokens if present, otherwise a whitespace split. Used for statistics."""
@@ -64,6 +167,7 @@ class Dataset(BaseModel):
     # Recorded at collection so the write-up can state the denominator honestly: these rows
     # never reach the pipeline, so its per-step counts do not account for them.
     filtered_out: dict[str, int] = Field(default_factory=dict)
+    consumer_policy: ConsumerPolicy | None = None
 
     @model_validator(mode="after")
     def unique_ids(self) -> Self:
@@ -177,10 +281,20 @@ class AnalysisProgress(BaseModel):
     partial: bool = False
 
 
+class CollectionSlice(BaseModel):
+    """One local calendar day's independent provider cursor and candidate quota."""
+
+    day: date
+    start: datetime
+    end: datetime
+    next_token: str | None = None
+    exhausted: bool = False
+
+
 class CollectionProgress(BaseModel):
     """Stable X request/cursor. Provider-response-before-commit crashes remain ambiguous."""
 
-    request: dict[str, str | int | None]
+    request: dict[str, str | int | float | bool | None]
     next_token: str | None = None
     # Bind pagination tokens to their endpoint across request slices.
     search_mode: Literal["recent", "all"] | None = None
@@ -191,6 +305,11 @@ class CollectionProgress(BaseModel):
     complete: bool = False
     stop_reason: str | None = None
     retry_at: float = 0
+    slices: list[CollectionSlice] = Field(default_factory=list)
+    candidate_target: int | None = None
+    seen_ids: list[str] = Field(default_factory=list)
+    retrieved: int = 0
+    terminal_error: bool = False
 
     def needs_more_records(self, retained: int) -> bool:
         """Include old jobs completed before final duplicate removal reduced their count."""

@@ -1,10 +1,10 @@
 """Accessibility audit: drive every stage in both themes and run axe-core contrast rules.
 
-Run against the production bundle, which is what ships: ``make dev-api`` in one terminal and
-``make preview`` in another, then ``make audit-a11y``. The dev server also works but is slow
-enough that the waits below can time out. Requires ``pip install playwright``
-and ``playwright install chromium``. Exit code is non-zero when axe reports any violation, so this
-can gate a release: re-run it whenever a token in ``frontend/src/styles.css`` changes.
+Run against an isolated API and production preview; the general flow imports synthetic CSVs.
+``--consumer-only`` intercepts all API calls and requires only the preview. Install the locked
+development requirements and run ``playwright install chromium`` first. A system Chromium
+executable can be selected with ``A11Y_BROWSER_EXECUTABLE``. Failed assertions or axe violations
+return a non-zero exit code; unresolved automated checks are reported for manual evaluation.
 """
 
 from __future__ import annotations
@@ -20,14 +20,13 @@ import re
 import sys
 from typing import Any
 
+from a11y_consumer import walk_consumer
 from playwright.async_api import Page, async_playwright, expect
 
 AXE = pathlib.Path(__file__).resolve().parents[1] / "frontend/node_modules/axe-core/axe.min.js"
-# Audit against the WCAG 2.0/2.1 A and AA rule sets rather than a hand-picked list, so a new
-# failure category cannot slip through. axe's "best-practice" rules are deliberately excluded:
-# the only one that fires is focus-order-semantics against AG Grid's roving-tabindex grid DOM,
-# which is the standard accessible-grid pattern and not a WCAG requirement.
-TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]
+# Include WCAG 2.2 AA. Report unresolved checks separately; an empty violations list alone
+# cannot establish conformance. Best-practice heuristics are not WCAG success criteria.
+TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]
 UI = os.environ.get("A11Y_UI_URL", "http://localhost:5173/")
 SAMPLE_TEXTS = [
     "I absolutely LOVED this movie, best of the year!!!",
@@ -51,6 +50,10 @@ async def run_axe(page: Page, screen: str, findings: list[Finding]) -> None:
     await page.add_script_tag(path=str(AXE))
     options = json.dumps({"runOnly": {"type": "tag", "values": TAGS}})
     result: dict[str, Any] = await page.evaluate(f"async () => axe.run(document, {options})")
+    if result["incomplete"]:
+        print(
+            f"{screen}: manual checks needed: " + ", ".join(v["id"] for v in result["incomplete"])
+        )
     for violation in result["violations"]:
         for node in violation["nodes"]:
             findings.append((screen, violation["id"], violation["impact"], node["html"][:120]))
@@ -212,10 +215,12 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     assert await page.locator("main input[type=checkbox]:checked").count() == 0
     await page.locator("button:visible:has-text('Continue to Analyze')").first.click()
     await page.wait_for_selector(".ag-row", timeout=40000)
+    await expect(page.locator("main h2").first).to_be_focused()
     await audit("analyze-original")
     await expect(page.locator(".record-diff-action")).to_have_count(0)
     await page.click("text=Adjust steps")
     await page.wait_for_selector("text=Normalise for NLP")
+    await expect(page.locator("main h2").first).to_be_focused()
     step = page.locator("li input[type=checkbox]").first
     await step.uncheck()
     await audit("clean-off-step")
@@ -304,24 +309,39 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
 
 
 async def main() -> int:
-    """Desktop in both themes plus a phone viewport; return the process exit code."""
+    """Exercise general and consumer workflows in separate browser pages."""
     findings: list[Finding] = []
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch()
-        for theme in ("light", "dark"):
-            page = await browser.new_page(
-                viewport={"width": 1440, "height": 900}, timezone_id="America/Chicago"
-            )
-            await walk_stages(page, theme, findings, shots="--screenshots" in sys.argv)
-            await page.close()
-        phone = await browser.new_page(
-            viewport={"width": 390, "height": 844},
-            device_scale_factor=2,
-            is_mobile=True,
-            timezone_id="America/Chicago",
+        browser = await pw.chromium.launch(
+            executable_path=os.environ.get("A11Y_BROWSER_EXECUTABLE")
         )
-        await walk_stages(phone, "dark", findings, shots="--screenshots" in sys.argv)
-        await phone.close()
+        for theme, width in (("light", 1440), ("dark", 1440), ("dark", 390)):
+            page = await browser.new_page(
+                viewport={"width": width, "height": 900},
+                timezone_id="America/Chicago",
+                reduced_motion="reduce",
+            )
+            if "--consumer-only" not in sys.argv:
+                await walk_stages(page, theme, findings, shots="--screenshots" in sys.argv)
+            await page.close()
+        for theme in ("light", "dark"):
+            for width in (1440, 390, 320):
+                page = await browser.new_page(
+                    viewport={"width": width, "height": 900},
+                    timezone_id="America/Chicago",
+                    reduced_motion="reduce",
+                )
+
+                async def audit_consumer(
+                    screen: str, page: Page = page, theme: str = theme, width: int = width
+                ) -> None:
+                    await run_axe(page, f"{theme}-{width}/{screen}", findings)
+                    assert await page.evaluate(
+                        "document.documentElement.scrollWidth <= innerWidth"
+                    ), screen + " overflows the viewport"
+
+                await walk_consumer(page, UI, theme, audit_consumer)
+                await page.close()
         await browser.close()
 
     print(f"violations: {len(findings)}")

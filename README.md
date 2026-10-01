@@ -36,9 +36,12 @@ flowchart LR
 Prediction agreement measures consistency, not accuracy. Comprehend predicts overall post
 sentiment; it does not necessarily describe sentiment toward the topic you searched for.
 
-X collection stops at the requested number of retained posts, a spend cap, or the end of the
-available results. It does not sample evenly across dates. Check the collected timestamps before
-making claims about an entire search period.
+General X collection stops at the requested retained-post count, a spend cap, or provider
+exhaustion. The **Consumer reactions** preset divides candidate quotas across the requested
+days and separates eligibility from sentiment review. Its target counts only included,
+fully reviewed records. If review leaves a shortfall, explicitly request another candidate
+batch, review it, and repeat while results and budget remain available. These are bounded
+samples; date coverage and representativeness must still be assessed.
 
 ## Screenshots
 
@@ -89,7 +92,7 @@ make dev
 
 Open [localhost:5173](http://localhost:5173) for the application or
 [localhost:8000/docs](http://localhost:8000/docs) for the API documentation.
-`make setup` installs dependencies and NLTK resources and creates `backend/.env` if it is missing.
+`make setup` installs locked dependencies and NLTK resources and creates `backend/.env` if it is missing.
 It preserves an existing configuration.
 
 Start with **Upload CSV** to try the workflow without paid services. The example configuration

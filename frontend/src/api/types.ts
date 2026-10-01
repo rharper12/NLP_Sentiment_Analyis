@@ -30,6 +30,13 @@ export type LabelSummary = S["LabelSummary"];
 export type ReviewPage = S["ReviewPage"];
 export type CheckpointInfo = S["CheckpointInfo"];
 export type CheckpointList = S["CheckpointList"];
+export type ConsumerCounts = S["ConsumerCounts"];
+export type ConsumerPolicy = S["ConsumerPolicy"];
+export type EligibilityPage = S["EligibilityPage"];
+export type EligibilityItem = S["EligibilityItem"];
+export type EligibilityDecision = EligibilityItem["decision"];
+export type EligibilityReason = NonNullable<EligibilityItem["reason"]>;
+export type CollectionWindow = Partial<Pick<S["LoadRequest"], "start_date" | "end_date" | "timezone" | "preset" | "per_author_limit" | "reviewed_target">> & { start?: string; end?: string };
 
 export type LabelSource = NonNullable<PostRecord["label_source"]>;
 export type SentimentLabel = NonNullable<S["ManualLabelItem"]["label"]>;

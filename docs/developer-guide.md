@@ -13,6 +13,20 @@ make stop           # stop all this checkout's local servers, including fallback
 make dev-web       # http://localhost:5173 (proxies /api to :8000)
 ```
 
+`make setup` installs the hash-verified Python development lock and uses `npm ci` for the
+frontend lock. `backend/requirements.txt` pins runtime dependencies for the Lambda image;
+`backend/requirements-dev.txt` includes the same runtime versions plus test and development
+tools. The build backend is pinned in `pyproject.toml` as well. Both requirements files are
+generated from `pyproject.toml` using universal resolution for Python 3.12 and newer.
+
+After changing Python dependencies, run `make lock`. Existing compatible pins are retained.
+Use `make lock LOCK_FLAGS=--upgrade` only for a deliberate update, then install the locks and
+rerun validation. Do not hand-edit generated hashes.
+
+GitHub Actions runs `make check` and the production build on Python 3.12 and 3.14. A disposable
+PostgreSQL service exercises the otherwise optional concurrency test. The Python 3.12 job
+also runs the browser audit against isolated local services with paid integrations disabled.
+
 Run `make stop` from another terminal in this checkout to stop its API and Vite servers,
 including leftover instances on fallback ports. It also handles jobs suspended with Ctrl-Z
 and force-stops processes that do not exit within three seconds. Other checkouts and unrelated
@@ -28,7 +42,8 @@ at a time as you get credentials.
 backend/
   src/sentiment_prep/
     api/            FastAPI: app.py (factory, lifespan, middleware), routes.py, schemas.py,
-                    service.py (orchestration), deps.py (client construction), security.py
+                    service.py (preprocessing), collection.py (collection persistence),
+                    deps.py (client construction), security.py
     sources/        DataSource adapters + SpendGuard
     preprocessing/  one module per step, pipeline.py, STEP_REGISTRY in __init__.py
     analysis/       metrics, Comprehend (shared scorer)
@@ -47,7 +62,7 @@ frontend/
   src/hooks/        useAsync, usePipelineConfig, useTheme
   src/components/   stages/ (one per step of the flow), collect/ (CSV validation, local picker), label/, ui/
 infrastructure/stack_request/   template.yaml, samconfig.toml, env.local.json
-tools/              a11y_audit.py
+tools/              a11y_audit.py, a11y_consumer.py (isolated consumer fixtures)
 docs/               you are here
 Makefile            runs both halves; every target cd's into the right folder
 ```
@@ -157,6 +172,13 @@ make lint && make test
 `make lint` runs ruff, `mypy --strict`, `tsc --noEmit` and ESLint (with `react-hooks` and
 `jsx-a11y`). `make test` runs pytest and Vitest. Before shipping a UI change, also run the
 accessibility audit in `tools/a11y_audit.py`; see [design-system.md](design-system.md).
+Install Chromium with `playwright install chromium`. The general audit imports synthetic CSVs,
+so use an isolated API with temporary storage and disabled paid integrations. To check only
+the consumer flow against an existing preview without touching its API or saved datasets, run
+`A11Y_UI_URL=http://localhost:5173/ python tools/a11y_audit.py --consumer-only`.
+This flow intercepts API requests and applies real counting and review logic to in-memory
+fixtures. `A11Y_BROWSER_EXECUTABLE` can select an installed Chromium-compatible executable.
+Automated violations fail the run; unresolved checks are printed for manual evaluation.
 
 Then check: docstrings on new modules, no record text in INFO logs, rationale updated if a step
 changed, `docs/decisions.md` updated if you changed a boundary in [architecture.md](architecture.md).

@@ -51,6 +51,11 @@ def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
     return len(left & right) / union if union else 0.0
 
 
+def _negations(text: str) -> frozenset[str]:
+    # Normalisation splits "don't" into "don t". Keep that marker as well as full words.
+    return frozenset(text.split()) & {"no", "not", "never", "neither", "nor", "without", "t"}
+
+
 def _prefix(tokens: frozenset[str], rank: dict[str, int], threshold: float) -> list[str]:
     """The rarest tokens that any sufficiently similar set must also contain.
 
@@ -65,10 +70,10 @@ def _prefix(tokens: frozenset[str], rank: dict[str, int], threshold: float) -> l
     return sorted(tokens, key=lambda token: (rank[token], token))[:size]
 
 
-def deduplicate(
+def duplicate_matches(
     records: list[Record], threshold: float = DEFAULT_SIMILARITY
-) -> tuple[list[Record], Counter[str]]:
-    """Drop repeated posts, keeping the first occurrence of each.
+) -> dict[str, tuple[str, str]]:
+    """Map repeated IDs to the first matching record and match kind, preserving originals.
 
     Args:
         records: Posts in the order the source returned them.
@@ -76,12 +81,12 @@ def deduplicate(
             1.0 disables the second pass, leaving only exact-after-normalisation matching.
 
     Returns:
-        The records to keep, and a tally of what was dropped by reason (``duplicate``,
-        ``near_duplicate``) suitable for merging into ``Dataset.filtered_out``.
+        Record ID to (original ID, ``duplicate`` or ``near_duplicate``). Negation differences
+        never qualify as a near match. Callers decide whether to remove or review matches.
     """
     kept: list[Record] = []
-    dropped: Counter[str] = Counter()
-    seen_exact: set[str] = set()
+    matches: dict[str, tuple[str, str]] = {}
+    seen_exact: dict[str, str] = {}
     normalised: list[frozenset[str]] = []
 
     # Corpus token frequencies give a stable rarest-first ordering for the prefix filter.
@@ -96,24 +101,43 @@ def deduplicate(
     for record in records:
         text = normalise(record.text)
         if text in seen_exact:
-            dropped["duplicate"] += 1
+            matches[record.id] = (seen_exact[text], "duplicate")
             continue
 
         tokens = frozenset(text.split())
         prefix = _prefix(tokens, rank, threshold) if threshold < 1.0 and tokens else []
         if prefix:
             candidates = {index for token in prefix for index in by_token[token]}
-            if any(_jaccard(tokens, normalised[index]) >= threshold for index in candidates):
-                dropped["near_duplicate"] += 1
+            match = next(
+                (
+                    index
+                    for index in sorted(candidates)
+                    if _negations(text) == _negations(normalise(kept[index].text))
+                    and _jaccard(tokens, normalised[index]) >= threshold
+                ),
+                None,
+            )
+            if match is not None:
+                matches[record.id] = (kept[match].id, "near_duplicate")
                 continue
 
-        seen_exact.add(text)
+        seen_exact[text] = record.id
         position = len(kept)
         kept.append(record)
         normalised.append(tokens)
         for token in prefix:
             by_token[token].append(position)
 
+    return matches
+
+
+def deduplicate(
+    records: list[Record], threshold: float = DEFAULT_SIMILARITY
+) -> tuple[list[Record], Counter[str]]:
+    """Keep the first exact/near match; threshold equality remains inclusive."""
+    matches = duplicate_matches(records, threshold)
+    kept = [record for record in records if record.id not in matches]
+    dropped = Counter(kind for _, kind in matches.values())
     if dropped:
         logger.info("duplicates_removed", **dropped, kept=len(kept))
     return kept, dropped

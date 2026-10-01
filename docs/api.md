@@ -22,6 +22,11 @@ Later labels, processing, review, analysis, and billing state are reset. The ori
 intact. The UI opens Clean with unchecked options. Browser uploads to `/dataset/restore` have
 been removed; original JSON downloads remain available as archives.
 
+Consumer collections reopen the existing working bundle instead of cloning original-only rows,
+preserving decisions, exclusions, policy, cursors and accounting. Empty partial collections are
+allowed; the 5,000 target bound allows up to nine retained page-minimum extras per requested day.
+No legacy record is inferred to be eligibility-reviewed or sentiment-reviewed.
+
 When `API_KEY` is configured, browser users exchange it at `POST /auth/session` for a one-hour
 in-memory bearer token. Protected endpoints accept `Authorization: Bearer <token>` or an
 operator script’s `X-API-Key`. Liveness and the session-exchange endpoint are public. Every response includes `X-Request-Id`. Error bodies are uniform:
@@ -49,7 +54,7 @@ the rate at settlement, rather than repricing earlier reads after a configuratio
 Older X datasets without stored billing totals return null; the API does not reconstruct
 historical spend using today's configured rate.
 
-For X, `limit` targets retained posts after language/content filtering and configured exact and
+For general X searches, `limit` targets retained posts after language/content filtering and configured exact and
 near-duplicate removal. Collection continues from the next cursor to replace dropped posts;
 all provider reads still count toward the existing spending caps. A short collection with a
 cursor remains resumable when paused. Request-time pauses report `request budget reached`,
@@ -73,6 +78,64 @@ keeps its original endpoint and effective window; an expired recent-search job r
 request ID instead of transferring its cursor to the archive.
 
 For example, send `"start_time": "2026-09-09T00:00:00Z"` to collect from September 9 through now.
+
+Alternatively supply `start_date`, `end_date` (final included date), and an IANA `timezone`.
+These produce inclusive start/exclusive next-midnight UTC boundaries, including DST transitions.
+Both dates are required; reversed, unfinished, unsupported or contradictory calendar/timestamp
+input is rejected before collection. General calendar searches retain longer archive ranges.
+
+### Consumer collections
+
+`POST /dataset/load` accepts the separate preset:
+
+```json
+{"source":"x","request_id":"new-consumer-pilot","preset":"consumer_reactions",
+ "start_date":"2026-09-09","end_date":"2026-09-10","timezone":"America/Chicago",
+ "limit":100,"per_author_limit":2,"reviewed_target":500}
+```
+
+Omitting `query` uses `("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet`.
+The window is `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`, not an inferred announcement time.
+This preset supports 1–31 completed days, with at least ten candidates per day. `limit` is a
+candidate target, split across independent daily cursors. Short/ambiguous/non-English/promotional
+candidates remain recoverable for content review; timestamp validation still rejects out-of-window
+rows. Duplicate matches annotate candidates rather than deleting them. All returned reads count
+toward conservative estimates and existing caps, including local rejections and repeated IDs.
+
+`DatasetSummary.consumer_policy` records the frozen policy. `consumer_counts` distinguishes
+`retrieved` (successful returned rows), `unique_records` (unique returned IDs, including date
+rejections), `screened_candidates`, `pending_eligibility`, `human_inclusions`, `human_exclusions`,
+`included` (after author cap), `author_cap_held`, `missing_author`, `pending_sentiment`,
+`reviewed_final`, `reviewed_target`, `shortfall`, and per-day candidate/included/final counts.
+Legacy `record_count`, `labelled_count`, and billing counters retain their meanings. Collection
+`partial` means resumable provider work; it does not imply reviewed-target completion.
+
+**POST `/dataset/{id}/candidates`** `{"candidate_target":200,"confirm_cost":true}` explicitly
+extends the absolute candidate target or resumes the same target. Repeating a target is idempotent;
+decreasing it is rejected. It reuses saved criteria, seen IDs, day cursors and cumulative job caps.
+Once `consumer_counts.shortfall` is zero, additional collection returns 400 without modifying
+the quota or contacting X. A later review correction that creates a shortfall permits it again.
+The UI defaults the next quota to the shortfall, capped by remaining collection capacity, and
+returns to review after each explicit batch. Paused batches resume the same absolute target.
+No request follows automatically from an exclusion. Query/date/policy changes require a new context.
+`candidate_target` and `can_collect_more` describe collection capacity, not training completion.
+Ordinary budget pauses have no `retry_at`; genuine throttles do. Terminal provider 4xx errors
+other than 429 preserve progress but cannot be resumed indefinitely. Archive refusal never
+falls back to recent results. See the [pilot and policy guide](how-the-app-works.md#consumer-reactions-and-a-small-pilot).
+
+**GET `/dataset/{id}/eligibility?offset=0&limit=100&status=all`** returns original records,
+`total`, `offset`, current `included_ids` and counts. Statuses: `all`, `pending`, `include`,
+`exclude`, `sentiment`. The last selects current author-capped inclusions, including completed
+sentiment decisions for correction. Include/exclude queues mean human decisions, not suggestions.
+
+**PUT `/dataset/{id}/eligibility`**
+`{"items":[{"id":"123","decision":"include","reason":null,"note":"Personal opinion despite the link"}]}`
+persists explicit confirmations. Decisions are `include`, `exclude`, `pending`; exclusion requires
+a stable reason. Overriding the automatic decision requires a note. Human history is retained;
+pending undoes review, and changing eligibility requires sentiment reconfirmation. Labels and
+machine scores remain recoverable. Both unchanged confirmations persist as completed review.
+Only current author-selected inclusions may use consumer manual/Comprehend sentiment routes.
+The consumer UI uses manual sentiment; preprocessing does not automatically call cloud scoring.
 
 **POST `/dataset/upload`** multipart `file` (UTF-8 CSV with `text`, optional `label`/`id`),
 limited to 4 MiB and 5,000 data rows. Validates the entire file, even with a smaller requested
@@ -156,9 +219,19 @@ conversions stale. Rerunning preprocessing also marks existing labelled snapshot
 |---|---|
 | GET `/dataset/{id}/export.csv` | UTF-8 CSV with BOM: id, source_type, label, label_source, label_confidence, comprehend_label, comprehend_confidence, created_at, original_text, processed_text, tokens |
 | GET `/dataset/{id}/export.parquet` | Same rows, typed and compressed; the file Task 2 should load |
+| GET `/dataset/{id}/reviewed.parquet` | Consumer-only training rows: included, eligibility-reviewed, valid sentiment, sentiment-reviewed, after author cap; policy/query/counts/status embedded under Parquet schema metadata `sentiment_prep` |
 | GET `/dataset/{id}/export.xlsx` | Sheet `data` as above; sheet `impact` with per-step statistics |
 | GET `/dataset/{id}/report.md` | Task 1 Markdown report, including a Labels section |
 | POST `/dataset/{id}/save` | `{filename}.parquet`, `impact.json`, `manifest.json` under `s3://{bucket}/datasets/{id}/{filename}/{save_id}/`; returns `{ "uri": … }` |
+
+For consumer collections, use `reviewed.parquet` for training examples. Other modes remain full
+candidate archives including exclusions and unreviewed rows. Reviewed output preserves automated
+labels/confidence alongside human labels and decision history; optional confidence may be null.
+Its default filename ends in `-reviewed.parquet`. Embedded `status` is `partial` until the reviewed
+target is reached. Every request regenerates current decisions and downloads send `no-store`.
+Eligibility, source or label changes clear affected analysis/processing and stale downstream
+snapshots; rejected checkpoint conversions require regeneration. No additional companion files.
+These routes share the existing router authentication and dataset edit/storage protections.
 
 Exports and S3 saves accept an optional `filename` query parameter **without an extension**.
 Use 1–120 ASCII letters, numbers, spaces, hyphens or underscores, starting with a letter or

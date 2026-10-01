@@ -20,6 +20,7 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 it("starts unchecked and lets both continue buttons analyze unchanged text", () => {
   render(<Harness />);
   for (const checkbox of screen.getAllByRole<HTMLInputElement>("checkbox")) expect(checkbox.checked).toBe(false);
+  for (const step of steps) expect(screen.getByRole("checkbox", { name: step.title })).toBeDefined();
   for (const button of screen.getAllByRole("button", { name: /Continue to Analyze/ })) {
     expect(button.hasAttribute("disabled")).toBe(false);
     fireEvent.click(button);
@@ -46,7 +47,7 @@ it("does not block continuing for an invalid option on a disabled step", () => {
 it.each(steps.flatMap((step, index) => ([-1, 1] as const).map((direction) => ({ step, index, direction }))))("matches display and submitted order when moving $step.name $direction", ({ step, index, direction }) => {
   const { container } = render(<Harness />);
   for (const item of steps) fireEvent.click(screen.getByLabelText(item.title));
-  const displayed = () => [...container.querySelectorAll("li > label[aria-label]")].map((label) => label.getAttribute("aria-label"));
+  const displayed = () => [...container.querySelectorAll("li > label > span > span:first-child")].map((title) => title.textContent);
   expect(displayed()).toEqual(steps.map((s) => s.title));
   const move = screen.getByRole("button", { name: `Move ${step.title} ${direction === -1 ? "up" : "down"}` });
   const neighbour = steps[index + direction];

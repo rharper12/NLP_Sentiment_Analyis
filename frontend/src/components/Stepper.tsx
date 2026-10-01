@@ -14,7 +14,7 @@ interface Props {
   onSelect: (stage: Stage) => void;
 }
 
-/** Four stages, in order. Completed stages stay clickable; future ones are visible but locked. */
+/** Show all five stages while keeping unavailable stages visible and disabled. */
 export function Stepper({ current, reached, onSelect, disabled = false }: Props) {
   const reachedIndex = STAGES.findIndex((s) => s.id === reached);
   const currentIndex = STAGES.findIndex((s) => s.id === current);

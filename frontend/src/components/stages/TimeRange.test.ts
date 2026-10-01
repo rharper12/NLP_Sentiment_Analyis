@@ -26,26 +26,29 @@ describe("toWindow", () => {
   it("covers whole UTC days, so the last day of a range is included", () => {
     // A range ending on the 13th must include posts made during the 13th, not stop at midnight.
     expect(toWindow(custom("2026-09-09", "2026-09-13"))).toEqual({
-      start: "2026-09-09T00:00:00Z",
-      end: "2026-09-13T23:59:59Z",
+      start_date: "2026-09-09",
+      end_date: "2026-09-13",
+      timezone: "UTC",
     });
   });
 });
 
 describe("rangeError", () => {
   it("accepts a complete range inside the seven-day window", () => {
-    expect(rangeError(custom(iso(3), iso(0)))).toBeNull();
+    expect(rangeError(custom(iso(3), iso(1)))).toBeNull();
   });
 
   it("rejects a reversed range", () => {
     expect(rangeError(custom(iso(0), iso(3)))).toMatch(/before/);
   });
 
-  it("accepts September 9 through today using the archive", () => {
+  it("accepts completed archive days and rejects an unfinished final day", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
-    expect(rangeError(custom("2026-09-09", "2026-09-21"))).toBeNull();
-    expect(rangeError(custom(iso(30), iso(0)))).toBeNull();
+    expect(rangeError(custom("2026-09-09", "2026-09-20"))).toBeNull();
+    expect(rangeError(custom(iso(30), iso(0)))).toMatch(/completed days/);
+    vi.setSystemTime(new Date("2026-09-21T02:00:00Z"));
+    expect(rangeError({ ...custom("2026-09-09", "2026-09-20"), timezone: "America/Chicago" })).toMatch(/completed days/);
   });
 
   it("rejects future dates and dates before the archive", () => {

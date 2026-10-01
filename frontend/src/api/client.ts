@@ -6,6 +6,8 @@ import { z } from "zod";
 
 import type {
   CheckpointStage,
+  CollectionWindow,
+  EligibilityItem,
   RecordPage,
   ReviewMode,
   SampleUnit,
@@ -18,6 +20,7 @@ import {
   localDatasetPageSchema,
   checkpointListSchema,
   datasetSummarySchema,
+  eligibilityPageSchema,
   healthSchema,
   historyRunSchema,
   labelEstimateSchema,
@@ -78,7 +81,7 @@ async function authorizedFetch(path: string, init: RequestInit = {}): Promise<Re
 
   let response: Response;
   try {
-    response = await fetch(`${BASE}${path}`, { ...init, headers });
+    response = await fetch(`${BASE}${path}`, { ...init, headers, cache: "no-store" });
   } catch (cause) {
     // A rejected fetch cannot tell us whether the server committed the operation.
     // Preserve cancellation; give other transport failures a consistent UI message.
@@ -134,7 +137,7 @@ export const api = {
     source: "x" | "huggingface",
     limit: number,
     query: string,
-    window?: { start?: string; end?: string },
+    window?: CollectionWindow,
     signal?: AbortSignal,
     requestId?: string,
   ) =>
@@ -149,10 +152,28 @@ export const api = {
           query: query || null,
           start_time: window?.start ?? null,
           end_time: window?.end ?? null,
+          start_date: window?.start_date,
+          end_date: window?.end_date,
+          timezone: window?.timezone,
+          preset: window?.preset,
+          per_author_limit: window?.per_author_limit,
+          reviewed_target: window?.reviewed_target,
         },
         signal,
       ),
     ),
+
+  dataset: (datasetId: string, signal?: AbortSignal) =>
+    request(`/dataset/${datasetId}`, datasetSummarySchema, { signal }),
+
+  collectCandidates: (datasetId: string, target: number, signal?: AbortSignal) =>
+    request(`/dataset/${datasetId}/candidates`, datasetSummarySchema, json({ candidate_target: target, confirm_cost: true }, signal)),
+
+  eligibilityPage: (datasetId: string, offset: number, status = "all", signal?: AbortSignal) =>
+    request(`/dataset/${datasetId}/eligibility?${new URLSearchParams({ offset: String(offset), limit: "1", status })}`, eligibilityPageSchema, { signal }),
+
+  reviewEligibility: (datasetId: string, items: EligibilityItem[], signal?: AbortSignal) =>
+    request(`/dataset/${datasetId}/eligibility`, datasetSummarySchema, { ...json({ items }, signal), method: "PUT" }),
 
   localDatasets: (offset = 0, signal?: AbortSignal) =>
     request(`/local-datasets?offset=${offset}&limit=50`, localDatasetPageSchema, { signal }),
@@ -240,9 +261,9 @@ export const api = {
 
   history: (signal?: AbortSignal) => request("/history?limit=25", z.array(historyRunSchema), { signal }),
 
-  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md" | "original.json", signal?: AbortSignal, customName?: string) => {
+  download: async (datasetId: string, kind: "csv" | "xlsx" | "parquet" | "md" | "original.json" | "reviewed.parquet", signal?: AbortSignal, customName?: string) => {
     const filename = kind === "md" ? `${datasetId}-report.md` : `${datasetId}.${kind}`;
-    const path = kind === "original.json" ? `/dataset/${datasetId}/original.json` : kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
+    const path = kind === "original.json" || kind === "reviewed.parquet" ? `/dataset/${datasetId}/${kind}` : kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
     const response = await authorizedFetch(`${path}${customName === undefined ? "" : `?${new URLSearchParams({ filename: customName })}`}`, { signal });
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition");

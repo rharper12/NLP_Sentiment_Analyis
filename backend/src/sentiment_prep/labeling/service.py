@@ -14,6 +14,7 @@ import math
 import random
 from collections import Counter
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,7 @@ from sentiment_prep.analysis.comprehend_scorer import ComprehendScorer, cost_for
 from sentiment_prep.analysis.comprehend_text import prepare_text
 from sentiment_prep.budget import can_start
 from sentiment_prep.config import Settings
+from sentiment_prep.eligibility import included_ids, invalidate_derived
 from sentiment_prep.errors import ValidationError
 from sentiment_prep.logging_config import get_logger
 from sentiment_prep.models import DatasetBundle, LabelFailure, LabelSummary, Record, SentimentLabel
@@ -94,10 +96,14 @@ def needs_comprehend(record: Record) -> bool:
 
 
 def _pending(bundle: DatasetBundle) -> list[Record]:
+    selected = included_ids(bundle)
+
     def eligible(record: Record) -> bool:
         failure = bundle.label_failures.get(record.id)
-        return needs_comprehend(record) and (
-            failure is None or (failure.retryable and failure.attempts < MAX_LABEL_ATTEMPTS)
+        return (
+            record.id in selected
+            and needs_comprehend(record)
+            and (failure is None or (failure.retryable and failure.attempts < MAX_LABEL_ATTEMPTS))
         )
 
     return [r for r in bundle.original.records if eligible(r)]
@@ -261,9 +267,17 @@ def apply_manual_labels(bundle: DatasetBundle, items: list[ManualLabel]) -> Data
     unknown = sorted(set(by_id) - {r.id for r in bundle.original.records})
     if unknown:
         raise ValidationError(f"unknown record ids: {unknown[:5]}")
+    if bundle.original.consumer_policy and set(by_id) - included_ids(bundle):
+        raise ValidationError("Review eligibility first; only sampled inclusions need sentiment")
     updated = [
         r.model_copy(
-            update={"label": by_id[r.id], "label_source": "manual", "label_confidence": None}
+            update={
+                "label": by_id[r.id],
+                "label_source": "manual",
+                "label_confidence": None,
+                "sentiment_reviewed": True,
+                "sentiment_reviewed_at": datetime.now(UTC),
+            }
         )
         if r.id in by_id
         else r
@@ -281,7 +295,8 @@ def choose_review(
     Random sampling is uniform. Priority review excludes already reviewed posts, puts missing
     scores first, then orders by ascending confidence; it is not a representative sample.
     """
-    records = bundle.original.records
+    selected = included_ids(bundle)
+    records = [r for r in bundle.original.records if r.id in selected]
     if mode == "none":
         ids: list[str] = []
     elif mode == "all":
@@ -369,4 +384,6 @@ def _with_records(bundle: DatasetBundle, records: list[Record]) -> DatasetBundle
     updated = bundle.model_copy(deep=True)
     updated.original = bundle.original.model_copy(update={"records": records})
     invalidate_checkpoints(updated, "labelled")
+    if bundle.original.consumer_policy:
+        invalidate_derived(updated)
     return updated

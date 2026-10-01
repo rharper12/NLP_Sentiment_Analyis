@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Literal
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal, Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from sentiment_prep.analysis.metrics import DatasetMetrics
+from sentiment_prep.eligibility import CONSUMER_QUERY, ConsumerCounts, EligibilityItem
 from sentiment_prep.filenames import FileStem
 from sentiment_prep.labeling.service import ReviewMode, SampleUnit
-from sentiment_prep.models import Record, SentimentLabel, SourceType
+from sentiment_prep.models import (
+    ConsumerPolicy,
+    Record,
+    SentimentLabel,
+    SourceType,
+    calendar_bounds,
+)
 from sentiment_prep.preprocessing import StepGroup
 from sentiment_prep.preprocessing.missing_data import DEFAULT_FILL_VALUE, MAX_FILL_VALUE_CHARS
 from sentiment_prep.presentation import PublicImpactReport
@@ -36,6 +43,62 @@ class LoadRequest(BaseModel):
     end_time: datetime | None = Field(
         default=None, description="Newest post to return (X only). Clamped to a few seconds ago."
     )
+    preset: Literal["general", "consumer_reactions"] = "general"
+    start_date: date | None = None
+    end_date: date | None = None
+    timezone: str = "UTC"
+    per_author_limit: int = Field(default=2, ge=1, le=100)
+    reviewed_target: int = Field(default=500, ge=1, le=5000)
+
+    @model_validator(mode="after")
+    def calendar_dates(self) -> Self:
+        """Calendar input is inclusive by day and converted once on the server."""
+        if self.start_date is not None or self.end_date is not None:
+            if self.start_date is None or self.end_date is None:
+                raise ValueError("Choose both a start and final included date")
+            start, end = calendar_bounds(self.start_date, self.end_date, self.timezone)
+            if (self.start_time is not None and self.start_time != start) or (
+                self.end_time is not None and self.end_time != end
+            ):
+                raise ValueError("Calendar dates and timestamp bounds disagree")
+            if start < datetime(2006, 3, 1, tzinfo=UTC):
+                raise ValueError("X's searchable archive starts in March 2006")
+            if end > datetime.now(UTC) - timedelta(seconds=30):
+                raise ValueError("Choose completed calendar days; dates will not be shortened")
+            self.start_time, self.end_time = start, end
+        if self.preset == "consumer_reactions":
+            if self.source != "x" or self.start_date is None or self.end_date is None:
+                raise ValueError("Consumer reactions requires X and explicit calendar dates")
+            if (self.end_date - self.start_date).days >= 31:
+                raise ValueError("Consumer reactions supports at most 31 calendar days")
+            if self.limit < 10 * ((self.end_date - self.start_date).days + 1):
+                raise ValueError("Allow at least 10 candidates per requested day")
+            if self.query is None:
+                self.query = CONSUMER_QUERY
+        return self
+
+
+class AdditionalCandidatesRequest(BaseModel):
+    """Absolute target makes retries idempotent; existing spend caps still apply."""
+
+    candidate_target: int = Field(ge=1, le=5000)
+    confirm_cost: bool = False
+
+
+class EligibilityRequest(BaseModel):
+    """Human decisions applied under the existing exclusive dataset edit."""
+
+    items: list[EligibilityItem] = Field(min_length=1, max_length=5000)
+
+
+class EligibilityPage(BaseModel):
+    """All candidates remain inspectable, including excluded and author-limited records."""
+
+    total: int
+    offset: int
+    items: list[Record]
+    included_ids: list[str]
+    counts: ConsumerCounts
 
 
 class DatasetSummary(BaseModel):
@@ -61,6 +124,10 @@ class DatasetSummary(BaseModel):
     retry_at: float | None = None
     warnings: list[str] = Field(default_factory=list)
     preview: list[Record]
+    consumer_policy: ConsumerPolicy | None = None
+    consumer_counts: ConsumerCounts | None = None
+    candidate_target: int | None = None
+    can_collect_more: bool = Field(default_factory=bool)
 
 
 class StepOptions(BaseModel):

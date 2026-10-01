@@ -15,7 +15,9 @@ During local development, **Saved datasets → Open in Clean** selects a working
 file is validated by `storage/local_repository.py`, and `sources/saved_dataset.py` strips
 later annotations. `/local-datasets/{id}/restore` saves a fresh copy without deduplicating again.
 Both endpoints enforce the local runtime. The original file remains intact; restoration opens
-Clean with all options unchecked. **Download original dataset** still creates a JSON archive.
+Clean with all options unchecked for general datasets. Consumer collections instead reopen their
+existing identity, decisions and pagination state; they enable Keep negations by default.
+**Download original dataset** still creates an original-only JSON archive, not a review backup.
 
 CSV selection uses `components/collect/CsvUpload.tsx`: drop a file or use the visible chooser.
 `/dataset/upload/validate` runs the same parser as import, with no persistence. The component
@@ -30,7 +32,7 @@ On the server, `api/routes.py::load_dataset` picks an adapter from `sources/`:
 
 - `x_search.py` calls X's recent or full-archive search endpoint for the selected dates, page by page. Before each page it asks the
   `SpendGuard` (`sources/spend_guard.py`) whether the reads fit under the per-fetch and per-day
-  caps; after each page it records what was billed in the SQLAlchemy ledger
+  caps; after each page it records returned reads and estimated spend in the SQLAlchemy ledger
   (`history/services.py::DbLedger`). It also polls `should_stop()`, which the route sets when
   the browser disconnects, so cancelling stops the spend at the next page.
 - `huggingface.py` pages through the public datasets-server API. No credentials, no cost.
@@ -41,6 +43,98 @@ the repository (`storage/repository.py`: a local journal locally, S3 in Lambda),
 row for the history tab, and returns a `DatasetSummary` with a 20-row preview and any warnings
 (fewer than 500 records, truncated fetch).
 
+### Consumer reactions and a small pilot
+
+**Collect → Search X → Collection option → Consumer reactions** creates a separate dataset.
+The preset fills September 9–10, 2026, `America/Chicago`, the product query, a 100-candidate pilot,
+a final reviewed target of 500, and a limit of two included posts per known author. Calendar
+dates are inclusive; the server converts each local midnight using timezone rules. These dates
+mean `[2026-09-09T05:00:00Z, 2026-09-11T05:00:00Z)`. They do not establish an announcement time.
+Choose completed days; unfinished final days are rejected rather than silently shortened.
+
+The query is `("iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone") lang:en -is:retweet`.
+Dates remain separate provider parameters. Searches older than seven days require the configured
+app's full-archive access; refusal stops with an actionable error and never falls back to recent
+posts. The adapter follows X's [full-archive guide](https://docs.x.com/x-api/posts/search/quickstart/full-archive-search),
+[query operators](https://docs.x.com/x-api/posts/search/integrate/build-a-query), and
+[pagination guide](https://docs.x.com/x-api/posts/search/integrate/paginate), checked September 30,
+2026. The guide uses `tweet.fields`; the newer API reference uses `post.fields`. The existing
+adapter keeps the guide's request spelling and accepts both long-text/reference response spellings.
+Actual account access and response compatibility require an authorized pilot; offline tests do
+not prove them. The server credential remains `X_BEARER_TOKEN` in `backend/.env` (or its existing
+SSM configuration), never a browser field.
+
+The candidate target is split equally across local days, giving remainder slots to earlier days.
+Each day has its own cursor and reverse-chronological order. There is no backfill from another
+period when a day is empty. X's 10-result page minimum can retain up to nine extra candidates per
+day; pages stay capped at 100 and all returned reads are accounted for. Daily counts show gaps.
+This favors recent posts within each day and is a screened, bounded sample, not a representative
+consumer survey. Keyword search misses replies without product names. No conversation crawling,
+linked-page fetching, author histories or identity/bot scoring is added.
+
+`eligibility.py` screens complete original text before cleaning. Multiple content signals suggest
+news distribution, promotion or implementation discussions; conflicting or weak signals stay
+pending. A link, a developer identity, or the word “giveaway” alone does not exclude a reaction.
+Positive, negative, mixed, neutral and sarcastic consumer reactions use the same selection rules.
+Language metadata, author and conversation IDs, references, URL metadata, and long text are kept
+when supplied. Missing language goes to review; missing author IDs are independent and cannot
+be author-capped. Missing timestamps or out-of-window results are not retained as candidates,
+but their returned reads still count.
+
+Duplicate screening reuses the existing exact/Jaccard matching logic. Identical complete text
+after case/whitespace normalization gets a redundant-template exclusion suggestion and an
+original-record reference. Any wording, punctuation or link differences remain reviewable;
+negation differences cannot cause a near-duplicate removal. **No consumer candidate is deleted
+by screening.** Every final inclusion/exclusion requires a human confirmation. The author cap
+selects earliest timestamps, then string record IDs, among human inclusions. Sentiment and
+popularity play no part. Excess candidates remain recoverable; correcting an inclusion releases
+its author's slot. Additional candidates can change which records occupy those slots.
+
+To run the pilot after authorizing its cost:
+
+1. Start the existing app with `make dev`. Check the server's `X_BEARER_TOKEN`, archive entitlement,
+   `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY`, and `X_COST_PER_READ_USD` settings. Do not paste
+   secrets into the topic field. Select Consumer reactions, confirm the dates/timezone, and set
+   **Candidate target** to 50–100. Leave the final reviewed target at 500 to see the actual shortfall.
+2. Inspect the displayed estimate and caps before **Search and collect**. That click authorizes
+   collection. At a configured $0.005 per read, 50–100 reads estimate $0.25–$0.50, but filtering,
+   page minimums and ambiguous retries can require more reads. X's [pricing documentation](https://docs.x.com/x-api/getting-started/pricing)
+   describes daily resource-charge deduplication as a soft guarantee; the local ledger conservatively
+   counts returned reads and is not an invoice. Review rejections are not cost-free.
+3. Continue through Clean and Analyze, initially leaving text-changing steps off. Consumer
+   preprocessing computes local candidate metrics without automatically calling Comprehend.
+   In Label, use **All candidates** or **Pending eligibility** to inspect originals, suggestions,
+   reasons, timestamps and references. Confirm inclusion/exclusion, or leave Needs review. An
+   override requires an explanation. Save status confirms persistence; merely visiting does not.
+4. Inspect **Human inclusions** and **Human exclusions** before scaling. Correct false positives
+   and false negatives, including criticism, linked opinions and ambiguous promotions. Check the
+   per-day table and author-limit holds. **Needs review / pending → Save** undoes a decision.
+5. Choose **Sentiment — included after author limit**. Confirm positive/negative/neutral/mixed
+   with buttons or keys 1–4 while focused inside review. An unchanged label still completes review.
+   Initial eligibility review hides automated sentiment. Both human review flags are required
+   for the final count; 100 candidates do not mean 100 training examples.
+6. Export **Reviewed consumer Parquet** to inspect a partial result. After assessing both
+   accepted and rejected pilot rows, use **Still need … reviewed records** in Label or Collect.
+   The additional candidate quota defaults to the current shortfall, within the existing 5,000
+   candidate limit, and can be lowered for a smaller batch. The panel also shows pending reviews
+   that could fill the gap without spending. Click **Collect additional candidates** explicitly;
+   the app returns to review after the request. New candidates still require both reviews.
+   Repeat manually while below the final target. An unfinished batch offers **Resume candidate
+   request** with the same authorized target instead of increasing its quota. At the reviewed
+   target, the button is replaced by a completion message and the API refuses further collection.
+   A later review correction can reopen the option. This keeps dates, query,
+   policy, seen IDs, per-day cursors and cumulative spend accounting. It never collects on an
+   exclusion. Spend caps may prevent completion; request-budget pauses have no fake retry timer,
+   whereas provider throttling does. Terminal request errors require correction and a new context.
+   Source exhaustion and the candidate limit are shown explicitly; reaching the target is not
+   guaranteed. Daily sampling and provider page minimums can change how many candidates return.
+
+Policy version, date bounds, duplicate threshold, author cap, target and selection rule are
+persisted with the collection. Changing material criteria requires a new collection. Working
+bundles retain exclusions and decision history under existing local/S3 authorization and retention
+rules; Lambda working state still expires after seven days. Original-only downloads and ordinary
+CSV checkpoints are not substitutes for that working review state.
+
 ## 2. Choosing steps
 
 `GET /steps` returns the six steps in recommended order with their rationale, read from
@@ -48,9 +142,12 @@ row for the history tab, and returns a `DatasetSummary` with a 20-row preview an
 sweep; display and movement eligibility use the same group metadata.
 Each step expands to show what it helps and what it costs: the reducer in `hooks/usePipelineConfig.ts` tracks order, on/off state, and the
 two per-step options (negation handling, missing-data strategy). All Clean-screen checkboxes start
-unchecked, including the keep-negations option. **Continue to
+unchecked, including the keep-negations option, except Consumer reactions enables Keep negations.
+**Continue to
 Analyze** runs the selected steps and opens the results; with none selected, it analyzes the
 original text unchanged. A run may call the enabled analysis services.
+Consumer runs skip automatic cloud sentiment scoring; analysis covers the candidates, not just
+the final reviewed sample.
 
 ## 3. Running the pipeline
 
@@ -126,6 +223,17 @@ Parquet revisions, and preprocessing reruns invalidate labelled snapshots.
 ## 7. Exporting
 
 The **Export** stage (`ExportStep.tsx`) offers CSV, Excel, Parquet, and Markdown downloads plus the S3 save.
+
+Consumer collections additionally offer **Reviewed consumer Parquet** with a distinct `-reviewed`
+default filename. It contains only current author-selected human inclusions with a valid,
+human-reviewed sentiment. Original text, machine labels/scores, human review state and eligibility
+history remain in rows; policy, query, counts and complete/partial status are embedded in Parquet
+metadata. Missing confidence is allowed and human confidence is never invented. The other formats
+remain full candidate archives, including excluded/unreviewed rows. Downloads use existing
+authorization and `Cache-Control: no-store`. Each reviewed download regenerates current decisions.
+Changed source rows, eligibility or labels invalidate affected analysis and downstream checkpoints;
+old snapshot files remain marked stale. Previously downloaded files must be downloaded again after
+corrections. After finishing review, rerun Clean/Analyze if processed text or a fresh report is needed.
 
 ![Export with synthetic demonstration data](images/readme/export.png)
 

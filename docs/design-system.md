@@ -45,18 +45,44 @@ the tested background, surface, secondary surface, glass and selected surfaces:
 
 These calculations and automated checks do not constitute a full manual WCAG audit.
 
-`tools/a11y_audit.py` drives all five stages in both themes (and a 390px phone viewport) and
-runs axe-core's WCAG A/AA rules, off-step/fallback checks, and native record-diff keyboard/focus tests. It exits non-zero on any violation. Run it before
-shipping and whenever a token changes:
+`tools/a11y_audit.py` drives all five stages and the consumer collection/review/export loop.
+The consumer checks cover both themes at desktop, 390px, and 320px widths, including required
+exclusion fields, explicit additional collection, completed targets, and stage-heading focus.
+The audit uses WCAG 2.0/2.1 A/AA and 2.2 AA tags, plus native record-diff keyboard/focus tests.
+It exits non-zero on violations and prints unresolved checks for manual evaluation.
+Run it before shipping and whenever a token changes, using isolated services and temporary
+storage for the general flow:
+
+From the repository root, start a temporary API in terminal 1:
 
 ```bash
-make dev-api      # terminal 1
-make preview      # terminal 2 — builds and serves the production bundle
-make audit-a11y   # terminal 3 (needs: pip install playwright && playwright install chromium)
+sentiment_audit_dir=$(mktemp -d)
+RUNTIME=local DATA_BUCKET= API_KEY= API_KEY_SSM_PATH= \
+  X_BEARER_TOKEN= X_BEARER_TOKEN_SSM_PATH= \
+  COMPREHEND_ENABLED=false PRICING_ENABLED=false AWS_EC2_METADATA_DISABLED=true \
+  DATABASE_URL="sqlite:///$sentiment_audit_dir/history.sqlite3" \
+  CHECKPOINT_DIR="$sentiment_audit_dir/checkpoints" CORS_ORIGINS=http://127.0.0.1:5199 \
+  .venv/bin/uvicorn sentiment_prep.api.app:app --app-dir backend/src --port 8199
 ```
+
+Build and serve the production preview in terminal 2:
+
+```bash
+VITE_API_URL=http://127.0.0.1:8199 npm --prefix frontend run build
+npm --prefix frontend run preview -- --host 127.0.0.1 --port 5199 --strictPort
+```
+
+In terminal 3, install the browser with `.venv/bin/playwright install chromium`, then run
+`A11Y_UI_URL=http://127.0.0.1:5199/ make audit-a11y`.
+Stop the temporary servers with Ctrl-C when finished; the synthetic datasets stay under
+the printed value of `sentiment_audit_dir` (`echo "$sentiment_audit_dir"` in terminal 1).
+Use a free preview port if 5199 is already occupied, and set `CORS_ORIGINS` and
+`A11Y_UI_URL` to that preview origin.
 
 The audit runs against the **production bundle**, not the dev server, because that is the artefact
 that ships. `make preview` builds it with an explicit API origin exactly as a deployment does.
+For just the consumer flow, `python tools/a11y_audit.py --consumer-only` intercepts all API
+requests and keeps synthetic review data in memory. No paid calls or saved datasets are used.
 
 Lighthouse in Chrome DevTools is a fine second opinion; axe is what the script runs because it can
 be automated.
@@ -75,7 +101,7 @@ The grid is themed with AG Grid's Theming API from the same tokens as everything
 
 One note on the audit: axe's best-practice rule `focus-order-semantics` fires on AG Grid's
 roving-tabindex row DOM. That is the standard accessible-grid pattern and not a WCAG requirement,
-which is why `tools/a11y_audit.py` runs the WCAG 2.0/2.1 A and AA **tag sets** rather than a
+which is why `tools/a11y_audit.py` runs WCAG **tag sets**, including 2.2 AA, rather than a
 hand-picked rule list. Running the full AA set is stricter overall: it caught an invalid `<p>`
 inside a `<dl>` that the narrower list had missed.
 

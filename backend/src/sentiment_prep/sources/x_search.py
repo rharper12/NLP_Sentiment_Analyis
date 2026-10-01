@@ -4,8 +4,8 @@ Older windows use full-archive search for pay-per-use accounts. Both endpoints s
 spend guard and use pages of at most 100 posts. Rate limits arrive as HTTP 429 with an
 ``x-rate-limit-reset`` epoch header; archive requests are paced at one per second per fetch.
 
-Only ``tweet.fields`` are requested. Expanding author objects bills a second read per post
-and adds nothing to sentiment analysis. Every query is free-form so the tool works for any
+Only ``tweet.fields`` are requested. Author expansions can incur additional resource charges;
+the post's author ID suffices for sampling. Every query is free-form so the tool works for any
 topic; the adapter only appends language and retweet filters when the caller has not.
 """
 
@@ -28,9 +28,17 @@ from sentiment_prep.budget import (
     current_budget,
     require_budget,
 )
+from sentiment_prep.eligibility import screen_candidates
 from sentiment_prep.errors import ExternalServiceError, ValidationError
 from sentiment_prep.logging_config import get_logger
-from sentiment_prep.models import CollectionProgress, Dataset, Record
+from sentiment_prep.models import (
+    CollectionProgress,
+    CollectionSlice,
+    ConsumerPolicy,
+    Dataset,
+    Record,
+    calendar_bounds,
+)
 from sentiment_prep.sources.dedupe import deduplicate
 from sentiment_prep.sources.payloads import XPage, XPost
 from sentiment_prep.sources.spend_guard import SpendCapReachedError, SpendGuard
@@ -140,6 +148,7 @@ class XSearchSource:
             self._start = max(ARCHIVE_START, self._end - SEARCH_WINDOW)
         self._next_archive_call = 0.0
         self._retry_at = 0.0
+        self._consumer = False
 
     def fetch(
         self,
@@ -151,6 +160,7 @@ class XSearchSource:
         progress: CollectionProgress | None = None,
         persist: Callable[[Dataset, CollectionProgress], None] | None = None,
         dedupe_similarity: float | None = None,
+        consumer_policy: ConsumerPolicy | None = None,
     ) -> Dataset:
         """Persist each page with its cursor before spending on the next page.
 
@@ -161,6 +171,7 @@ class XSearchSource:
         if not query:
             raise ValidationError("X search requires a query")
         full_query = query if "lang:" in query else f"{query} {DEFAULT_QUERY_SUFFIX}"
+        self._consumer = consumer_policy is not None
         if progress is not None:
             # Freeze the window across cursor resumptions, including a default recent search.
             now = datetime.now(UTC)
@@ -187,14 +198,21 @@ class XSearchSource:
             self._mode = "recent"
         state.search_mode = self._mode
         records = list(resume.records) if resume is not None else []
+        if consumer_policy and not state.slices:
+            state.slices = calendar_slices(consumer_policy)
+        if consumer_policy:
+            limit = state.candidate_target or limit
+        seen = set(state.seen_ids) | {record.id for record in records}
         filtered = Counter(resume.filtered_out if resume is not None else {})
         # Older partial jobs may still contain duplicates. Seed the next page with unique rows.
-        if dedupe_similarity is not None:
+        if dedupe_similarity is not None and not consumer_policy:
             records, dropped = deduplicate(records, dedupe_similarity)
             filtered.update(dropped)
         # Older jobs reached the raw target and were then deduplicated by the route. Their
         # saved cursor still points at unread pages; reopen them without replaying billed pages.
-        if len(records) >= limit:
+        if consumer_policy:
+            state.complete = state.terminal_error or not pending_slices(state, records, limit)
+        elif len(records) >= limit:
             state.complete = True
             state.retry_at = 0
         elif state.needs_more_records(len(records)):
@@ -213,17 +231,23 @@ class XSearchSource:
             )
         self._guard.reads_this_fetch = state.reads
         self._retry_at = state.retry_at
-        state.stop_reason = None
+        if not state.terminal_error:
+            state.stop_reason = None
+        if consumer_policy and state.complete and not state.terminal_error and len(records) < limit:
+            state.stop_reason = "no more matching posts in the selected window"
 
         def snapshot() -> Dataset:
+            start, end = consumer_policy.bounds() if consumer_policy else (self._start, self._end)
             return Dataset(
-                records=records[:limit],
+                records=records if consumer_policy else records[:limit],
                 source_type="x",
                 query=full_query,
-                window_start=self._start,
-                window_end=self._end,
+                window_start=start,
+                window_end=end,
                 truncated_reason=state.stop_reason,
                 filtered_out=dict(filtered),
+                consumer_policy=consumer_policy,
+                fetched_at=resume.fetched_at if resume is not None else datetime.now(UTC),
             )
 
         def save() -> None:
@@ -237,24 +261,38 @@ class XSearchSource:
         ):
             save()  # Persist recovered rows/completion and freeze dates before any paid call.
 
-        while not state.complete and len(records) < limit:
+        while not state.complete and (consumer_policy or len(records) < limit):
+            active_slice = None
+            remaining = limit - len(records)
+            if consumer_policy:
+                pending = pending_slices(state, records, limit)
+                if not pending:
+                    state.complete = True
+                    break
+                active_slice, remaining = pending[0]
+                self._start, self._end = active_slice.start, active_slice.end
             if should_stop and should_stop():
                 state.stop_reason = "cancelled by client"
-                break
-            if not can_start():
-                state.stop_reason = "request budget reached; resume to continue"
                 break
             if time.time() < state.retry_at:
                 state.stop_reason = "rate limited; retry after the indicated time"
                 break
-            page_size = min(PAGE_SIZE, max(10, limit - len(records)))
+            if not can_start():
+                state.retry_at = 0
+                state.stop_reason = "request budget reached; resume to continue"
+                break
+            page_size = min(PAGE_SIZE, max(10, remaining))
             try:
                 self._guard.reserve(page_size)
             except SpendCapReachedError as capped:
                 state.stop_reason = capped.reason
                 break
             try:
-                payload = self._get_page(full_query, page_size, state.next_token)
+                payload = self._get_page(
+                    full_query,
+                    page_size,
+                    active_slice.next_token if active_slice else state.next_token,
+                )
             except BudgetExhaustedError:
                 self._guard.release()
                 state.retry_at = 0
@@ -272,6 +310,7 @@ class XSearchSource:
                 detail = str(exc) if isinstance(exc, ExternalServiceError) else "X request failed"
                 if isinstance(exc, XQueryError):
                     state.complete = True
+                    state.terminal_error = True
                     state.retry_at = 0
                     state.stop_reason = (
                         f"{detail}; successful pages saved; "
@@ -302,21 +341,34 @@ class XSearchSource:
                     raise ExternalServiceError("X returned malformed posts") from None
                 break
             posts = page.data
+            state.retrieved += len(posts)
             state.reads = self._guard.reads_this_fetch + len(posts)
             kept, dropped = self._to_records(posts)
             # Overlapping provider pages can repeat a post; its external ID remains unchanged.
-            seen = {record.id for record in records}
+            retained_ids = {record.id for record in records}
             for record in kept:
-                if record.id not in seen:
+                if record.id not in retained_ids:
                     records.append(record)
-                    seen.add(record.id)
+                    retained_ids.add(record.id)
+            seen.update(post.id for post in posts)
+            state.seen_ids = sorted(seen)
             filtered.update(dropped)
-            if dedupe_similarity is not None:
+            if consumer_policy:
+                records = screen_candidates(records, consumer_policy.duplicate_threshold)
+            elif dedupe_similarity is not None:
                 records, dropped = deduplicate(records, dedupe_similarity)
                 filtered.update(dropped)
-            state.next_token = page.meta.next_token
+            if active_slice:
+                active_slice.next_token = page.meta.next_token
+                active_slice.exhausted = not page.meta.next_token
+            else:
+                state.next_token = page.meta.next_token
             state.retry_at = 0
-            state.complete = not state.next_token or len(records) >= limit
+            state.complete = (
+                not pending_slices(state, records, limit)
+                if consumer_policy
+                else not state.next_token or len(records) >= limit
+            )
             if state.complete and len(records) < limit:
                 state.stop_reason = (
                     "no more matching posts in the selected window"
@@ -378,6 +430,12 @@ class XSearchSource:
             "max_results": page_size,
             "tweet.fields": "id,text,created_at,lang",
         }
+        if self._consumer:
+            params["tweet.fields"] = (
+                "id,text,created_at,lang,author_id,conversation_id,in_reply_to_user_id,"
+                "referenced_tweets,entities,note_tweet"
+            )
+            params["sort_order"] = "recency"
         # RFC 3339 with a Z suffix is the only format the endpoint accepts.
         if self._start:
             params["start_time"] = self._start.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -442,8 +500,8 @@ class XSearchSource:
             detail = "X is unavailable. Try again shortly."
         else:
             detail = "X refused the request."
-        logger.error("x_request_failed", status=status, body=response.text[:200])
-        if status == 400:
+        logger.error("x_request_failed", status=status)
+        if 400 <= status < 500 and status != 429:
             raise XQueryError(f"{detail} (X API returned HTTP {status})")
         raise ExternalServiceError(f"{detail} (X API returned HTTP {status})")
 
@@ -459,11 +517,21 @@ class XSearchSource:
         records: list[Record] = []
         dropped: Counter[str] = Counter()
         for post in posts:
-            text = post.text.strip()
-            if not self._allow_non_english and post.lang not in (None, "en"):
+            consumer = self._consumer
+            text = post.note_tweet.text if post.note_tweet else post.text
+            if consumer and post.created_at is None:
+                dropped["missing_timestamp"] += 1
+                continue
+            if post.created_at is not None and (
+                (self._start is not None and post.created_at < self._start)
+                or (self._end is not None and post.created_at >= self._end)
+            ):
+                dropped["out_of_window"] += 1
+                continue
+            if not consumer and not self._allow_non_english and post.lang not in (None, "en"):
                 dropped["not_english"] += 1
                 continue
-            if len(content_tokens(text)) < MIN_CONTENT_TOKENS:
+            if not consumer and len(content_tokens(text)) < MIN_CONTENT_TOKENS:
                 dropped["no_content_after_cleaning"] += 1
                 continue
             records.append(
@@ -472,6 +540,38 @@ class XSearchSource:
                     text=text,
                     source_type="x",
                     created_at=post.created_at,
+                    lang=post.lang,
+                    author_id=post.author_id,
+                    conversation_id=post.conversation_id,
+                    in_reply_to_user_id=post.in_reply_to_user_id,
+                    references=post.referenced_tweets,
+                    urls=(post.note_tweet.entities.urls if post.note_tweet else post.entities.urls),
                 )
             )
         return records, dropped
+
+
+def calendar_slices(policy: ConsumerPolicy) -> list[CollectionSlice]:
+    """One independent cursor per requested local day, oldest day first."""
+    day = policy.start_date
+    result = []
+    while day <= policy.end_date:
+        start, end = calendar_bounds(day, day, policy.timezone)
+        result.append(CollectionSlice(day=day, start=start, end=end))
+        day += timedelta(days=1)
+    return result
+
+
+def pending_slices(
+    state: CollectionProgress, records: list[Record], target: int
+) -> list[tuple[CollectionSlice, int]]:
+    """Equal candidate quotas, with the remainder assigned to earlier days; no gap backfill."""
+    result = []
+    for index, block in enumerate(state.slices):
+        quota = target // len(state.slices) + (index < target % len(state.slices))
+        count = sum(
+            r.created_at is not None and block.start <= r.created_at < block.end for r in records
+        )
+        if not block.exhausted and count < quota:
+            result.append((block, quota - count))
+    return result

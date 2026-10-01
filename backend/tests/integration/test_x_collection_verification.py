@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from sentiment_prep.api import deps, routes
+from sentiment_prep.api import collection as collection_service
+from sentiment_prep.api import deps
 from sentiment_prep.api.schemas import LoadRequest
 from sentiment_prep.budget import RequestBudget, current_budget
 from sentiment_prep.config import Settings
@@ -70,7 +71,7 @@ def collection(tmp_path, monkeypatch):
         ledger.settle(day, count, count, "verification")
 
     harness.seed = seed
-    harness.load = lambda: routes._collect_x(body, repo, store, settings)
+    harness.load = lambda: collection_service.collect_x(body, repo, store, settings)
     harness.bundle = lambda: repo.get("x-verify-collection")
     with httpx.Client(
         transport=httpx.MockTransport(handler), base_url="https://x.test/2"

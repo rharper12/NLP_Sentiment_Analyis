@@ -7,7 +7,20 @@ import { CollectStep } from "./CollectStep";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
-it("submits September 9 through today as custom historical dates", () => {
+it("configures a separate 50-candidate consumer pilot with Chicago calendar dates", () => {
+  const search = vi.fn();
+  render(<CollectStep busy={false} error={null} xConfigured dataset={null} onSearch={search} onLoadSample={vi.fn()} onUpload={vi.fn()} onRestore={vi.fn()} onCancel={vi.fn()} onContinue={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText("Collection option"), { target: { value: "consumer" } });
+  expect((screen.getByLabelText("Timezone") as HTMLInputElement).value).toBe("America/Chicago");
+  fireEvent.change(screen.getByLabelText("Candidate target (pilot: 50–100)"), { target: { value: "50" } });
+  fireEvent.click(screen.getByRole("button", { name: "Search and collect" }));
+  expect(search).toHaveBeenCalledWith(expect.stringContaining('"iPhone Duo"'), 50, {
+    start_date: "2026-09-09", end_date: "2026-09-10", timezone: "America/Chicago",
+    preset: "consumer_reactions", per_author_limit: 2, reviewed_target: 500,
+  });
+});
+
+it("requires completed custom days and sends timezone-aware calendar input", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-21T12:00:00Z"));
   const search = vi.fn();
@@ -22,10 +35,13 @@ it("submits September 9 through today as custom historical dates", () => {
   expect(from.checkValidity()).toBe(true);
   expect(to.checkValidity()).toBe(true);
   const submit = screen.getByRole("button", { name: "Search and collect" }) as HTMLButtonElement;
+  expect(submit.disabled).toBe(true);
+  expect(screen.getByText(/completed days before today/)).toBeTruthy();
+  fireEvent.change(to, { target: { value: "2026-09-20" } });
   expect(submit.disabled).toBe(false);
   fireEvent.click(submit);
   expect(search).toHaveBeenCalledWith('"iPhone Duo"', 600, {
-    start: "2026-09-09T00:00:00Z", end: "2026-09-21T23:59:59Z",
+    start_date: "2026-09-09", end_date: "2026-09-20", timezone: "UTC",
   });
 });
 
@@ -41,7 +57,7 @@ it("uses the server rate for preflight and committed reads for the result", () =
   render(<CollectStep busy={false} error={null} xConfigured costPerRead={0.017} dataset={{ dataset_id: "x", source_type: "x", query: "test", record_count: 20, billed_reads: 100, committed_cost_usd: 1.7, labelled_count: 0, truncated_reason: null, partial: false, preview: [] }} onSearch={vi.fn()} onLoadSample={vi.fn()} onUpload={vi.fn()} onRestore={vi.fn()} onCancel={vi.fn()} onContinue={vi.fn()} />);
   expect(screen.getByText("$10.20")).toBeTruthy();
   expect(screen.getByText(/posts collected/).textContent).toContain("20");
-  expect(screen.getByText(/100 billed reads/).textContent).toContain("committed spend $1.70");
+  expect(screen.getByText(/100 accounted provider reads/).textContent).toContain("estimated spend $1.70");
 });
 
 

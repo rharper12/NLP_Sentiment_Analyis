@@ -57,16 +57,16 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
                     const on = config.enabled[name];
                     return (
                       <li key={name} className="grid grid-cols-[auto_1fr_auto] gap-x-3 gap-y-2 px-5 py-4">
-                        <label className="contents cursor-pointer" aria-label={info.title}>
-                          <input type="checkbox" className="mt-1 size-4 accent-accent" checked={on} onChange={() => onToggle(name)} />
+                        <label className="contents cursor-pointer">
+                          <input type="checkbox" aria-label={info.title} className="mt-1 size-4 accent-accent" checked={on} onChange={() => onToggle(name)} />
                           <span className="min-w-0">
                             <span className={`block font-medium ${on ? "" : "line-through"}`}>{info.title}</span>
                             <span className="block text-sm text-muted">{info.summary}</span>
                           </span>
                         </label>
                         <span className="flex flex-col gap-0.5 text-muted">
-                          <button type="button" aria-label={`Move ${info.title} up`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, -1)} onClick={() => onMove(name, -1)}>↑</button>
-                          <button type="button" aria-label={`Move ${info.title} down`} className="px-1 leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, 1)} onClick={() => onMove(name, 1)}>↓</button>
+                          <button type="button" aria-label={`Move ${info.title} up`} className="size-8 shrink-0 rounded leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, -1)} onClick={() => onMove(name, -1)}>↑</button>
+                          <button type="button" aria-label={`Move ${info.title} down`} className="size-8 shrink-0 rounded leading-none hover:text-accent disabled:opacity-30" disabled={!canMove(config, name, 1)} onClick={() => onMove(name, 1)}>↓</button>
                         </span>
                         {on && (
                           <details className="col-start-2 col-span-2 text-sm">

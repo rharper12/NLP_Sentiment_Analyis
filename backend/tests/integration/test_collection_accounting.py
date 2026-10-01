@@ -6,7 +6,8 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from sentiment_prep.api import deps, routes
+from sentiment_prep.api import collection as collection_service
+from sentiment_prep.api import deps
 from sentiment_prep.api.schemas import LoadRequest
 from sentiment_prep.config import Settings
 from sentiment_prep.history.services import DbLedger
@@ -54,7 +55,7 @@ def test_recovers_476_post_job_without_replaying_paid_pages(tmp_path, monkeypatc
             ),
         )
     )
-    old_summary = routes._summary(repo.get("x-legacy-476"))
+    old_summary = collection_service.summarize(repo.get("x-legacy-476"))
     assert old_summary.partial and "resume" in old_summary.truncated_reason
     assert old_summary.resume_request_id == "legacy-476"
     assert "Resume collection" in " ".join(old_summary.warnings)
@@ -86,12 +87,12 @@ def test_recovers_476_post_job_without_replaying_paid_pages(tmp_path, monkeypatc
                 client,
             ),
         )
-        result = routes._collect_x(body, repo, LocalCheckpointStore(tmp_path), settings)
+        result = collection_service.collect_x(body, repo, LocalCheckpointStore(tmp_path), settings)
         assert result.record_count == 500 and not result.partial
         assert result.billed_reads == 532 and result.committed_cost_usd == pytest.approx(2.66)
         assert result.filtered_out == {"duplicate": 20, "near_duplicate": 4}
         assert result.labelled_count == 1
-        again = routes._collect_x(body, repo, LocalCheckpointStore(tmp_path), settings)
+        again = collection_service.collect_x(body, repo, LocalCheckpointStore(tmp_path), settings)
         assert again.record_count == 500 and len(requests) == 1
 
 
@@ -122,7 +123,7 @@ def test_historical_collection_preserves_bounds_and_reports_access_errors(
             )
 
         monkeypatch.setattr(deps, "get_x_source", source)
-        result = routes._collect_x(
+        result = collection_service.collect_x(
             LoadRequest(source="x", query="iphone", limit=20, start_time=start, end_time=end),
             repo,
             LocalCheckpointStore(tmp_path),
@@ -136,7 +137,8 @@ def test_historical_collection_preserves_bounds_and_reports_access_errors(
     assert result.billed_reads == 0
     if status == 403:
         assert "pay-per-use" in result.truncated_reason
-        assert result.partial
+        assert not result.partial  # Permission failures require correction, not automatic retries.
+        assert repo.get(result.dataset_id).collection.terminal_error
 
 
 def test_legacy_collection_does_not_invent_zero_spend():
@@ -145,7 +147,7 @@ def test_legacy_collection_does_not_invent_zero_spend():
         original=Dataset(source_type="x", records=[]),
         collection=CollectionProgress.model_validate({"request": {}, "reads": 100}),
     )
-    result = routes._summary(bundle)
+    result = collection_service.summarize(bundle)
     assert result.billed_reads is None
     assert result.committed_cost_usd is None
 
@@ -174,7 +176,7 @@ def test_filtering_and_oversized_final_pages_report_committed_cost(tmp_path, mon
         deps, "get_x_source", lambda *args, **kwargs: XSearchSource(guard, provider)
     )
     repo = InMemoryRepository()
-    result = routes._collect_x(
+    result = collection_service.collect_x(
         LoadRequest(source="x", query="accounting", limit=limit, request_id=f"billing-{limit}"),
         repo,
         LocalCheckpointStore(tmp_path),
@@ -185,6 +187,6 @@ def test_filtering_and_oversized_final_pages_report_committed_cost(tmp_path, mon
     assert result.billed_reads == 100
     assert result.committed_cost_usd == pytest.approx(1.7)
     assert ledger.get(guard.today()) == 100
-    reloaded = routes._summary(repo.get(result.dataset_id))
+    reloaded = collection_service.summarize(repo.get(result.dataset_id))
     assert reloaded.committed_cost_usd == result.committed_cost_usd
     provider.close()

@@ -36,7 +36,7 @@ DOCKER_ENV = $(shell test ! -S /var/run/docker.sock && test -S "$(DOCKER_SOCK)" 
              && echo DOCKER_HOST=unix://$(DOCKER_SOCK))
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev stop dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
+.PHONY: help setup lock dev stop dev-api dev-web preview check lint test test-backend test-web audit-a11y aws-check \
         api-types validate build deploy deploy-web put-secret logs clean
 
 ##@ Getting started
@@ -50,9 +50,15 @@ help: ## Show this list
 
 setup: ## Install everything: backend deps, NLTK corpora, frontend packages, backend/.env
 	@test -f backend/.env || (cp backend/.env.example backend/.env && echo "created backend/.env; add your X_BEARER_TOKEN")
-	cd backend && pip install -e ".[dev]"
+	python -m pip install --require-hashes -r backend/requirements-dev.txt
+	python -m pip install --no-deps --no-build-isolation -e "backend[dev]"
+	python -m pip check
 	cd backend && SSL_CERT_FILE=$$(python -m certifi) python -m nltk.downloader wordnet omw-1.4 averaged_perceptron_tagger_eng
-	cd frontend && npm install
+	cd frontend && npm ci
+
+lock: ## Regenerate Python locks; set LOCK_FLAGS=--upgrade for a deliberate dependency update
+	uv pip compile backend/pyproject.toml --universal --python-version 3.12 --generate-hashes --no-annotate --custom-compile-command 'make lock' $(LOCK_FLAGS) -o backend/requirements.txt > /dev/null
+	uv pip compile backend/pyproject.toml --extra dev --universal --python-version 3.12 --constraint backend/requirements.txt --generate-hashes --no-annotate --custom-compile-command 'make lock' $(LOCK_FLAGS) -o backend/requirements-dev.txt > /dev/null
 
 ##@ Running locally
 
@@ -102,7 +108,7 @@ test-web: ## vitest
 aws-check: ## Verify AWS credentials the way the app resolves them; PROBE=1 also calls Comprehend
 	python tools/aws_check.py
 
-audit-a11y: ## axe over every stage in both themes; run 'make dev-api' and 'make preview' first
+audit-a11y: ## General and consumer browser checks; use an isolated API and production preview
 	python tools/a11y_audit.py
 
 ##@ Keeping the two halves in step

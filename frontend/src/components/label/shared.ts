@@ -1,6 +1,6 @@
 /** Constants and helpers shared by the Label stage's panels. */
 
-import type { SentimentLabel } from "../../api/types";
+import { SENTIMENT_LABELS, type SentimentLabel } from "../../api/types";
 
 /** Posts sent to Comprehend per request; each slice is saved before the next begins. */
 export const SLICE = 250;
@@ -11,11 +11,12 @@ export const REVIEW_PAGE = 200;
 export const PRICING_URL = "https://aws.amazon.com/comprehend/pricing/";
 
 /** Keyboard shortcuts: digits match the on-screen order, letters are mnemonics. */
-export const KEYS: { [key: string]: SentimentLabel } = {
-  "1": "positive", p: "positive",
-  "2": "negative", n: "negative",
-  "3": "neutral", u: "neutral",
-  "4": "mixed", m: "mixed",
+export const KEYS: Partial<Record<string, SentimentLabel>> = {
+  ...Object.fromEntries(SENTIMENT_LABELS.map((label, index) => [String(index + 1), label])),
+  p: "positive",
+  n: "negative",
+  u: "neutral",
+  m: "mixed",
 };
 
 /** Money for display. Four decimals below a cent so tiny estimates do not read as $0.00. */

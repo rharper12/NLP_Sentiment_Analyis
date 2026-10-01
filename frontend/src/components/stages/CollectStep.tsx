@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 
-import type { DatasetSummary } from "../../api/types";
+import type { CollectionWindow, DatasetSummary } from "../../api/types";
 import { api } from "../../api/client";
 import { useAsync } from "../../hooks/useAsync";
 import {
@@ -14,6 +14,8 @@ import { Notice } from "../ui/Notice";
 import { Skeleton } from "../ui/Skeleton";
 import { CsvUpload } from "../collect/CsvUpload";
 import { SavedDatasetPicker } from "../collect/SavedDatasetPicker";
+import { ConsumerSummary } from "../label/ConsumerSummary";
+import { AdditionalCandidates } from "../collect/AdditionalCandidates";
 
 type Source = "x" | "huggingface" | "csv" | "saved";
 const MIN_RECORDS = 500;
@@ -24,7 +26,8 @@ interface Props {
   dataset: DatasetSummary | null;
   xConfigured: boolean;
   costPerRead?: number | null;
-  onSearch: (query: string, limit: number, window: { start?: string; end?: string }) => void;
+  onSearch: (query: string, limit: number, window: CollectionWindow) => void;
+  onAdditional?: (target: number) => void;
   onLoadSample: (limit: number) => void;
   onUpload: (file: File) => void;
   localDatasetsAvailable?: boolean;
@@ -38,7 +41,7 @@ interface Props {
  * Stage 1. The search box is the hero: type a topic, get posts. Sample dataset and CSV upload are
  * offered as secondary paths so the flow works without an X account.
  */
-export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, onSearch, onLoadSample, onUpload, onRestore, localDatasetsAvailable = false, onResume, onCancel, onContinue }: Props) {
+export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, onSearch, onAdditional, onLoadSample, onUpload, onRestore, localDatasetsAvailable = false, onResume, onCancel, onContinue }: Props) {
   const download = useAsync<void>();
   const [source, setSource] = useState<Source>("x");
   const [query, setQuery] = useState("");
@@ -46,6 +49,9 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
   const [savedId, setSavedId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [range, setRange] = useState<TimeRange>(DEFAULT_RANGE);
+  const [consumer, setConsumer] = useState(false);
+  const [authorLimit, setAuthorLimit] = useState(2);
+  const [reviewedTarget, setReviewedTarget] = useState(500);
   const ids = { q: useId(), n: useId(), tabs: useId() };
 
   const selectSource = (next: Source) => {
@@ -56,17 +62,19 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    if (source === "x") onSearch(query.trim(), limit, toWindow(range));
+    if (source === "x") onSearch(query.trim(), limit, { ...toWindow(range), ...(consumer ? { preset: "consumer_reactions" as const, per_author_limit: authorLimit, reviewed_target: reviewedTarget } : {}) });
     else if (source === "huggingface") onLoadSample(limit);
     else if (source === "saved" && localDatasetsAvailable && savedId) onRestore(savedId);
     else if (source === "csv" && file) onUpload(file);
   };
   // A malformed custom range is caught here rather than by the server, so the person is not made
   // to wait for a round trip to learn the dates are the wrong way round.
+  const days = (Date.parse(range.to) - Date.parse(range.from)) / 86_400_000 + 1;
+  const consumerError = consumer && source === "x" ? days > 31 ? "Choose at most 31 calendar days." : limit < days * 10 ? "Allow at least 10 candidates per requested day." : null : null;
   const canSubmit =
     !busy &&
     (source === "x"
-      ? query.trim().length > 0 && !rangeError(range)
+      ? query.trim().length > 0 && !rangeError(range) && !consumerError && Number.isInteger(limit) && limit > 0 && limit <= 5000 && (!consumer || (Number.isInteger(authorLimit) && authorLimit >= 1 && authorLimit <= 100 && Number.isInteger(reviewedTarget) && reviewedTarget >= 1 && reviewedTarget <= 5000))
       : source === "huggingface" || (source === "saved" ? localDatasetsAvailable && !!savedId : !!file));
 
   const sources: [Source, string][] = [["x", "Search X"], ["huggingface", "Sample dataset"], ["csv", "Upload CSV"]];
@@ -101,12 +109,32 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
         <div id={`${ids.tabs}-panel`} role="tabpanel" aria-labelledby={`${ids.tabs}-${source}`} className="flex flex-col gap-5">
         {source === "x" && (
           <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-sm">Collection option
+              <select className="field" value={consumer ? "consumer" : "general"} onChange={(e) => {
+                const selected = e.target.value === "consumer";
+                setConsumer(selected);
+                if (selected) {
+                  setQuery('( "iPhone Duo" OR #iPhoneDuo OR "foldable iPhone" OR "folding iPhone" ) lang:en -is:retweet');
+                  setRange({ preset: "custom", from: "2026-09-09", to: "2026-09-10", timezone: "America/Chicago" });
+                  setLimit(100);
+                }
+              }}><option value="general">General search</option><option value="consumer">Consumer reactions</option></select>
+            </label>
             <label htmlFor={ids.q} className="text-sm text-muted">Topic</label>
             <input id={ids.q} className="field text-lg" value={query} onChange={(e) => setQuery(e.target.value)}
               placeholder='e.g. "lindsay clancy" trial   or   #WWDC -has:links' autoComplete="off" />
             <p className="text-xs text-muted">Choose recent posts or custom historical dates. <code className="rounded bg-surface-2 px-1">lang:en -is:retweet</code> is added unless you set <code className="rounded bg-surface-2 px-1">lang:</code> yourself. X search operators are supported.</p>
             <a href="https://docs.x.com/x-api/posts/search/integrate/build-a-query" target="_blank" rel="noopener noreferrer" className="self-start text-sm underline underline-offset-4">X query guide: operators and examples <span className="text-xs">(opens in a new tab)</span></a>
-            <TimeRangePicker value={range} onChange={setRange} />
+            <TimeRangePicker value={range} onChange={setRange} calendarOnly={consumer} />
+            {consumerError && <p className="text-xs text-warn-ink" role="alert">{consumerError}</p>}
+            {consumer && <>
+              <div className="flex flex-wrap gap-4">
+                <label className="flex flex-col gap-1 text-sm">Final reviewed target<input className="field w-36" type="number" min={1} max={5000} value={reviewedTarget} onChange={(e) => setReviewedTarget(Number(e.target.value))} /></label>
+                <label className="flex flex-col gap-1 text-sm">Included posts per known author<input className="field w-36" type="number" min={1} max={100} value={authorLimit} onChange={(e) => setAuthorLimit(Number(e.target.value))} /></label>
+              </div>
+              <p className="text-sm text-muted">Creates a separate collection. All sentiments are eligible. English consumer reactions are screened before cleaning; suggestions require human confirmation. The author limit is a sampling control, not a bot detector.</p>
+              <p className="text-xs text-muted">Candidate quotas are split across the requested days, newest first within each day. Empty days remain visible. Keyword search misses replies that never name the product. This is a bounded sample, not a representative survey or a set of verified humans.</p>
+            </>}
             {!xConfigured && <p className="text-xs text-warn-ink">No X token is configured on the server, so this search will be refused. Use the sample dataset to explore.</p>}
           </div>
         )}
@@ -119,11 +147,11 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
         {(source === "x" || source === "huggingface") && (
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-6">
             <div className="flex flex-col gap-1">
-              <label htmlFor={ids.n} className="text-sm text-muted">How many posts</label>
-              <input id={ids.n} type="number" min={MIN_RECORDS} max={5000} step={50} value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="field tnum w-36" />
+              <label htmlFor={ids.n} className="text-sm text-muted">{consumer && source === "x" ? "Candidate target (pilot: 50–100)" : "How many posts"}</label>
+              <input id={ids.n} type="number" min={consumer && source === "x" ? 10 : MIN_RECORDS} max={5000} step={consumer && source === "x" ? 1 : 50} value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="field tnum w-36" />
             </div>
             <p className="text-xs text-muted sm:pb-2.5">
-              {source === "x" ? <>Preflight estimate: <strong className="tnum text-ink">{costPerRead == null ? "unavailable" : `$${(limit * costPerRead).toFixed(2)}`}</strong> for {limit.toLocaleString()} reads. Filtering can require more billed reads than retained posts.</> : "The assignment needs at least 500."}
+              {source === "x" ? <>Preflight estimate: <strong className="tnum text-ink">{costPerRead == null ? "unavailable" : `$${(limit * costPerRead).toFixed(2)}`}</strong> for {limit.toLocaleString()} reads. Filtering can require more reads. {consumer && "Provider page minimums can add up to 9 candidates per day. "}Exclusions still incur reads; server caps apply. Search authorizes this paid request.</> : "The assignment needs at least 500."}
             </p>
           </div>
         )}
@@ -159,18 +187,20 @@ export function CollectStep({ busy, error, dataset, xConfigured, costPerRead, on
             <h3 className="text-lg font-semibold"><span className="tnum">{dataset.record_count.toLocaleString()}</span> posts collected</h3>
             <span className="text-xs text-muted">
               from {dataset.source_type === "x" ? "X" : dataset.source_type === "huggingface" ? "Hugging Face" : "your CSV"}
-              {dataset.billed_reads != null && <> · {dataset.billed_reads.toLocaleString()} billed reads</>}
-              {dataset.committed_cost_usd != null && <> · committed spend ${dataset.committed_cost_usd.toFixed(2)}</>}
+              {dataset.billed_reads != null && <> · {dataset.billed_reads.toLocaleString()} accounted provider reads</>}
+              {dataset.committed_cost_usd != null && <> · estimated spend ${dataset.committed_cost_usd.toFixed(2)}</>}
             </span>
           </div>
           {dataset.query && <p className="tnum truncate text-sm text-muted">Query: {dataset.query}</p>}
           {dataset.window_start && (
             <p className="tnum text-sm text-muted">
-              Window: {new Date(dataset.window_start).toLocaleString()} to{" "}
-              {dataset.window_end ? new Date(dataset.window_end).toLocaleString() : "now"}
+              Window: {new Date(dataset.window_start).toLocaleString(undefined, { timeZone: dataset.consumer_policy?.timezone })} (inclusive) to{" "}
+              {dataset.window_end ? new Date(dataset.window_end).toLocaleString(undefined, { timeZone: dataset.consumer_policy?.timezone }) : "now"} (exclusive){dataset.consumer_policy && ` · ${dataset.consumer_policy.timezone}`}
             </p>
           )}
           {dataset.truncated_reason && <p className="text-sm text-muted">Stopped early: {dataset.truncated_reason}.</p>}
+          {dataset.consumer_counts && <ConsumerSummary counts={dataset.consumer_counts} timezone={dataset.consumer_policy?.timezone ?? "UTC"} />}
+          {dataset.consumer_policy && onAdditional && <AdditionalCandidates dataset={dataset} busy={busy} costPerRead={costPerRead} onRequest={onAdditional} />}
           <ul className="divide-y divide-rule text-sm">
             {dataset.preview.slice(0, 6).map((r) => (
               <li key={r.id} className="flex gap-3 py-2">

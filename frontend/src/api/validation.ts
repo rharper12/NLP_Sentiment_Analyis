@@ -20,6 +20,9 @@ import type {
   CheckpointList,
   DatasetMetrics,
   DatasetSummary,
+  ConsumerCounts,
+  ConsumerPolicy,
+  EligibilityPage,
   HealthResponse,
   HistoryRun,
   ImpactReport,
@@ -41,6 +44,8 @@ import type {
 const maybe = <T extends z.ZodTypeAny>(inner: T) => inner.nullish();
 
 const counts = z.record(z.string(), z.number());
+const eligibilityDecision = z.enum(["include", "exclude", "pending"]);
+const eligibilityReason = z.enum(["news_or_article", "giveaway_or_promotion", "technical_developer_content", "duplicate_or_repeated_template", "off_topic", "insufficient_context", "not_english"]);
 
 const recordSchema: z.ZodType<PostRecord> = z.looseObject({
   id: z.string(),
@@ -53,6 +58,39 @@ const recordSchema: z.ZodType<PostRecord> = z.looseObject({
   comprehend_confidence: maybe(z.number()),
   created_at: maybe(z.string()),
   tokens: maybe(z.array(z.string())),
+  author_id: maybe(z.string()),
+  lang: maybe(z.string()),
+  conversation_id: maybe(z.string()),
+  in_reply_to_user_id: maybe(z.string()),
+  references: z.array(z.object({ id: z.string(), type: z.enum(["replied_to", "quoted", "retweeted"]) })).optional(),
+  urls: z.array(z.object({ url: z.string(), expanded_url: maybe(z.string()), display_url: maybe(z.string()) })).optional(),
+  screening: maybe(z.object({ decision: eligibilityDecision, reason: maybe(eligibilityReason), evidence: z.array(z.string()).optional(), duplicate_of: maybe(z.string()), policy_version: z.string() })),
+  eligibility: eligibilityDecision.optional(),
+  eligibility_reviewed: z.boolean().optional(),
+  eligibility_reason: maybe(eligibilityReason),
+  eligibility_note: z.string().optional(),
+  eligibility_history: z.array(z.object({ decision: eligibilityDecision, reason: maybe(eligibilityReason), note: z.string(), reviewed_at: z.string().optional() })).optional(),
+  sentiment_reviewed: z.boolean().optional(),
+  sentiment_reviewed_at: maybe(z.string()),
+});
+
+export const consumerPolicySchema: z.ZodType<ConsumerPolicy> = z.object({
+  version: z.literal("consumer-reactions-v1"), start_date: z.string(), end_date: z.string(),
+  timezone: z.string(), per_author_limit: z.number().int().positive(),
+  reviewed_target: z.number().int().positive(), duplicate_threshold: z.number(),
+  selection_rule: z.literal("daily-quotas-recency;author-earliest-id"),
+});
+
+export const consumerCountsSchema: z.ZodType<ConsumerCounts> = z.object({
+  retrieved: z.number(), unique_records: z.number(), screened_candidates: z.number(),
+  pending_eligibility: z.number(), human_inclusions: z.number(), human_exclusions: z.number(),
+  included: z.number(), author_cap_held: z.number(), missing_author: z.number(),
+  pending_sentiment: z.number(), reviewed_final: z.number(), reviewed_target: z.number(), shortfall: z.number(),
+  days: z.array(z.object({ day: z.string(), candidates: z.number(), included: z.number(), reviewed_final: z.number() })),
+});
+
+export const eligibilityPageSchema: z.ZodType<EligibilityPage> = z.object({
+  total: z.number(), offset: z.number(), items: z.array(recordSchema), included_ids: z.array(z.string()), counts: consumerCountsSchema,
 });
 
 export const datasetSummarySchema: z.ZodType<DatasetSummary> = z.looseObject({
@@ -72,6 +110,10 @@ export const datasetSummarySchema: z.ZodType<DatasetSummary> = z.looseObject({
   resume_request_id: maybe(z.string()),
   retry_at: maybe(z.number()),
   preview: z.array(recordSchema),
+  consumer_policy: maybe(consumerPolicySchema),
+  consumer_counts: maybe(consumerCountsSchema),
+  candidate_target: maybe(z.number()),
+  can_collect_more: z.boolean().optional(),
 });
 
 export const stepInfoSchema: z.ZodType<StepInfo> = z.looseObject({

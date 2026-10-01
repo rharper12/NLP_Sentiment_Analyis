@@ -39,7 +39,7 @@ export function SavedDatasetPicker({ disabled, selected, onSelect }: Props) {
         {files.map((file) => <option key={file.dataset_id} value={file.dataset_id}>{new Date(file.modified_at).toLocaleString()} — {file.filename}</option>)}
       </select>
       {selectedFile && <p className="break-all text-xs text-muted">{selectedFile.filename} · {(selectedFile.bytes / 1024).toFixed(1)} KiB</p>}
-      <p id={`${id}-help`} className="text-sm text-muted">Opens Clean with a new copy of the original posts. Previous cleaning and manual or Comprehend labels are reset; labels from the original source are kept. The saved file stays intact.</p>
+      <p id={`${id}-help`} className="text-sm text-muted">Consumer collections reopen with saved review decisions and collection progress. Other datasets open Clean with a new copy of the original posts: cleaning and manual or Comprehend labels are reset, source labels are kept, and the saved file stays intact.</p>
       <p role="status" className="text-sm text-muted">
         {page.loading ? "Loading saved datasets…" : page.data && !files.length ? "No saved datasets yet. Collect posts or import a CSV first; the app saves a JSON automatically." : page.data ? `${files.length} of ${page.data.total} saved files shown.` : ""}
       </p>

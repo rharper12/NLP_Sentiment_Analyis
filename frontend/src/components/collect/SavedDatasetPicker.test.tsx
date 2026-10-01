@@ -57,5 +57,5 @@ it("ignores late list responses after leaving the picker", async () => {
   fireEvent.click(screen.getByRole("tab", { name: "Search X" }));
   await act(async () => resolve(files));
   expect(signal.aborted).toBe(true);
-  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Saved dataset" })).toBeNull();
 });

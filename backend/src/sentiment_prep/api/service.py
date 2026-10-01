@@ -112,10 +112,18 @@ def run_preprocessing(
         report.warnings = [w for w in report.warnings if not w.startswith(f"{stage} unavailable")]
         try:
             if stage == "sentiment":
-                client = comprehend() if callable(comprehend) else comprehend
+                # Eligibility must not be influenced by automated sentiment. Consumer runs
+                # use local preprocessing only; optional scoring remains an explicit Label action.
+                client = (
+                    None
+                    if updated.original.consumer_policy
+                    else (comprehend() if callable(comprehend) else comprehend)
+                )
                 if client is None:
                     report.warnings.append(
-                        "sentiment comparison disabled (COMPREHEND_ENABLED=false)"
+                        "Consumer reaction analysis uses local preprocessing only"
+                        if updated.original.consumer_policy
+                        else "sentiment comparison disabled (COMPREHEND_ENABLED=false)"
                     )
                 else:
                     if any(

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import type { CollectionWindow } from "../../api/types";
 
 /** Presets cover recent searches; Custom also supports the full archive. */
 type RangePreset = "7d" | "3d" | "24h" | "custom";
@@ -8,6 +9,7 @@ export interface TimeRange {
   /** ISO dates (yyyy-mm-dd) from the date inputs; only meaningful when preset is "custom". */
   from: string;
   to: string;
+  timezone?: string;
 }
 
 export const DEFAULT_RANGE: TimeRange = { preset: "7d", from: "", to: "" };
@@ -29,14 +31,15 @@ export const today = (): string => isoDate(0);
 /**
  * Resolve a range into the timestamps the API takes.
  *
- * Dates are sent as UTC instants: the start of the "from" day and the end of the "to" day, so a
- * range of 9th–13th includes everything posted on the 13th. Older windows use full-archive search.
+ * Calendar dates and an IANA zone go to the backend, which resolves the inclusive start and
+ * exclusive next-day midnight with timezone rules. Relative presets remain UTC instants.
  */
-export function toWindow(range: TimeRange): { start?: string; end?: string } {
+export function toWindow(range: TimeRange): CollectionWindow {
   if (range.preset === "custom") {
     return {
-      start: range.from ? `${range.from}T00:00:00Z` : undefined,
-      end: range.to ? `${range.to}T23:59:59Z` : undefined,
+      start_date: range.from,
+      end_date: range.to,
+      timezone: range.timezone ?? "UTC",
     };
   }
   const hours = range.preset === "24h" ? 24 : range.preset === "3d" ? 72 : 168;
@@ -51,23 +54,28 @@ export function rangeError(range: TimeRange): string | null {
   if (!range.from || !range.to) return "Choose both a start and an end date.";
   if (range.from > range.to) return "The start date must come before the end date.";
   if (range.from < ARCHIVE_START) return "X's searchable archive starts in March 2006.";
-  if (range.to > today()) return "Choose dates on or before today.";
+  try {
+    const localToday = new Intl.DateTimeFormat("en-CA", { timeZone: range.timezone ?? "UTC", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    if (range.to >= localToday) return "Choose completed days before today in the selected timezone.";
+  }
+  catch { return "Choose a valid timezone, such as America/Chicago."; }
   return null;
 }
 
 interface Props {
   value: TimeRange;
   onChange: (range: TimeRange) => void;
+  calendarOnly?: boolean;
 }
 
-export function TimeRangePicker({ value, onChange }: Props) {
-  const ids = { from: useId(), to: useId() };
+export function TimeRangePicker({ value, onChange, calendarOnly = false }: Props) {
+  const ids = { from: useId(), to: useId(), zone: useId() };
   const error = rangeError(value);
 
   return (
     <fieldset className="flex flex-col gap-2 border-0 p-0">
       <legend className="mb-1 text-sm text-muted">Time range</legend>
-      <div role="group" className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+      {!calendarOnly && <div role="group" className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
         {PRESETS.map(([preset, label]) => (
           <button
             key={preset}
@@ -79,7 +87,7 @@ export function TimeRangePicker({ value, onChange }: Props) {
             {label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {value.preset === "custom" && (
         <div className="flex flex-wrap items-end gap-3">
@@ -94,6 +102,10 @@ export function TimeRangePicker({ value, onChange }: Props) {
               value={value.from}
               onChange={(e) => onChange({ ...value, from: e.target.value })}
             />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor={ids.zone} className="text-sm text-muted">Timezone</label>
+            <input id={ids.zone} className="field" value={value.timezone ?? "UTC"} onChange={(e) => onChange({ ...value, timezone: e.target.value })} placeholder="America/Chicago" />
           </div>
           <div className="flex flex-col gap-1">
             <label htmlFor={ids.to} className="text-sm text-muted">To</label>
@@ -111,7 +123,7 @@ export function TimeRangePicker({ value, onChange }: Props) {
       )}
 
       <p className={`text-xs ${error ? "text-warn-ink" : "text-muted"}`}>
-        {error ?? "Dates older than 7 days use full-archive search (pay-per-use or Enterprise). Existing spend caps apply. Dates are whole UTC days."}
+        {error ?? "The final date is included through the next local midnight (exclusive). Choose completed days. Older than 7 days requires full-archive access; no recent-data fallback. Existing spend caps apply."}
       </p>
     </fieldset>
   );

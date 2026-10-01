@@ -22,6 +22,13 @@ def original_only(dataset: Dataset) -> Dataset:
                         "label_confidence": None,
                         "comprehend_label": None,
                         "comprehend_confidence": None,
+                        "eligibility": "pending",
+                        "eligibility_reviewed": False,
+                        "eligibility_reason": None,
+                        "eligibility_note": "",
+                        "eligibility_history": [],
+                        "sentiment_reviewed": False,
+                        "sentiment_reviewed_at": None,
                     }
                 )
                 for record in dataset.records

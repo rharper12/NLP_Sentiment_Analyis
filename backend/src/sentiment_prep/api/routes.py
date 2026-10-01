@@ -9,13 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import threading
-import uuid
-from collections.abc import Callable
-from contextlib import suppress
-from datetime import UTC, datetime, tzinfo
-from decimal import Decimal
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 import anyio
@@ -24,14 +20,24 @@ from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFi
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError as ModelValidationError
 
-from sentiment_prep import __version__
+from sentiment_prep import __version__, eligibility
 from sentiment_prep.api import deps
 from sentiment_prep.api.aws_errors import translated
+from sentiment_prep.api.collection import (
+    PREVIEW_ROWS,
+    collect_x,
+    extend_candidate_target,
+    store_dataset,
+    summarize,
+)
 from sentiment_prep.api.schemas import (
+    AdditionalCandidatesRequest,
     CheckpointList,
     ComprehendLabelRequest,
     CsvValidation,
     DatasetSummary,
+    EligibilityPage,
+    EligibilityRequest,
     HealthResponse,
     HistoryRun,
     LoadRequest,
@@ -68,8 +74,8 @@ from sentiment_prep.errors import (
 )
 from sentiment_prep.export.csv_export import to_csv
 from sentiment_prep.export.excel_export import to_excel
-from sentiment_prep.export.parquet_export import csv_to_parquet, to_parquet
-from sentiment_prep.filenames import FileStem, bundle_file_stem, default_file_stem
+from sentiment_prep.export.parquet_export import csv_to_parquet, to_parquet, to_reviewed_parquet
+from sentiment_prep.filenames import FileStem, bundle_file_stem
 from sentiment_prep.history import db
 from sentiment_prep.history import services as history
 from sentiment_prep.labeling import service as labeling
@@ -77,9 +83,7 @@ from sentiment_prep.labeling.service import LabelEstimate, LabelProgress, Manual
 from sentiment_prep.logging_config import bind_context, get_logger
 from sentiment_prep.models import (
     CheckpointState,
-    CollectionProgress,
     Dataset,
-    DatasetBundle,
     LabelSummary,
 )
 from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_GROUPS
@@ -87,7 +91,6 @@ from sentiment_prep.presentation import public_report
 from sentiment_prep.report import load_rationale, render_report
 from sentiment_prep.sources.base import DataSource
 from sentiment_prep.sources.csv_upload import MAX_UPLOAD_RECORDS, CsvUploadSource
-from sentiment_prep.sources.dedupe import deduplicate
 from sentiment_prep.sources.saved_dataset import export_original, original_only
 from sentiment_prep.storage.checkpoints import (
     CheckpointInfo,
@@ -96,7 +99,6 @@ from sentiment_prep.storage.checkpoints import (
     checkpoint_bundle,
     checkpoint_info,
     checkpoint_warnings,
-    invalidate_checkpoints,
 )
 from sentiment_prep.storage.local_repository import LocalDatasetPage, LocalRepository
 from sentiment_prep.storage.repository import BundleRepository
@@ -107,8 +109,6 @@ router = APIRouter()
 public_router = APIRouter()
 logger = get_logger(__name__)
 
-PREVIEW_ROWS = 20
-MIN_RECORDS_FOR_TASK = 500
 # How often the disconnect watcher polls while a paid fetch runs. Short enough to stop the next
 # page promptly, long enough not to spin.
 DISCONNECT_POLL_SECONDS = 0.25
@@ -120,9 +120,6 @@ TimeZoneDep = Annotated[ZoneInfo, Depends(deps.browser_time_zone)]
 FilenameQuery = Annotated[
     FileStem | None, Query(description="Filename without its fixed extension")
 ]
-
-
-# --- system -----------------------------------------------------------------------------------
 
 
 @public_router.post("/auth/session", response_model=SessionResponse, tags=["system"])
@@ -171,9 +168,6 @@ def health(settings: SettingsDep, request: Request) -> HealthResponse:
     )
 
 
-# --- dataset ----------------------------------------------------------------------------------
-
-
 @router.post(
     "/dataset/load",
     tags=["dataset"],
@@ -214,7 +208,7 @@ async def load_dataset(
         try:
             if body.source == "x":
                 summary = await anyio.to_thread.run_sync(
-                    lambda: _collect_x(body, repo, checkpoints, settings, stop.is_set, zone=zone)
+                    lambda: collect_x(body, repo, checkpoints, settings, stop.is_set, zone=zone)
                 )
             else:
                 assert source is not None
@@ -234,7 +228,26 @@ async def load_dataset(
         return summary
     assert dataset is not None
     # Database and checkpoint writes are synchronous; keep them off the event loop.
-    return await anyio.to_thread.run_sync(lambda: _store(dataset, repo, checkpoints, zone=zone))
+    return await anyio.to_thread.run_sync(
+        lambda: store_dataset(dataset, repo, checkpoints, zone=zone)
+    )
+
+
+@router.post("/dataset/{dataset_id}/candidates", tags=["dataset"], response_model=DatasetSummary)
+async def additional_candidates(
+    dataset_id: str,
+    body: AdditionalCandidatesRequest,
+    request: Request,
+    repo: RepoDep,
+    checkpoints: CheckpointDep,
+    settings: SettingsDep,
+    zone: TimeZoneDep,
+) -> DatasetSummary:
+    """Explicitly extend a candidate quota; reuse approved criteria, cursors and cumulative caps."""
+    approved = await anyio.to_thread.run_sync(
+        lambda: extend_candidate_target(dataset_id, body, repo, settings)
+    )
+    return await load_dataset(approved, request, repo, checkpoints, settings, zone)
 
 
 @router.post(
@@ -251,7 +264,9 @@ async def upload_dataset(
     content = await read_csv_upload(file)
     bind_context(source="csv", filename=file.filename, bytes=len(content))
     return await anyio.to_thread.run_sync(
-        lambda: _store(CsvUploadSource(content).fetch(limit=limit), repo, checkpoints, zone=zone)
+        lambda: store_dataset(
+            CsvUploadSource(content).fetch(limit=limit), repo, checkpoints, zone=zone
+        )
     )
 
 
@@ -313,7 +328,7 @@ def restore_local_dataset(
     checkpoints: CheckpointDep,
     zone: TimeZoneDep,
 ) -> DatasetSummary:
-    """Validate a local working file and create a fresh run from its original rows."""
+    """Reopen consumer review intact; general datasets start a fresh original-only run."""
     try:
         saved = LocalRepository(Path(settings.checkpoint_dir) / "_work").get(dataset_id)
     except (ModelValidationError, OSError) as exc:
@@ -323,9 +338,22 @@ def restore_local_dataset(
         raise ValidationError(
             "Could not open this saved dataset. It must be a valid local dataset JSON file."
         ) from exc
-    if not 1 <= len(saved.original.records) <= MAX_UPLOAD_RECORDS:
+    minimum = 0 if saved.original.consumer_policy else 1
+    # X's minimum page size may retain nine extra candidates in each requested day.
+    maximum = MAX_UPLOAD_RECORDS
+    if saved.original.consumer_policy:
+        policy = saved.original.consumer_policy
+        maximum += 9 * ((policy.end_date - policy.start_date).days + 1)
+    if not minimum <= len(saved.original.records) <= maximum:
         raise ValidationError("Saved dataset must contain between 1 and 5,000 original records")
-    return _store(original_only(saved.original), repo, checkpoints, dedupe=False, zone=zone)
+    if saved.original.consumer_policy:
+        # Consumer review is an ongoing collection, not a new original-only cleaning exercise.
+        try:
+            return summarize(repo.get(dataset_id))
+        except NotFoundError:
+            repo.save(saved)
+            return summarize(saved)
+    return store_dataset(original_only(saved.original), repo, checkpoints, dedupe=False, zone=zone)
 
 
 @router.get(
@@ -336,7 +364,7 @@ def restore_local_dataset(
 )
 def get_dataset(dataset_id: str, repo: RepoDep) -> DatasetSummary:
     """Summary and preview of a previously loaded dataset."""
-    return _summary(repo.get(dataset_id))
+    return summarize(repo.get(dataset_id))
 
 
 @router.get(
@@ -365,9 +393,6 @@ def get_records(
         offset=offset,
         items=[RecordPair(original=r, processed=processed.get(r.id)) for r in page],
     )
-
-
-# --- preprocess -------------------------------------------------------------------------------
 
 
 @router.get(
@@ -440,7 +465,47 @@ def preprocess(
     )
 
 
-# --- label ------------------------------------------------------------------------------------
+@router.get("/dataset/{dataset_id}/eligibility", tags=["label"], response_model=EligibilityPage)
+def eligibility_page(
+    dataset_id: str,
+    repo: RepoDep,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=200),
+    status: Literal["all", "pending", "include", "exclude", "sentiment"] = "all",
+) -> EligibilityPage:
+    """Inspect original candidates and recoverable exclusions without enrichment calls."""
+    bundle = repo.get(dataset_id)
+    selected = eligibility.included_ids(bundle)
+    rows = bundle.original.records
+    if status == "sentiment":
+        rows = [r for r in rows if r.id in selected]
+    elif status == "pending":
+        rows = [r for r in rows if not r.eligibility_reviewed or r.eligibility == "pending"]
+    elif status != "all":
+        rows = [r for r in rows if r.eligibility_reviewed and r.eligibility == status]
+    return EligibilityPage(
+        total=len(rows),
+        offset=offset,
+        items=rows[offset : offset + limit],
+        included_ids=sorted(selected),
+        counts=eligibility.counts(bundle),
+    )
+
+
+@router.put("/dataset/{dataset_id}/eligibility", tags=["label"], response_model=DatasetSummary)
+def review_eligibility(
+    dataset_id: str,
+    body: EligibilityRequest,
+    repo: RepoDep,
+    checkpoints: CheckpointDep,
+) -> DatasetSummary:
+    """Apply explicit human decisions, including unchanged confirmations and corrections."""
+    with repo.edit(dataset_id) as edit:
+        bundle = eligibility.apply_decisions(edit.bundle, body.items)
+        edit.save(bundle)
+        bundle = checkpoint_bundle(checkpoints, bundle, "labelled")
+        edit.save(bundle)
+    return summarize(bundle)
 
 
 @router.get(
@@ -581,9 +646,6 @@ def manual_labels(
     return labeling.summary(bundle)
 
 
-# --- checkpoints ------------------------------------------------------------------------------
-
-
 @router.get(
     "/dataset/{dataset_id}/checkpoints",
     tags=["export"],
@@ -635,9 +697,6 @@ def convert_checkpoint(
         )
         edit.save(bundle)
         return checkpoint_info(info, bundle)
-
-
-# --- export -----------------------------------------------------------------------------------
 
 
 @router.get(
@@ -701,6 +760,17 @@ def export_parquet(dataset_id: str, repo: RepoDep, filename: FilenameQuery = Non
     )
 
 
+@router.get("/dataset/{dataset_id}/reviewed.parquet", tags=["export"], response_class=Response)
+def export_reviewed(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
+    """Fresh reviewed consumer rows plus embedded policy and completion metadata."""
+    bundle = repo.get(dataset_id)
+    return _download(
+        to_reviewed_parquet(bundle),
+        "application/octet-stream",
+        f"{filename or (bundle_file_stem(bundle)[:111] + '-reviewed')}.parquet",
+    )
+
+
 @router.get(
     "/dataset/{dataset_id}/report.md",
     tags=["export"],
@@ -735,9 +805,6 @@ def save_dataset(
         repo.get(dataset_id), diagnostics=settings.diagnostics_enabled, filename=filename
     )
     return SaveResponse(uri=uri if settings.diagnostics_enabled else None)
-
-
-# --- account ----------------------------------------------------------------------------------
 
 
 @router.get("/spend", tags=["account"], response_model=SpendSummary, summary="X spend so far")
@@ -789,153 +856,12 @@ def recent_history(
     return JSONResponse(content=[record.model_dump(exclude={"duration_ms"}) for record in records])
 
 
-# --- helpers ----------------------------------------------------------------------------------
-
-
-def _collect_x(
-    body: LoadRequest,
-    repo: BundleRepository,
-    checkpoints: CheckpointStore,
-    settings: Settings,
-    should_stop: Callable[[], bool] | None = None,
-    *,
-    zone: tzinfo = UTC,
-) -> DatasetSummary:
-    """Stable request identity plus the existing exclusive edit, across all page slices."""
-    # Validate durable spend storage/token before creating a job. No paid work occurs here.
-    source = deps.get_x_source(body.query or "", body.start_time, body.end_time)
-    request_id = body.request_id or uuid.uuid4().hex
-    dataset_id = "x-" + request_id
-    identity = body.model_dump(mode="json", exclude={"request_id"})
-    try:
-        repo.get(dataset_id)
-    except NotFoundError:
-        bundle = DatasetBundle(
-            dataset_id=dataset_id,
-            file_stem=default_file_stem(body.query, "x", zone),
-            original=Dataset(
-                records=[],
-                source_type="x",
-                query=body.query,
-                window_start=body.start_time,
-                window_end=body.end_time,
-            ),
-            collection=CollectionProgress(
-                request=identity, billed_reads=0, committed_cost_usd=Decimal("0")
-            ),
-        )
-        with suppress(ConflictError):  # Another creator may win; edit arbitrates ownership.
-            repo.save(bundle)
-    with repo.edit(dataset_id) as edit:
-        bundle = edit.bundle
-        if bundle.collection is None or bundle.collection.request != identity:
-            raise ValidationError("request_id already belongs to a different collection request")
-        if bundle.collection.needs_more_records(len(bundle.original.records)):
-
-            def persist(dataset: Dataset, progress: CollectionProgress) -> None:
-                nonlocal bundle
-                # Cursor/accounting/stop-reason updates alone do not change source rows.
-                if dataset.records != bundle.original.records:
-                    invalidate_checkpoints(bundle, "collected")
-                bundle = bundle.model_copy(
-                    update={"original": dataset, "collection": progress.model_copy(deep=True)}
-                )
-                edit.save(bundle)
-
-            source.fetch(
-                body.limit,
-                body.query,
-                should_stop=should_stop,
-                resume=bundle.original,
-                progress=bundle.collection,
-                persist=persist,
-                dedupe_similarity=settings.dedupe_similarity if settings.dedupe_enabled else None,
-            )
-        if can_start():
-            bundle = checkpoint_bundle(checkpoints, bundle, "collected")
-            edit.save(bundle)
-            history.record_dataset(bundle)
-    return _summary(bundle)
-
-
-def _store(
-    dataset: Dataset,
-    repo: BundleRepository,
-    checkpoints: CheckpointStore,
-    *,
-    dedupe: bool = True,
-    zone: tzinfo = UTC,
-) -> DatasetSummary:
-    """Deduplicate, persist, checkpoint and summarise a freshly collected dataset.
-
-    CSV and sample imports share this boundary. X deduplicates inside its paging loop so it can
-    keep fetching until the retained-record target is met. Restoring original data skips dedupe.
-    """
-    settings = get_settings()
-    if dedupe and settings.dedupe_enabled:
-        kept, removed = deduplicate(dataset.records, settings.dedupe_similarity)
-        if removed:
-            dataset = dataset.model_copy(
-                update={
-                    "records": kept,
-                    "filtered_out": {**dataset.filtered_out, **removed},
-                }
-            )
-    bundle = DatasetBundle(
-        dataset_id=uuid.uuid4().hex[:12],
-        original=dataset,
-        file_stem=default_file_stem(dataset.query, dataset.source_type, zone),
-    )
-    bind_context(dataset_id=bundle.dataset_id)
-    bundle = checkpoint_bundle(checkpoints, bundle, "collected")
-    repo.save(bundle)
-    history.record_dataset(bundle)
-    logger.info("dataset_stored", records=len(dataset.records), source=dataset.source_type)
-    return _summary(bundle)
-
-
-def _summary(bundle: DatasetBundle) -> DatasetSummary:
-    dataset = bundle.original
-    partial = bundle.collection is not None and bundle.collection.needs_more_records(
-        len(dataset.records)
-    )
-    warnings: list[str] = checkpoint_warnings(bundle)
-    if len(dataset.records) < MIN_RECORDS_FOR_TASK:
-        warnings.append(
-            f"only {len(dataset.records)} records; Task 1 needs at least {MIN_RECORDS_FOR_TASK}. "
-            + (
-                "Resume collection to continue from saved progress."
-                if partial
-                else "Try a broader query or the Hugging Face source."
-            )
-        )
-    return DatasetSummary(
-        dataset_id=bundle.dataset_id,
-        file_stem=bundle_file_stem(bundle),
-        source_type=dataset.source_type,
-        query=dataset.query,
-        window_start=dataset.window_start,
-        window_end=dataset.window_end,
-        record_count=len(dataset.records),
-        labelled_count=sum(1 for r in dataset.records if r.label),
-        filtered_out=dataset.filtered_out,
-        truncated_reason=dataset.truncated_reason
-        or ("more unique posts needed; resume collection" if partial else None),
-        billed_reads=bundle.collection.billed_reads if bundle.collection else None,
-        committed_cost_usd=float(bundle.collection.committed_cost_usd)
-        if bundle.collection and bundle.collection.committed_cost_usd is not None
-        else None,
-        partial=partial,
-        resume_request_id=bundle.dataset_id.removeprefix("x-") if bundle.collection else None,
-        retry_at=bundle.collection.retry_at or None if bundle.collection else None,
-        warnings=warnings,
-        preview=dataset.records[:PREVIEW_ROWS],
-    )
-
-
 def _download(content: bytes, media_type: str, filename: str) -> Response:
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
     )

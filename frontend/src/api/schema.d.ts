@@ -71,6 +71,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dataset/{dataset_id}/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Additional Candidates
+         * @description Explicitly extend a candidate quota; reuse approved criteria, cursors and cumulative caps.
+         */
+        post: operations["additional_candidates_dataset__dataset_id__candidates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dataset/upload": {
         parameters: {
             query?: never;
@@ -142,7 +162,7 @@ export interface paths {
         put?: never;
         /**
          * Open a local original dataset in Clean
-         * @description Validate a local working file and create a fresh run from its original rows.
+         * @description Reopen consumer review intact; general datasets start a fresh original-only run.
          */
         post: operations["restore_local_dataset_local_datasets__dataset_id__restore_post"];
         delete?: never;
@@ -235,6 +255,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dataset/{dataset_id}/eligibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eligibility Page
+         * @description Inspect original candidates and recoverable exclusions without enrichment calls.
+         */
+        get: operations["eligibility_page_dataset__dataset_id__eligibility_get"];
+        /**
+         * Review Eligibility
+         * @description Apply explicit human decisions, including unchanged confirmations and corrections.
+         */
+        put: operations["review_eligibility_dataset__dataset_id__eligibility_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dataset/{dataset_id}/labels/summary": {
         parameters: {
             query?: never;
@@ -321,8 +365,8 @@ export interface paths {
          * Choose what to review by hand
          * @description Fix the review set.
          *
-         *     ``none`` skips review, ``all`` reviews every record, ``sample`` picks ``size`` records (a
-         *     count or a percent) with a fixed seed so the same request always yields the same subset.
+         *     ``none`` skips review, ``all`` reviews every record, and ``sample`` uses a fixed seed.
+         *     ``low_confidence`` prioritizes unreviewed records with missing or low Comprehend scores.
          */
         put: operations["choose_review_dataset__dataset_id__labels_review_put"];
         post?: never;
@@ -472,6 +516,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/dataset/{dataset_id}/reviewed.parquet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Reviewed
+         * @description Fresh reviewed consumer rows plus embedded policy and completion metadata.
+         */
+        get: operations["export_reviewed_dataset__dataset_id__reviewed_parquet_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dataset/{dataset_id}/report.md": {
         parameters: {
             query?: never;
@@ -559,6 +623,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * AdditionalCandidatesRequest
+         * @description Absolute target makes retries idempotent; existing spend caps still apply.
+         */
+        AdditionalCandidatesRequest: {
+            /** Candidate Target */
+            candidate_target: number;
+            /**
+             * Confirm Cost
+             * @default false
+             */
+            confirm_cost: boolean;
+        };
         /** Body_upload_dataset_dataset_upload_post */
         Body_upload_dataset_dataset_upload_post: {
             /** File */
@@ -631,6 +708,88 @@ export interface components {
              * @default false
              */
             confirm_cost: boolean;
+        };
+        /**
+         * ConsumerCounts
+         * @description Separate provider work, screening, human decisions, and usable training rows.
+         */
+        ConsumerCounts: {
+            /** Retrieved */
+            retrieved: number;
+            /** Unique Records */
+            unique_records: number;
+            /** Screened Candidates */
+            screened_candidates: number;
+            /** Pending Eligibility */
+            pending_eligibility: number;
+            /** Human Inclusions */
+            human_inclusions: number;
+            /** Human Exclusions */
+            human_exclusions: number;
+            /** Included */
+            included: number;
+            /** Author Cap Held */
+            author_cap_held: number;
+            /** Missing Author */
+            missing_author: number;
+            /** Pending Sentiment */
+            pending_sentiment: number;
+            /** Reviewed Final */
+            reviewed_final: number;
+            /** Reviewed Target */
+            reviewed_target: number;
+            /** Shortfall */
+            shortfall: number;
+            /** Days */
+            days: components["schemas"]["DayCoverage"][];
+        };
+        /**
+         * ConsumerPolicy
+         * @description Immutable selection context; changing it requires a new collection.
+         */
+        ConsumerPolicy: {
+            /**
+             * Version
+             * @default consumer-reactions-v1
+             * @constant
+             */
+            version: "consumer-reactions-v1";
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /**
+             * Timezone
+             * @default America/Chicago
+             */
+            timezone: string;
+            /**
+             * Per Author Limit
+             * @default 2
+             */
+            per_author_limit: number;
+            /**
+             * Reviewed Target
+             * @default 500
+             */
+            reviewed_target: number;
+            /**
+             * Duplicate Threshold
+             * @default 0.9
+             */
+            duplicate_threshold: number;
+            /**
+             * Selection Rule
+             * @default daily-quotas-recency;author-earliest-id
+             * @constant
+             */
+            selection_rule: "daily-quotas-recency;author-earliest-id";
         };
         /**
          * CsvValidation
@@ -721,6 +880,101 @@ export interface components {
             warnings?: string[];
             /** Preview */
             preview: components["schemas"]["Record"][];
+            consumer_policy?: components["schemas"]["ConsumerPolicy"] | null;
+            consumer_counts?: components["schemas"]["ConsumerCounts"] | null;
+            /** Candidate Target */
+            candidate_target?: number | null;
+            /** Can Collect More */
+            can_collect_more?: boolean;
+        };
+        /**
+         * DayCoverage
+         * @description Actual coverage including empty days, expressed in the requested timezone.
+         */
+        DayCoverage: {
+            /** Day */
+            day: string;
+            /**
+             * Candidates
+             * @default 0
+             */
+            candidates: number;
+            /**
+             * Included
+             * @default 0
+             */
+            included: number;
+            /**
+             * Reviewed Final
+             * @default 0
+             */
+            reviewed_final: number;
+        };
+        /**
+         * EligibilityItem
+         * @description An explicit operator confirmation; overrides must explain the changed suggestion.
+         */
+        EligibilityItem: {
+            /** Id */
+            id: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "pending";
+            /** Reason */
+            reason?: ("news_or_article" | "giveaway_or_promotion" | "technical_developer_content" | "duplicate_or_repeated_template" | "off_topic" | "insufficient_context" | "not_english") | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+        };
+        /**
+         * EligibilityPage
+         * @description All candidates remain inspectable, including excluded and author-limited records.
+         */
+        EligibilityPage: {
+            /** Total */
+            total: number;
+            /** Offset */
+            offset: number;
+            /** Items */
+            items: components["schemas"]["Record"][];
+            /** Included Ids */
+            included_ids: string[];
+            counts: components["schemas"]["ConsumerCounts"];
+        };
+        /**
+         * EligibilityRequest
+         * @description Human decisions applied under the existing exclusive dataset edit.
+         */
+        EligibilityRequest: {
+            /** Items */
+            items: components["schemas"]["EligibilityItem"][];
+        };
+        /**
+         * EligibilityReview
+         * @description Recoverable operator decision and its explanation; no identity inference.
+         */
+        EligibilityReview: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "pending";
+            /** Reason */
+            reason?: ("news_or_article" | "giveaway_or_promotion" | "technical_developer_content" | "duplicate_or_repeated_template" | "off_topic" | "insufficient_context" | "not_english") | null;
+            /**
+             * Note
+             * @default
+             */
+            note: string;
+            /**
+             * Reviewed At
+             * Format: date-time
+             */
+            reviewed_at?: string;
         };
         /**
          * ErrorResponse
@@ -989,6 +1243,31 @@ export interface components {
              * @description Newest post to return (X only). Clamped to a few seconds ago.
              */
             end_time?: string | null;
+            /**
+             * Preset
+             * @default general
+             * @enum {string}
+             */
+            preset: "general" | "consumer_reactions";
+            /** Start Date */
+            start_date?: string | null;
+            /** End Date */
+            end_date?: string | null;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+            /**
+             * Per Author Limit
+             * @default 2
+             */
+            per_author_limit: number;
+            /**
+             * Reviewed Target
+             * @default 500
+             */
+            reviewed_target: number;
         };
         /**
          * LocalDatasetFile
@@ -1037,6 +1316,31 @@ export interface components {
         ManualLabelRequest: {
             /** Items */
             items: components["schemas"]["ManualLabelItem"][];
+        };
+        /**
+         * PostReference
+         * @description Relationships supplied by X, without fetching related posts.
+         */
+        PostReference: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "replied_to" | "quoted" | "retweeted";
+        };
+        /**
+         * PostUrl
+         * @description Only URL evidence needed for review; linked pages are never fetched.
+         */
+        PostUrl: {
+            /** Url */
+            url: string;
+            /** Expanded Url */
+            expanded_url?: string | null;
+            /** Display Url */
+            display_url?: string | null;
         };
         /**
          * PreprocessRequest
@@ -1145,6 +1449,36 @@ export interface components {
             created_at?: string | null;
             /** Tokens */
             tokens?: string[] | null;
+            /** Author Id */
+            author_id?: string | null;
+            /** Lang */
+            lang?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** In Reply To User Id */
+            in_reply_to_user_id?: string | null;
+            /** References */
+            references?: components["schemas"]["PostReference"][];
+            /** Urls */
+            urls?: components["schemas"]["PostUrl"][];
+            screening?: components["schemas"]["ScreeningSuggestion"] | null;
+            /**
+             * Eligibility
+             * @enum {string}
+             */
+            eligibility?: "include" | "exclude" | "pending";
+            /** Eligibility Reviewed */
+            eligibility_reviewed?: boolean;
+            /** Eligibility Reason */
+            eligibility_reason?: ("news_or_article" | "giveaway_or_promotion" | "technical_developer_content" | "duplicate_or_repeated_template" | "off_topic" | "insufficient_context" | "not_english") | null;
+            /** Eligibility Note */
+            eligibility_note?: string;
+            /** Eligibility History */
+            eligibility_history?: components["schemas"]["EligibilityReview"][];
+            /** Sentiment Reviewed */
+            sentiment_reviewed?: boolean;
+            /** Sentiment Reviewed At */
+            sentiment_reviewed_at?: string | null;
         };
         /**
          * RecordPage
@@ -1217,6 +1551,28 @@ export interface components {
         SaveResponse: {
             /** Uri */
             uri?: string | null;
+        };
+        /**
+         * ScreeningSuggestion
+         * @description Explainable machine suggestion, never evidence of completed human review.
+         */
+        ScreeningSuggestion: {
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "include" | "exclude" | "pending";
+            /** Reason */
+            reason?: ("news_or_article" | "giveaway_or_promotion" | "technical_developer_content" | "duplicate_or_repeated_template" | "off_topic" | "insufficient_context" | "not_english") | null;
+            /** Evidence */
+            evidence?: string[];
+            /** Duplicate Of */
+            duplicate_of?: string | null;
+            /**
+             * Policy Version
+             * @default consumer-reactions-v1
+             */
+            policy_version: string;
         };
         /**
          * SentimentComparison
@@ -1443,6 +1799,54 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["LoadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSummary"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    additional_candidates_dataset__dataset_id__candidates_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+                "X-Time-Zone"?: string;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdditionalCandidatesRequest"];
             };
         };
         responses: {
@@ -1813,6 +2217,100 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PreprocessResponse"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    eligibility_page_dataset__dataset_id__eligibility_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                status?: "all" | "pending" | "include" | "exclude" | "sentiment";
+            };
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EligibilityPage"];
+                };
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    review_eligibility_dataset__dataset_id__eligibility_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EligibilityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatasetSummary"];
                 };
             };
             /** @description Client Error */
@@ -2327,6 +2825,50 @@ export interface operations {
         };
     };
     export_parquet_dataset__dataset_id__export_parquet_get: {
+        parameters: {
+            query?: {
+                /** @description Filename without its fixed extension */
+                filename?: string | null;
+            };
+            header?: {
+                "X-API-Key"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                dataset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Client Error */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Server Error */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    export_reviewed_dataset__dataset_id__reviewed_parquet_get: {
         parameters: {
             query?: {
                 /** @description Filename without its fixed extension */

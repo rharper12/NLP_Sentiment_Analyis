@@ -4,7 +4,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from sentiment_prep.api import deps, routes
+from sentiment_prep.api import collection as collection_service
+from sentiment_prep.api import deps
 from sentiment_prep.api.app import create_app
 from sentiment_prep.api.routes import convert_checkpoint, list_checkpoints, preprocess
 from sentiment_prep.api.schemas import LoadRequest, PreprocessRequest
@@ -73,9 +74,9 @@ def test_checkpoint_failure_preserves_prior_snapshot_and_safe_warning(
     assert store.read("snapshot", "collected", "csv") == before
     assert "could not be updated" in checkpoint_warnings(failed)[0]
     assert "/protected/path" not in str(checkpoint_warnings(failed))
-    from sentiment_prep.api.routes import _summary
+    from sentiment_prep.api.collection import summarize
 
-    assert checkpoint_warnings(failed)[0] in _summary(failed).warnings
+    assert checkpoint_warnings(failed)[0] in summarize(failed).warnings
 
 
 def test_converted_revision_becomes_stale_and_regenerates(tmp_path, monkeypatch):
@@ -198,7 +199,9 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         TestClient(app) as client,
     ):
         monkeypatch.setattr(deps, "get_x_source", lambda *a: XSearchSource(guard, provider))
-        first = routes._collect_x(request, repo, store, settings, lambda: len(calls) >= 5)
+        first = collection_service.collect_x(
+            request, repo, store, settings, lambda: len(calls) >= 5
+        )
         initial_rows = 499 if change == "deduplicate" else 500
         assert first.record_count == initial_rows and first.partial
         root = f"/dataset/{first.dataset_id}"
@@ -219,12 +222,12 @@ def test_collection_resume_tracks_downstream_freshness_and_preserves_labels(
         }
 
         # Cancellation changes only collection metadata: no downstream invalidation or spending.
-        routes._collect_x(request, repo, store, settings, lambda: True)
+        collection_service.collect_x(request, repo, store, settings, lambda: True)
         unchanged = repo.get(first.dataset_id)
         assert unchanged.checkpoint_status == before.checkpoint_status
         assert len(calls) == 5
 
-        resumed = routes._collect_x(request, repo, store, settings, lambda: False)
+        resumed = collection_service.collect_x(request, repo, store, settings, lambda: False)
         # Reopen the repository so assertions cover persisted, revalidated state.
         result = LocalRepository(tmp_path / "working").get(first.dataset_id)
         expected_rows = {"append": 600, "deduplicate": 500, "overlap": 500}[change]

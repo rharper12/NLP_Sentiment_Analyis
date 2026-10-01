@@ -1,7 +1,9 @@
 """Hard caps on paid API reads.
 
-The X API bills every returned post. A pagination bug that loops forever would run up a bill,
-so reads are reserved *before* each request and refused once either cap is reached. The daily
+Every returned post is conservatively counted, including locally rejected posts. X may deduplicate
+resource charges within a UTC day; its billing deduplication is a soft guarantee, so this ledger
+is a spend estimate, not an invoice. Reads are reserved *before* each request and refused once
+either cap is reached. The daily
 counter lives behind a ``SpendLedger`` protocol; production uses the database-backed ledger in
 ``history.services`` so a Lambda cold start cannot reset the day's total, and the reservation is
 atomic so concurrent invocations cannot both spend the last of the budget.

@@ -30,10 +30,13 @@ dev = [
     "mypy",
     "types-PyYAML",
     "boto3-stubs[comprehend,pricing,s3,ssm]",
+    "playwright>=1.50",
+    "setuptools==84.0.0",
+    "uv==0.12.21",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
