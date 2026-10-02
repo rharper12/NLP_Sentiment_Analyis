@@ -224,6 +224,11 @@ def test_calendar_slices_preserve_originals_metadata_and_costs(collection):
     assert c.bundle().original.records[1].text.endswith("complete ")
     assert c.bundle().original.records[1].references[0].id == "0003"
     assert c.requests[0].url.params["end_time"] == c.requests[1].url.params["start_time"]
+    assert [r.url.params["start_time"] for r in c.requests] == [
+        "2026-09-09T05:00:00Z",
+        "2026-09-10T05:00:00Z",
+    ]
+    assert all(r.url.params["sort_order"] == "recency" for r in c.requests)
     assert all(
         r.url.path.endswith("/search/all") and "expansions" not in r.url.params for r in c.requests
     )
@@ -231,7 +236,8 @@ def test_calendar_slices_preserve_originals_metadata_and_costs(collection):
     assert len(c.requests) == 2  # exhausted is terminal
 
 
-def test_additional_target_preserves_day_cursors_decisions_seen_ids_and_spend(collection):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_additional_target_preserves_day_cursors_decisions_seen_ids_and_spend(collection, legacy):
     c = collection
 
     def reply(request):
@@ -248,10 +254,13 @@ def test_additional_target_preserves_day_cursors_decisions_seen_ids_and_spend(co
     first = c.load()
     assert first.record_count == 20 and first.can_collect_more
     assert first.consumer_counts.retrieved == 20
+    assert first.first_batch_saved == first.last_batch_saved == 20
     with c.repo.edit("x-consumer-test") as edit:
         saved = edit.bundle
         saved.original.records[0].eligibility = "exclude"
         saved.original.records[0].eligibility_reviewed = True
+        if legacy:
+            saved.collection.first_batch_saved = saved.collection.last_batch_saved = None
         edit.save(saved)
     response = c.client.post(
         "/dataset/x-consumer-test/candidates", json={"candidate_target": 40, "confirm_cost": True}
@@ -259,6 +268,8 @@ def test_additional_target_preserves_day_cursors_decisions_seen_ids_and_spend(co
     assert response.status_code == 200
     result = collection_service.summarize(c.bundle())
     assert result.record_count == 22 and result.billed_reads == 42
+    assert result.first_batch_saved == (None if legacy else 20)
+    assert result.last_batch_saved == 2  # Repeated provider IDs are not new saved posts.
     assert result.consumer_counts.unique_records == 22
     assert result.consumer_counts.human_exclusions == 1
     assert result.committed_cost_usd == pytest.approx(0.21)
@@ -450,3 +461,151 @@ def test_cancellation_preserves_candidates_and_resumes_same_daily_cursor(collect
     c.reply = lambda r: httpx.Response(200, json={"data": [], "meta": {}})
     c.load()
     assert c.requests[1].url.params["next_token"] == "next"
+
+
+def test_single_review_request_is_atomic_and_pending_queue_skips_completed_posts(collection):
+    c = collection
+    c.reply = lambda request: httpx.Response(
+        200,
+        json={
+            "data": [
+                post(request.url.params["start_time"][8:10], request.url.params["start_time"])
+            ],
+            "meta": {},
+        },
+    )
+    c.load()
+    base = "/dataset/x-consumer-test"
+    ids = [r.id for r in c.bundle().original.records]
+    invalid = c.client.put(
+        base + "/eligibility",
+        json={
+            "items": [
+                {
+                    "id": ids[0],
+                    "decision": "include",
+                    "note": "Independent reaction checked against topic",
+                    "label": "negative",
+                },
+                {
+                    "id": "unknown",
+                    "decision": "include",
+                    "note": "Independent reaction checked against topic",
+                    "label": "positive",
+                },
+            ]
+        },
+    )
+    assert invalid.status_code == 400
+    assert not any(r.eligibility_reviewed for r in c.bundle().original.records)
+    saved = c.client.put(
+        base + "/eligibility",
+        json={
+            "items": [
+                {
+                    "id": ids[0],
+                    "decision": "include",
+                    "note": "Independent reaction checked against topic",
+                    "label": "negative",
+                }
+            ]
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["consumer_counts"]["reviewed_final"] == 1
+    remaining = c.client.get(base + "/eligibility?status=needs_review").json()
+    assert [r["id"] for r in remaining["items"]] == [ids[1]]
+    # Old eligibility-only saves remain supported and appear in the same pending queue.
+    assert (
+        c.client.put(
+            base + "/eligibility",
+            json={
+                "items": [
+                    {
+                        "id": ids[1],
+                        "decision": "include",
+                        "note": "Independent reaction checked against topic",
+                    }
+                ]
+            },
+        ).status_code
+        == 200
+    )
+    assert c.client.get(base + "/eligibility?status=needs_review").json()["total"] == 1
+    assert (
+        c.client.put(
+            base + "/eligibility",
+            json={
+                "items": [
+                    {
+                        "id": ids[1],
+                        "decision": "include",
+                        "note": "Independent reaction checked against topic",
+                        "label": "positive",
+                    }
+                ]
+            },
+        ).status_code
+        == 200
+    )
+    assert c.client.get(base + "/eligibility?status=needs_review").json()["total"] == 0
+
+
+def test_rate_limited_439_resumes_to_530_without_replaying_paid_pages(collection, monkeypatch):
+    c = collection
+    c.body = request_body(limit=530, end_date="2026-09-09")
+    clock = [1_900_000_000.0]
+    monkeypatch.setattr("sentiment_prep.sources.x_search.time.time", lambda: clock[0])
+
+    def reply(request):
+        offset = int(request.url.params.get("next_token", "0"))
+        if offset >= 439 and clock[0] < 1_900_000_060:
+            return httpx.Response(429, headers={"x-rate-limit-reset": "1900000060"})
+        maximum = 439 if clock[0] < 1_900_000_060 else 530
+        end = min(offset + int(request.url.params["max_results"]), maximum)
+        return httpx.Response(
+            200,
+            json={
+                "data": [post(str(i), "2026-09-09T12:00:00Z") for i in range(offset, end)],
+                "meta": {"next_token": str(end)},
+            },
+        )
+
+    c.reply = reply
+    first = c.load()
+    assert first.record_count == 439 and first.candidate_target == 530 and first.partial
+    assert first.billed_reads == 439 and first.retry_at == 1_900_000_060
+    assert first.first_batch_saved == first.last_batch_saved == 439
+    base = "/dataset/x-consumer-test"
+    assert c.client.get(base).json()["first_batch_saved"] == 439
+    assert (
+        c.client.put(
+            base + "/eligibility",
+            json={"items": [{"id": "0", "decision": "include", "label": "positive"}]},
+        ).status_code
+        == 200
+    )
+    reviewed = c.bundle().original.records[0]
+    before = len(c.requests)
+    body = {"candidate_target": 530, "confirm_cost": True}
+    paused = c.client.post(base + "/candidates", json=body)
+    assert paused.status_code == 200 and paused.json()["record_count"] == 439
+    assert paused.json()["last_batch_saved"] == 0
+    assert paused.json()["first_batch_saved"] == 439
+    assert len(c.requests) == before  # An early click cannot pay for another provider page.
+    clock[0] = 1_900_000_061
+    resumed = c.client.post(base + "/candidates", json=body)
+    assert resumed.status_code == 200
+    result = resumed.json()
+    assert result["record_count"] == 530 and result["billed_reads"] == 530
+    assert result["last_batch_saved"] == 91 and result["first_batch_saved"] == 439
+    assert c.client.get(base).json()["last_batch_saved"] == 91
+    assert result["candidate_target"] == 530 and not result["partial"]
+    assert result["retry_at"] is None
+    assert len(c.requests) == before + 1
+    assert c.requests[-1].url.params["next_token"] == "439"
+    assert len({r.id for r in c.bundle().original.records}) == 530
+    assert c.bundle().original.records[0] == reviewed
+    assert c.client.get(base + "/eligibility?status=needs_review").json()["total"] == 529
+    c.client.post(base + "/candidates", json=body)
+    assert len(c.requests) == before + 1

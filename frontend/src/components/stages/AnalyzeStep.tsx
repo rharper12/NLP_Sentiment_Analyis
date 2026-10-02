@@ -25,13 +25,14 @@ interface Props {
   onRerun: () => void;
   onBack: () => void;
   onContinue: () => void;
+  continueLabel?: string;
 }
 
 const fmt = (n: number) => n.toLocaleString();
 const pct = (a: number, b: number) => (a === 0 ? null : ((b - a) / a) * 100);
 
 /** Stage 3. The numbers first, then a chart, then the evidence (records). */
-export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue }: Props) {
+export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, busy, error, runVersion, onCancel, onRerun, onBack, onContinue, continueLabel = "Label" }: Props) {
   const [selected, setSelected] = useState<{ pair: RecordPair; trigger?: HTMLElement } | null>(null);
   const selectRecord = useCallback((pair: RecordPair, trigger?: HTMLElement) => setSelected({ pair, trigger }), []);
   const records = useAsync<RecordPair[]>();
@@ -135,8 +136,8 @@ export function AnalyzeStep({ diagnostics, datasetId, recordCount, theme, run, b
 
       {run && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">
-          <p className="text-sm text-muted">Inspect changed posts before assigning or reviewing sentiment labels.</p>
-          <button type="button" className="btn-primary" disabled={busy} onClick={onContinue}>Continue to Label →</button>
+          <p className="text-sm text-muted">{continueLabel === "Export" ? "Check how cleaning changed the text before exporting. Your saved labels still describe the original posts." : "Inspect changed posts before assigning or reviewing sentiment labels."}</p>
+          <button type="button" className="btn-primary" disabled={busy} onClick={onContinue}>Continue to {continueLabel} →</button>
         </div>
       )}
 

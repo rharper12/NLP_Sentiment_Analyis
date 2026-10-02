@@ -3,7 +3,8 @@
 This follows one complete run from a click in the browser to the files that come out, naming the
 module responsible at each step. Open the files as you read.
 
-The UI is a five-stage flow: Collect → Clean → Analyze → Label → Export (`frontend/src/App.tsx` owns the
+General search, CSV and sample datasets follow Collect → Clean → Analyze → Label → Export.
+Consumer reactions follows Collect → Review & label → Clean → Analyze → Export (`frontend/src/App.tsx` owns the
 stage state; each stage is a component under `components/stages/`).
 
 ![Collect](images/1-collect.png)
@@ -112,35 +113,40 @@ To run the pilot after authorizing its cost:
 1. Start the existing app with `make dev`. Check the server's `X_BEARER_TOKEN`, archive entitlement,
    `X_MAX_READS_PER_FETCH`, `X_MAX_READS_PER_DAY`, and `X_COST_PER_READ_USD` settings. Do not paste
    secrets into the topic field. Select Consumer reactions, confirm the dates/timezone, and set
-   **Candidate target** to 50–100. Leave the final reviewed target at 500 to see the actual shortfall.
+   **Posts to collect** to 50–100. Leave the final reviewed target at 500 to see the actual shortfall.
 2. Inspect the displayed estimate and caps before **Search and collect**. That click authorizes
    collection. At a configured $0.005 per read, 50–100 reads estimate $0.25–$0.50, but filtering,
    page minimums and ambiguous retries can require more reads. X's [pricing documentation](https://docs.x.com/x-api/getting-started/pricing)
    describes daily resource-charge deduplication as a soft guarantee; the local ledger conservatively
    counts returned reads and is not an invoice. Review rejections are not cost-free.
-3. Click **Review eligibility →** after collection to open Label directly. Clean and Analyze remain
-   available; consumer preprocessing computes local candidate metrics without automatically calling
-   Comprehend. In Label, use **All candidates** or **Pending eligibility** to inspect originals, suggestions,
-   reasons, timestamps and references. Confirm inclusion/exclusion, or leave Needs review. An
-   override requires an explanation. Save status confirms persistence; merely visiting does not.
-   To drop a record from the reviewed export, select **Exclude**, choose its reason, and save.
-   Exclusions remain recoverable. Existing General search, CSV, and sample datasets use
-   sentiment-only labeling; selecting Consumer reactions for a new search does not convert them.
-4. Inspect **Human inclusions** and **Human exclusions** before scaling. Correct false positives
-   and false negatives, including criticism, linked opinions and ambiguous promotions. Check the
-   per-day table and author-limit holds. **Needs review / pending → Save** undoes a decision.
-5. Choose **Sentiment — included after author limit**. Confirm positive/negative/neutral/mixed
-   with buttons or keys 1–4 while focused inside review. An unchanged label still completes review.
-   Initial eligibility review hides automated sentiment. Both human review flags are required
-   for the final count; 100 candidates do not mean 100 training examples.
-6. Export **Reviewed consumer Parquet** to inspect a partial result. After assessing both
-   accepted and rejected pilot rows, use **Still need … reviewed records** in Label or Collect.
-   The additional candidate quota defaults to the current shortfall, within the existing 5,000
-   candidate limit, and can be lowered for a smaller batch. The panel also shows pending reviews
-   that could fill the gap without spending. Click **Collect additional candidates** explicitly;
-   the app returns to review after the request. New candidates still require both reviews.
-   Repeat manually while below the final target. An unfinished batch offers **Resume candidate
-   request** with the same authorized target instead of increasing its quota. At the reviewed
+3. Collect shows total saved, added last request, and still to collect. The first request's saved
+   count remains visible after later requests; older datasets without this history show unknown
+   counts. **Get more posts** finishes the same authorized goal. Search and cost details expand
+   on demand; there are no tweet previews or review counters here. The search form collapses
+   under **Start another collection**. Click **Continue to Review & label →** for step 2, before
+   cleaning. The **Needs review** view contains new candidates and earlier inclusions that still
+   need a human sentiment label. Read the original once, choose **Keep & label** and a sentiment,
+   or **Exclude post** and a reason, then **Save and next →**. Both decisions are saved in one
+   request. Screening overrides require an explanation; automated sentiment never decides
+   eligibility. Negative, positive, mixed and neutral reactions use the same inclusion rules.
+4. **Kept posts**, **Excluded posts** and **All posts** use the same review form for corrections.
+   Restoring an exclusion and choosing its label takes one save. Originals and eligibility history
+   remain available. Author-limit holds retain human labels if later selection changes. Expand
+   **Collection details & date coverage** to inspect sampling and the per-day table. Only kept,
+   fully reviewed posts within the author limit count toward the target.
+5. Failed saves retain your choices. Navigation and new collection requests are disabled while
+   edits are unsaved; save or **Discard changes** before leaving. Native radio groups support
+   Tab, arrow keys and Space. After a successful save, focus moves to the next review heading.
+   **Continue to Clean →** configures preprocessing, Analyze shows its effect, and then Export
+   offers **Reviewed consumer Parquet**. Neither cleaning nor analysis requires another labeling
+   pass. You can continue with a partial dataset, and consumer analysis uses no cloud scoring.
+6. If review leaves the target short, use **Get more posts** on the review screen.
+   The quota subtracts pending reviews from the shortfall, within the 5,000-candidate limit. Finish
+   existing pending reviews first to avoid unnecessary spending. Collection is always explicit;
+   the review screen stays open while loading, and new posts join the same pending queue. Saved
+   decisions remain in place. Rejected collection requests display a recoverable error there.
+   Repeat manually while below the final target. An unfinished batch uses the same authorized
+   target instead of increasing its quota. At the reviewed
    target, the button is replaced by a completion message and the API refuses further collection.
    A later review correction can reopen the option. This keeps dates, query,
    policy, seen IDs, per-day cursors and cumulative spend accounting. It never collects on an
@@ -272,3 +278,13 @@ The spend chip in the header reads `GET /spend`, which sums the ledger rows. The
 (`HistoryDialog.tsx`) reads `GET /history`. Both are SQLAlchemy queries against `history/`.
 
 ![Phone, dark theme](images/phone-export-dark.png)
+
+### Review workflow design references
+
+The single-pass consumer review groups related decisions around the same original post. The
+visible step order follows the task, with summary details disclosed on demand and saved choices
+available for correction. This applies [Nielsen Norman Group's usability heuristics](https://www.nngroup.com/articles/ten-usability-heuristics/)
+on visible state, recognition, recovery and focused presentation. The step indicator and focus
+behavior follow [W3C's multi-page form guidance](https://www.w3.org/WAI/tutorials/forms/multi-page/),
+and save feedback uses [status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html).
+These references inform the design; automated checks do not replace assistive-technology and user testing.

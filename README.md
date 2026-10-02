@@ -38,15 +38,24 @@ sentiment; it does not necessarily describe sentiment toward the topic you searc
 
 General X collection stops at the requested retained-post count, a spend cap, or provider
 exhaustion. The **Consumer reactions** preset divides candidate quotas across the requested
-days and separates eligibility from sentiment review. Its target counts only included,
+days and records eligibility and sentiment together in one manual review. Its target counts only included,
 fully reviewed records. If review leaves a shortfall, explicitly request another candidate
 batch, review it, and repeat while results and budget remain available. These are bounded
 samples; date coverage and representativeness must still be assessed.
 
-Consumer reactions uses your own topic and dates. After collection, **Review eligibility →**
-opens Label directly: choose **Exclude**, select a reason, and save to leave an unwanted row
-out of the **Reviewed consumer Parquet** export. Originals remain recoverable. General search,
-CSV, and sample datasets use sentiment-only labeling.
+Consumer reactions uses your own topic and dates and follows **Collect → Review & label → Clean →
+Analyze → Export**. Read each original once: **Keep & label** with a sentiment, or **Exclude post**
+with a reason, then **Save and next**. New candidates join Needs review; saved decisions stay in
+place. Excluded originals remain recoverable. General search, CSV and sample datasets use the
+standard sentiment-labeling flow.
+
+Collect shows total saved, added last request, and still to collect, with the first request's
+saved count retained across later requests. Older datasets without batch history show unknown
+counts. Tweet previews and review counters appear in Review; search and cost details expand on
+demand. **Get more posts** keeps the same dataset and waits for X's retry deadline when rate
+limited. It never runs automatically. Review
+available candidates before purchasing another batch; the suggested quota accounts for posts
+still awaiting review. Interrupted responses trigger a read-only refresh of saved progress.
 
 ## Screenshots
 

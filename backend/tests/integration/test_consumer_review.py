@@ -88,6 +88,20 @@ def export(client):
     return table.to_pylist(), json.loads(table.schema.metadata[b"sentiment_prep"])
 
 
+def test_clean_after_combined_review_refreshes_labelled_snapshot_without_relabeling(review):
+    client, repo, store = review
+    assert decide(client, "0", "include", label="positive").status_code == 200
+    before = repo.get("consumer").original.records[0]
+    result = client.post("/dataset/consumer/preprocess", json={"steps": ["lowercase"]})
+    assert result.status_code == 200
+    assert not any("checkpoint" in warning for warning in result.json()["warnings"])
+    saved = repo.get("consumer")
+    assert saved.checkpoint_status["labelled:csv"].status == "current"
+    assert saved.original.records[0] == before
+    content = store.read("consumer", "labelled", "csv")
+    assert content and b"i love iphone duo" in content and b"positive" in content
+
+
 def test_reviewed_export_confirms_unchanged_choices_preserves_scores_and_rebuilds(review):
     client, repo, store = review
     url = "/dataset/consumer"

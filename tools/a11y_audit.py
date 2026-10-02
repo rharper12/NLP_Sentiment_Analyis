@@ -146,6 +146,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
 
     await page.goto(UI)
     await page.wait_for_selector("text=Search and collect", timeout=15000)
+    await page.get_by_text("Search tips", exact=True).click()
     guide = page.get_by_role("link", name=re.compile("X query guide"))
     await expect(guide).to_have_attribute(
         "href", "https://docs.x.com/x-api/posts/search/integrate/build-a-query"
@@ -189,7 +190,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     await expect(page.get_by_role("button", name="Import CSV")).to_be_enabled()
     await audit("csv-ready")
     await page.click("button[type=submit]")
-    await page.wait_for_selector("text=posts collected", timeout=15000)
+    await page.wait_for_selector("text=Collection results", timeout=15000)
     await audit("collected")
 
     # Keep the archive download covered, then open the automatically saved local JSON.
@@ -202,6 +203,7 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     )
     original_path = await downloaded.path()
     assert original_path
+    await page.get_by_text("Start another collection", exact=True).click()
     await page.get_by_role("tab", name="Saved datasets").click()
     await audit("saved-dataset")
     picker = page.get_by_role("combobox", name="Saved dataset", exact=True)

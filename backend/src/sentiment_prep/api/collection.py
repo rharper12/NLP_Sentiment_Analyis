@@ -141,9 +141,19 @@ def collect_x(
         if bundle.collection.needs_more_records(len(bundle.original.records)) and (
             not policy or eligibility.counts(bundle).shortfall > 0
         ):
+            saved_before = len(bundle.original.records)
+            first_batch = (
+                bundle.collection.first_batch_saved is None
+                and bundle.collection.billed_reads == 0
+                and saved_before == 0
+            )
 
             def persist(dataset: Dataset, progress: CollectionProgress) -> None:
                 nonlocal bundle
+                # Commit the request delta with each page, including interrupted requests.
+                progress.last_batch_saved = max(0, len(dataset.records) - saved_before)
+                if first_batch:
+                    progress.first_batch_saved = progress.last_batch_saved
                 # Cursor/accounting/stop-reason updates alone do not change source rows.
                 if dataset.records != bundle.original.records:
                     invalidate_checkpoints(bundle, "collected")
@@ -239,6 +249,8 @@ def summarize(bundle: DatasetBundle, *, local_dev: bool = False) -> DatasetSumma
         committed_cost_usd=float(bundle.collection.committed_cost_usd)
         if bundle.collection and bundle.collection.committed_cost_usd is not None
         else None,
+        first_batch_saved=bundle.collection.first_batch_saved if bundle.collection else None,
+        last_batch_saved=bundle.collection.last_batch_saved if bundle.collection else None,
         partial=partial,
         resume_request_id=bundle.dataset_id.removeprefix("x-") if bundle.collection else None,
         retry_at=bundle.collection.retry_at or None if bundle.collection else None,

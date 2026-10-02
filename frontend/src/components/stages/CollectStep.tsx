@@ -1,4 +1,4 @@
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import type { CollectionWindow, DatasetSummary } from "../../api/types";
 import { api } from "../../api/client";
@@ -8,8 +8,8 @@ import { Notice } from "../ui/Notice";
 import { Skeleton } from "../ui/Skeleton";
 import { CsvUpload } from "../collect/CsvUpload";
 import { SavedDatasetPicker } from "../collect/SavedDatasetPicker";
-import { ConsumerSummary } from "../label/ConsumerSummary";
 import { AdditionalCandidates } from "../collect/AdditionalCandidates";
+import { CollectionStatus } from "../collect/CollectionStatus";
 
 type Source = "x" | "huggingface" | "csv" | "saved";
 const MIN_RECORDS = 500;
@@ -18,9 +18,11 @@ interface Props {
   busy: boolean;
   error: Error | null;
   dataset: DatasetSummary | null;
+  collectionMessage?: string;
   xConfigured: boolean;
   costPerRead?: number | null;
   onSearch: (query: string, limit: number, window: CollectionWindow) => void;
+  onModeChange?: (consumer: boolean) => void;
   onAdditional?: (target: number) => void;
   onLoadSample: (limit: number) => void;
   onUpload: (file: File) => void;
@@ -32,16 +34,18 @@ interface Props {
 }
 
 /**
- * Stage 1. The search box is the hero: type a topic, get posts. Sample dataset and CSV upload are
- * offered as secondary paths so the flow works without an X account.
+ * Collect first, then show saved totals and the next action. New-search controls collapse
+ * after success so they cannot be mistaken for adding to the current dataset.
  */
 export function CollectStep({
   busy,
   error,
   dataset,
+  collectionMessage,
   xConfigured,
   costPerRead,
   onSearch,
+  onModeChange,
   onAdditional,
   onLoadSample,
   onUpload,
@@ -61,17 +65,31 @@ export function CollectStep({
   const [consumer, setConsumer] = useState(false);
   const [authorLimit, setAuthorLimit] = useState(2);
   const [reviewedTarget, setReviewedTarget] = useState(500);
+  const selectCommit = useRef(false);
+  const resultsHeading = useRef<HTMLHeadingElement>(null);
+  const previousId = useRef(dataset?.dataset_id);
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (!busy && (wasBusy.current || dataset?.dataset_id !== previousId.current)) {
+      previousId.current = dataset?.dataset_id;
+      if (dataset) resultsHeading.current?.focus();
+    }
+    wasBusy.current = busy;
+  }, [busy, dataset]);
   const ids = { q: useId(), n: useId(), tabs: useId(), modeHelp: useId() };
 
   const selectSource = (next: Source) => {
     if (source === next) return;
     setSource(next);
+    onModeChange?.(next === "x" && consumer);
     setFile(null);
     setSavedId("");
   };
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    // Native selects can submit on Enter; choosing an option does not authorize a search.
+    if (selectCommit.current) return;
     if (!canSubmit) return;
     if (source === "x")
       onSearch(query.trim(), limit, {
@@ -125,379 +143,299 @@ export function CollectStep({
   ];
   if (localDatasetsAvailable) sources.push(["saved", "Saved datasets"]);
 
-  return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-8">
-      <div className="pt-4 text-center sm:pt-10">
-        <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">Collect your dataset</h2>
-        <p className="mt-2 text-muted">
-          Search posts on X, try the sample dataset, or import your own CSV.
-        </p>
+  const form = (
+    <form
+      onSubmit={submit}
+      onKeyDownCapture={(event) => {
+        selectCommit.current = event.key === "Enter" && (event.target as HTMLElement).tagName === "SELECT";
+      }}
+      onKeyUpCapture={() => { selectCommit.current = false; }}
+      onPointerDownCapture={() => { selectCommit.current = false; }}
+      className="glass-panel flex flex-col gap-5 p-4 sm:p-6"
+    >
+      <div
+        role="tablist"
+        aria-label="Data source"
+        className={`grid grid-cols-2 gap-2 text-sm ${localDatasetsAvailable ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}
+      >
+        {sources.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            id={`${ids.tabs}-${id}`}
+            aria-controls={`${ids.tabs}-panel`}
+            tabIndex={source === id ? 0 : -1}
+            disabled={busy}
+            aria-selected={source === id}
+            onClick={() => selectSource(id)}
+            onKeyDown={(event) => {
+              const index = sources.findIndex(([key]) => key === id);
+              const target =
+                event.key === "ArrowRight"
+                  ? (index + 1) % sources.length
+                  : event.key === "ArrowLeft"
+                    ? (index - 1 + sources.length) % sources.length
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? sources.length - 1
+                        : null;
+              if (target == null) return;
+              event.preventDefault();
+              const next = sources[target][0];
+              selectSource(next);
+              document.getElementById(`${ids.tabs}-${next}`)?.focus();
+            }}
+            className="selectable px-3 py-2 font-medium"
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      <form onSubmit={submit} className="glass-panel flex flex-col gap-5 p-4 sm:p-6">
-        <div
-          role="tablist"
-          aria-label="Data source"
-          className={`grid grid-cols-2 gap-2 text-sm ${localDatasetsAvailable ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}
-        >
-          {sources.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              id={`${ids.tabs}-${id}`}
-              aria-controls={`${ids.tabs}-panel`}
-              tabIndex={source === id ? 0 : -1}
-              disabled={busy}
-              aria-selected={source === id}
-              onClick={() => selectSource(id)}
-              onKeyDown={(event) => {
-                const index = sources.findIndex(([key]) => key === id);
-                const target =
-                  event.key === "ArrowRight"
-                    ? (index + 1) % sources.length
-                    : event.key === "ArrowLeft"
-                      ? (index - 1 + sources.length) % sources.length
-                      : event.key === "Home"
-                        ? 0
-                        : event.key === "End"
-                          ? sources.length - 1
-                          : null;
-                if (target == null) return;
-                event.preventDefault();
-                const next = sources[target][0];
-                selectSource(next);
-                document.getElementById(`${ids.tabs}-${next}`)?.focus();
-              }}
-              className="selectable px-3 py-2 font-medium"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div
-          id={`${ids.tabs}-panel`}
-          role="tabpanel"
-          aria-labelledby={`${ids.tabs}-${source}`}
-          className="flex flex-col gap-5"
-        >
-          {source === "x" && (
-            <div className="flex flex-col gap-2">
-              <label className="flex flex-col gap-1 text-sm">
-                Collection option
-                <select
-                  className="field"
-                  aria-describedby={ids.modeHelp}
-                  value={consumer ? "consumer" : "general"}
-                  onChange={(e) => {
-                    const selected = e.target.value === "consumer";
-                    setConsumer(selected);
-                    if (selected)
-                      setRange((current) => ({
-                        ...current,
-                        preset: "custom",
-                        timezone:
-                          current.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-                      }));
-                  }}
-                >
-                  <option value="general">General search — sentiment labeling</option>
-                  <option value="consumer">Consumer reactions — include/exclude + sentiment</option>
-                </select>
-              </label>
-              <div id={ids.modeHelp} className="flex flex-col gap-2 text-sm text-muted">
-                <p>
-                  <strong className="text-ink">General search:</strong> collect matching posts,
-                  clean the text, and label sentiment. This workflow has no manual Include/Exclude
-                  review or additional-candidate collection.
-                </p>
-                <p>
-                  <strong className="text-ink">Consumer reactions:</strong> build a dataset of
-                  opinions and reactions. Include or exclude each post, label sentiment for the
-                  included posts, and request more candidates if you are short of your reviewed
-                  target. Choose this for manual relevance review.
-                </p>
-                <p className="text-xs">
-                  This choice applies to a new search; it does not change an existing dataset.
-                </p>
-              </div>
-              <label htmlFor={ids.q} className="text-sm text-muted">
-                Topic
-              </label>
-              <input
-                id={ids.q}
-                className="field text-lg"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder='e.g. "coffee maker" OR #CoffeeMaker'
-                autoComplete="off"
-              />
-              <p className="text-xs text-muted">
-                Choose recent posts or custom historical dates.{" "}
-                <code className="rounded bg-surface-2 px-1">lang:en -is:retweet</code> is added
-                unless you set <code className="rounded bg-surface-2 px-1">lang:</code> yourself. X
-                search operators are supported.
-              </p>
-              <a
-                href="https://docs.x.com/x-api/posts/search/integrate/build-a-query"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="self-start text-sm underline underline-offset-4"
+      <div
+        id={`${ids.tabs}-panel`}
+        role="tabpanel"
+        aria-labelledby={`${ids.tabs}-${source}`}
+        className="flex flex-col gap-5"
+      >
+        {source === "x" && (
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-col gap-1 text-sm">
+              Collection option
+              <select
+                className="field"
+                aria-describedby={ids.modeHelp}
+                value={consumer ? "consumer" : "general"}
+                onChange={(e) => {
+                  const selected = e.target.value === "consumer";
+                  setConsumer(selected);
+                  onModeChange?.(selected);
+                  if (selected)
+                    setRange((current) => ({
+                      ...current,
+                      preset: "custom",
+                      timezone:
+                        current.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    }));
+                }}
               >
-                X query guide: operators and examples{" "}
-                <span className="text-xs">(opens in a new tab)</span>
-              </a>
-              <TimeRangePicker value={range} onChange={setRange} calendarOnly={consumer} />
-              {consumerError && (
-                <p className="text-xs text-warn-ink" role="alert">
-                  {consumerError}
-                </p>
-              )}
-              {consumer && (
-                <>
-                  <div className="flex flex-wrap gap-4">
-                    <label className="flex flex-col gap-1 text-sm">
-                      Final reviewed target
-                      <input
-                        className="field w-36"
-                        type="number"
-                        min={1}
-                        max={5000}
-                        value={reviewedTarget}
-                        onChange={(e) => setReviewedTarget(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm">
-                      Included posts per known author
-                      <input
-                        className="field w-36"
-                        type="number"
-                        min={1}
-                        max={100}
-                        value={authorLimit}
-                        onChange={(e) => setAuthorLimit(Number(e.target.value))}
-                      />
-                    </label>
-                  </div>
-                  <p className="text-sm text-muted">
-                    Creates a separate collection. All sentiments are eligible. English consumer
-                    reactions are screened before cleaning; suggestions require human confirmation.
-                    The author limit is a sampling control, not a bot detector.
-                  </p>
-                  <p className="text-sm text-muted">
-                    Enter your topic and dates. In Label, review eligibility first: choose Exclude
-                    and save to leave an unwanted record out of the reviewed export. Originals
-                    remain available for corrections.
-                  </p>
-                  <p className="text-xs text-muted">
-                    Candidate quotas are split across the requested days, newest first within each
-                    day. Empty days remain visible. Keyword search misses replies that never name
-                    the product. This is a bounded sample, not a representative survey or a set of
-                    verified humans.
-                  </p>
-                </>
-              )}
-              {!xConfigured && (
-                <p className="text-xs text-warn-ink">
-                  No X token is configured on the server, so this search will be refused. Use the
-                  sample dataset to explore.
-                </p>
-              )}
-            </div>
-          )}
-          {source === "huggingface" && (
-            <p className="text-sm text-muted">
-              Labelled tweets from{" "}
-              <code className="rounded bg-surface-2 px-1">cardiffnlp/tweet_eval</code> (sentiment).
-              No credentials, no cost. Good for learning the pipeline before spending X credits.
+                <option value="general">General search — sentiment labeling</option>
+                <option value="consumer">Consumer reactions — include/exclude + sentiment</option>
+              </select>
+            </label>
+            <p id={ids.modeHelp} className="text-sm text-muted">
+              {consumer ? "Keep or exclude posts and label sentiment in one review, then clean the text." : "Collect matching posts, clean the text, then label sentiment."}
             </p>
-          )}
-          {source === "csv" && <CsvUpload disabled={busy} onValidated={setFile} />}
-          {source === "saved" && localDatasetsAvailable && (
-            <SavedDatasetPicker disabled={busy} selected={savedId} onSelect={setSavedId} />
-          )}
-
-          {(source === "x" || source === "huggingface") && (
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-6">
-              <div className="flex flex-col gap-1">
-                <label htmlFor={ids.n} className="text-sm text-muted">
-                  {consumer && source === "x"
-                    ? "Candidate target (pilot: 50–100)"
-                    : "How many posts"}
-                </label>
-                <input
-                  id={ids.n}
-                  type="number"
-                  min={consumer && source === "x" ? 10 : MIN_RECORDS}
-                  max={5000}
-                  step={consumer && source === "x" ? 1 : 50}
-                  value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
-                  className="field tnum w-36"
-                />
-              </div>
-              <p className="text-xs text-muted sm:pb-2.5">
-                {source === "x" ? (
-                  <>
-                    Preflight estimate:{" "}
-                    <strong className="tnum text-ink">
-                      {costPerRead == null ? "unavailable" : `$${(limit * costPerRead).toFixed(2)}`}
-                    </strong>{" "}
-                    for {limit.toLocaleString()} reads. Filtering can require more reads.{" "}
-                    {consumer && "Provider page minimums can add up to 9 candidates per day. "}
-                    Exclusions still incur reads; server caps apply. Search authorizes this paid
-                    request.
-                  </>
-                ) : (
-                  "The assignment needs at least 500."
-                )}
+            <label htmlFor={ids.q} className="text-sm text-muted">
+              Topic
+            </label>
+            <input
+              id={ids.q}
+              className="field text-lg"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='e.g. "coffee maker" OR #CoffeeMaker'
+              autoComplete="off"
+            />
+            <details className="text-sm text-muted">
+              <summary className="cursor-pointer">Search tips</summary>
+              <p className="mt-2">English posts and no reposts are the defaults. X search operators are supported.</p>
+              <a href="https://docs.x.com/x-api/posts/search/integrate/build-a-query" target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">X query guide (opens in a new tab)</a>
+            </details>
+            <TimeRangePicker value={range} onChange={setRange} calendarOnly={consumer} />
+            {consumerError && (
+              <p className="text-xs text-warn-ink" role="alert">
+                {consumerError}
               </p>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <button type="submit" className="btn-primary min-w-40" disabled={!canSubmit}>
-              {busy
-                ? "Loading…"
-                : source === "x"
-                  ? "Search and collect"
-                  : source === "huggingface"
-                    ? "Load sample"
-                    : source === "saved"
-                      ? "Open dataset →"
-                      : "Import CSV"}
-            </button>
-            {busy && (
-              <button type="button" className="btn" onClick={onCancel}>
-                Cancel
-              </button>
             )}
-            {busy && source === "x" && (
-              <span className="text-xs text-muted">
-                Cancelling stops at the next page, so at most 100 more posts are billed.
-              </span>
+            {consumer && (
+              <>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex flex-col gap-1 text-sm">
+                    Final reviewed target
+                    <input
+                      className="field w-36"
+                      type="number"
+                      min={1}
+                      max={5000}
+                      value={reviewedTarget}
+                      onChange={(e) => setReviewedTarget(Number(e.target.value))}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    Included posts per known author
+                    <input
+                      className="field w-36"
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={authorLimit}
+                      onChange={(e) => setAuthorLimit(Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+                <details className="text-sm text-muted">
+                  <summary className="cursor-pointer">How this sample is collected</summary>
+                  <p className="mt-2">The collection goal is split across days from start to end. X returns newest posts first within each day. Empty days can leave a shortfall; page minimums can add extra posts.</p>
+                  <p className="mt-2">All sentiments are eligible. Screening suggestions need your confirmation. The author limit controls sampling, not bot detection. Keyword search can miss replies that do not name the topic.</p>
+                </details>
+              </>
+            )}
+            {!xConfigured && (
+              <p className="text-xs text-warn-ink">
+                No X token is configured on the server, so this search will be refused. Use the
+                sample dataset to explore.
+              </p>
             )}
           </div>
-        </div>
-      </form>
+        )}
+        {source === "huggingface" && (
+          <p className="text-sm text-muted">
+            Labelled tweets from{" "}
+            <code className="rounded bg-surface-2 px-1">cardiffnlp/tweet_eval</code> (sentiment).
+            No credentials, no cost. Good for learning the pipeline before spending X credits.
+          </p>
+        )}
+        {source === "csv" && <CsvUpload disabled={busy} onValidated={setFile} />}
+        {source === "saved" && localDatasetsAvailable && (
+          <SavedDatasetPicker disabled={busy} selected={savedId} onSelect={setSavedId} />
+        )}
 
+        {(source === "x" || source === "huggingface") && (
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-6">
+            <div className="flex flex-col gap-1">
+              <label htmlFor={ids.n} className="text-sm text-muted">
+                {consumer && source === "x"
+                  ? "Posts to collect"
+                  : "How many posts"}
+              </label>
+              <input
+                id={ids.n}
+                type="number"
+                min={consumer && source === "x" ? 10 : MIN_RECORDS}
+                max={5000}
+                step={consumer && source === "x" ? 1 : 50}
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+                className="field tnum w-36"
+              />
+            </div>
+            <p className="text-xs text-muted sm:pb-2.5">
+              {source === "x" ? (
+                <>
+                  Paid X request · Estimated cost:{" "}
+                  <strong className="tnum text-ink">
+                    {costPerRead == null ? "unavailable" : `$${(limit * costPerRead).toFixed(2)}`}
+                  </strong>. Actual cost may vary; spend caps apply.
+                </>
+              ) : (
+                "The assignment needs at least 500."
+              )}
+            </p>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="submit" className="btn-primary min-w-40" disabled={!canSubmit}>
+            {busy
+              ? "Loading…"
+              : source === "x"
+                ? "Search and collect"
+                : source === "huggingface"
+                  ? "Load sample"
+                  : source === "saved"
+                    ? "Open dataset →"
+                    : "Import CSV"}
+          </button>
+          {busy && (
+            <button type="button" className="btn" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+          {busy && source === "x" && (
+            <span className="text-xs text-muted">
+              Cancelling stops at the next page, so at most 100 more posts are billed.
+            </span>
+          )}
+        </div>
+      </div>
+    </form>
+  );
+
+  return (
+    <section className="mx-auto flex max-w-3xl flex-col gap-6">
+      <div className="pt-4 text-center sm:pt-10">
+        <h2 ref={resultsHeading} tabIndex={-1} className="text-2xl font-semibold tracking-tight sm:text-3xl">
+          Collect your dataset
+        </h2>
+        <p className="mt-2 text-muted">
+          {dataset ? "Your progress across all requests." : "Choose a topic and a collection goal."}
+        </p>
+      </div>
       <Notice error={error} warnings={dataset?.warnings} />
       <Notice error={download.error} />
-      {onResume && !busy && (
-        <div className="glass-panel flex flex-col gap-2 p-4">
-          <p className="text-sm">
-            Collection can continue from saved progress. A timed-out provider response may still
-            have incurred a charge.
-          </p>
-          {dataset?.retry_at && (
-            <p className="text-sm">
-              Retry after {new Date(dataset.retry_at * 1000).toLocaleTimeString()}.
-            </p>
+      {dataset && (
+        <CollectionStatus dataset={dataset} busy={busy} message={collectionMessage}>
+          {dataset.consumer_policy && onAdditional && (
+            <AdditionalCandidates
+              dataset={dataset}
+              stage="collect"
+              busy={busy}
+              costPerRead={costPerRead}
+              onRequest={onAdditional}
+            />
           )}
-          <button type="button" className="btn" onClick={onResume}>
-            Resume collection
-          </button>
-        </div>
+          {!dataset.consumer_policy && onResume && (
+            <button type="button" className="btn self-start" disabled={busy} onClick={onResume}>
+              Get more posts
+            </button>
+          )}
+          <div className="flex flex-wrap items-center gap-3 border-t border-rule pt-4">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={busy || dataset.record_count === 0}
+              onClick={onContinue}
+            >
+              {dataset.consumer_policy ? "Continue to Review & label →" : "Continue to Clean →"}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || download.loading}
+              onClick={() => void download.run((signal) =>
+                api.download(dataset.dataset_id, "original.json", signal),
+              )}
+            >
+              {download.loading ? "Downloading…" : "Download original dataset"}
+            </button>
+            {busy && <button type="button" className="btn" onClick={onCancel}>Cancel</button>}
+          </div>
+        </CollectionStatus>
       )}
-
-      {busy && (
+      {busy && !dataset && (
         <div className="glass-panel flex flex-col gap-3 p-4 sm:p-6" aria-busy="true">
+          <p role="status">Collecting posts…</p>
           <Skeleton className="w-48" />
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} className={i % 2 ? "w-5/6" : "w-full"} />
           ))}
         </div>
       )}
-
-      {dataset && !busy && (
-        <div className="glass-panel flex flex-col gap-4 p-4 sm:p-6">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="text-lg font-semibold">
-              <span className="tnum">{dataset.record_count.toLocaleString()}</span> posts collected
-            </h3>
-            <span className="text-xs text-muted">
-              from{" "}
-              {dataset.source_type === "x"
-                ? "X"
-                : dataset.source_type === "huggingface"
-                  ? "Hugging Face"
-                  : "your CSV"}
-              {dataset.billed_reads != null && (
-                <> · {dataset.billed_reads.toLocaleString()} accounted provider reads</>
-              )}
-              {dataset.committed_cost_usd != null && (
-                <> · estimated spend ${dataset.committed_cost_usd.toFixed(2)}</>
-              )}
-            </span>
-          </div>
-          {dataset.query && (
-            <p className="tnum truncate text-sm text-muted">Query: {dataset.query}</p>
-          )}
-          {dataset.window_start && (
-            <p className="tnum text-sm text-muted">
-              Window:{" "}
-              {new Date(dataset.window_start).toLocaleString(undefined, {
-                timeZone: dataset.consumer_policy?.timezone,
-              })}{" "}
-              (inclusive) to{" "}
-              {dataset.window_end
-                ? new Date(dataset.window_end).toLocaleString(undefined, {
-                    timeZone: dataset.consumer_policy?.timezone,
-                  })
-                : "now"}{" "}
-              (exclusive){dataset.consumer_policy && ` · ${dataset.consumer_policy.timezone}`}
-            </p>
-          )}
-          {dataset.truncated_reason && (
-            <p className="text-sm text-muted">Stopped early: {dataset.truncated_reason}.</p>
-          )}
-          {dataset.consumer_counts && (
-            <ConsumerSummary
-              counts={dataset.consumer_counts}
-              timezone={dataset.consumer_policy?.timezone ?? "UTC"}
-            />
-          )}
-          {dataset.consumer_policy && onAdditional && (
-            <AdditionalCandidates
-              dataset={dataset}
-              busy={busy}
-              costPerRead={costPerRead}
-              onRequest={onAdditional}
-            />
-          )}
-          <ul className="divide-y divide-rule text-sm">
-            {dataset.preview.slice(0, 6).map((r) => (
-              <li key={r.id} className="flex gap-3 py-2">
-                <span className="flex-1 leading-snug">{r.text}</span>
-                {r.label && <span className="tnum shrink-0 text-xs text-muted">{r.label}</span>}
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-rule pt-4">
-            <p className="text-sm text-muted">
-              {dataset.consumer_policy
-                ? "Next: include or exclude candidates, then review sentiment for included records."
-                : "Next: decide how to clean and normalise this text."}
-            </p>
-            <button
-              type="button"
-              className="btn"
-              disabled={download.loading}
-              onClick={() =>
-                void download.run((signal) =>
-                  api.download(dataset.dataset_id, "original.json", signal),
-                )
-              }
-            >
-              {download.loading ? "Downloading…" : "Download original dataset"}
-            </button>
-            <button type="button" className="btn-primary" onClick={onContinue}>
-              {dataset.consumer_policy ? "Review eligibility →" : "Continue to Clean →"}
-            </button>
-          </div>
-        </div>
+      {!dataset && onResume && !busy && (
+        <button type="button" className="btn self-start" onClick={onResume}>Get more posts</button>
       )}
+      {dataset ? (
+        <details key={dataset.dataset_id} className="rounded-xl border border-rule p-4">
+          <summary className="cursor-pointer font-medium">Start another collection</summary>
+          <p className="my-3 text-sm text-muted">
+            A different search creates a separate dataset and a new paid request.
+          </p>
+          {form}
+        </details>
+      ) : form}
     </section>
   );
 }

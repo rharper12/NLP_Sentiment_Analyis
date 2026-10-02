@@ -440,6 +440,15 @@ def preprocess(
         if can_start():
             updated = checkpoint_bundle(checkpoints, updated, "processed")
             edit.save(updated)
+        if (
+            updated.original.consumer_policy
+            and "labelled:csv" in updated.checkpoint_status
+            and can_start()
+        ):
+            # Consumer labels precede cleaning. Refresh their snapshot with the new text
+            # without asking the reviewer to repeat or change saved human decisions.
+            updated = checkpoint_bundle(checkpoints, updated, "labelled")
+            edit.save(updated)
         if not updated.analysis.partial and can_start():
             history.record_run(updated)
     if updated.processed is None or updated.report is None:  # pragma: no cover - invariant
@@ -475,13 +484,21 @@ def eligibility_page(
     repo: RepoDep,
     offset: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=200),
-    status: Literal["all", "pending", "include", "exclude", "sentiment"] = "all",
+    status: Literal["all", "pending", "include", "exclude", "sentiment", "needs_review"] = "all",
 ) -> EligibilityPage:
     """Inspect original candidates and recoverable exclusions without enrichment calls."""
     bundle = repo.get(dataset_id)
     selected = eligibility.included_ids(bundle)
     rows = bundle.original.records
-    if status == "sentiment":
+    if status == "needs_review":
+        rows = [
+            r
+            for r in rows
+            if not r.eligibility_reviewed
+            or r.eligibility == "pending"
+            or (r.id in selected and not r.sentiment_reviewed)
+        ]
+    elif status == "sentiment":
         rows = [r for r in rows if r.id in selected]
     elif status == "pending":
         rows = [r for r in rows if not r.eligibility_reviewed or r.eligibility == "pending"]

@@ -40,14 +40,19 @@ vi.mock("./components/stages/CollectStep", () => ({
     <>
       <h2>Collect your dataset</h2>
       <output>{p.dataset?.dataset_id}</output>
+      <output>{p.collectionMessage}</output>
+      <output>{p.dataset?.record_count} saved total</output>
       <button onClick={() => p.onLoadSample(500)}>Load sample</button>
+      <button onClick={() => p.onModeChange?.(true)}>Choose consumer workflow</button>
+      <button onClick={() => p.onModeChange?.(false)}>Choose general workflow</button>
       <button onClick={() => p.onSearch("test", 500, {})}>Search test</button>
       {p.onResume && <button onClick={p.onResume}>Resume collection</button>}
       <button onClick={p.onCancel}>Cancel collection</button>
       <button onClick={() => p.onRestore("saved-id")}>Restore original</button>
       <button onClick={p.onContinue}>
-        {p.dataset?.consumer_policy ? "Review eligibility →" : "Continue clean"}
+        {p.dataset?.consumer_policy ? "Continue to Review & label →" : "Continue clean"}
       </button>
+      {p.dataset?.consumer_policy && <button onClick={() => p.onAdditional?.(p.dataset?.candidate_target ?? 530)}>Resume saved candidates</button>}
     </>
   ),
 }));
@@ -63,6 +68,8 @@ vi.mock("./components/stages/CleanStep", () => ({
 vi.mock("./components/stages/AnalyzeStep", () => ({
   AnalyzeStep: (p: ComponentProps<typeof AnalyzeStep>) => (
     <>
+      <h2>What changed</h2>
+      <button onClick={p.onContinue}>Continue to {p.continueLabel ?? "Label"} →</button>
       <output data-testid="version">{p.runVersion}</output>
       <output data-testid="result">{p.run?.dataset_id ?? "none"}</output>
       <button onClick={p.onRerun}>Rerun</button>
@@ -77,6 +84,17 @@ function deferred<T>() {
   });
   return { resolve, promise };
 }
+
+it("previews the selected workflow before collection without unlocking empty stages", () => {
+  render(<App />);
+  fireEvent.click(screen.getByText("Choose consumer workflow"));
+  const review = screen.getByRole("button", { name: /2Review & label/ });
+  expect(review.hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: /3Clean/ })).toBeTruthy();
+  fireEvent.click(screen.getByText("Choose general workflow"));
+  expect(screen.getByRole("button", { name: /2Clean/ }).hasAttribute("disabled")).toBe(true);
+  expect(api.load).not.toHaveBeenCalled();
+});
 const dataset = (id: string): DatasetSummary => ({
   dataset_id: id,
   source_type: "csv",
@@ -88,7 +106,64 @@ const dataset = (id: string): DatasetSummary => ({
   preview: [],
 });
 // These stage stubs only inspect dataset identity; the API's full shapes are covered in client tests.
-const processed = (id: string) => ({ dataset_id: id }) as PreprocessResponse;
+const metrics = {
+  record_count: 1,
+  vocab_size: 1,
+  total_tokens: 1,
+  avg_tokens: 1,
+  type_token_ratio: 1,
+  length_histogram: {},
+  top_terms: [],
+};
+const processed = (id: string): PreprocessResponse => ({
+  dataset_id: id,
+  applied_steps: [],
+  record_count: 1,
+  partial: false,
+  metrics_before: metrics,
+  metrics_after: metrics,
+  report: { steps: [], warnings: [] },
+  preview: [],
+});
+
+it("keeps resumed totals on Collect and recovers committed pages with a read after a lost response", async () => {
+  const consumer: DatasetSummary = {
+    ...dataset("x-saved"), source_type: "x", record_count: 439, candidate_target: 530, partial: true,
+    consumer_policy: { version: "consumer-reactions-v2", start_date: "2026-09-09", end_date: "2026-09-11", timezone: "America/Chicago", per_author_limit: 2, reviewed_target: 500, duplicate_threshold: 0.9, selection_rule: "daily-quotas-recency;author-earliest-id" },
+  };
+  vi.mocked(api.load).mockResolvedValue(consumer);
+  render(<App />);
+  fireEvent.click(screen.getByText("Search test"));
+  await screen.findByText("439 saved total");
+  const pending = deferred<DatasetSummary>();
+  vi.mocked(api.collectCandidates).mockReturnValueOnce(pending.promise);
+  const resume = screen.getByText("Resume saved candidates");
+  fireEvent.click(resume);
+  fireEvent.click(resume);
+  expect(api.collectCandidates).toHaveBeenCalledTimes(1);
+  await act(async () => pending.resolve(consumer));
+  await screen.findByText("No new posts were added. 439 posts are saved in this dataset.");
+  vi.mocked(api.collectCandidates).mockRejectedValueOnce(new Error("Response lost"));
+  vi.mocked(api.dataset).mockResolvedValue({ ...consumer, record_count: 530, partial: false });
+  fireEvent.click(resume);
+  await screen.findByText("530 saved total");
+  expect(screen.getByRole("heading", { name: "Collect your dataset" })).toBeTruthy();
+  expect(screen.getByText(/Request interrupted. Saved progress recovered: 530 posts/)).toBeTruthy();
+  expect(api.dataset).toHaveBeenCalledExactlyOnceWith("x-saved", expect.any(AbortSignal));
+  expect(api.collectCandidates).toHaveBeenCalledTimes(2);
+  expect(api.load).toHaveBeenCalledTimes(1);
+});
+
+it("reuses the paid request identity when the same unfinished search is submitted again", async () => {
+  vi.mocked(api.load).mockResolvedValue({ ...dataset("x-saved"), source_type: "x", partial: true });
+  render(<App />);
+  fireEvent.click(screen.getByText("Search test"));
+  await screen.findByText("x-saved");
+  const firstId = vi.mocked(api.load).mock.calls[0][5];
+  fireEvent.click(screen.getByText("Search test"));
+  await waitFor(() => expect(api.load).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.load).mock.calls[1][5]).toBe(firstId);
+});
 
 it.each([false, true])(
   "focuses stage changes but not initial load (Strict Mode: %s)",
@@ -153,7 +228,13 @@ it("manually requests the review shortfall on the same dataset and returns to re
       selection_rule: "daily-quotas-recency;author-earliest-id",
     },
   };
-  const review: EligibilityPage = { total: 0, offset: 0, items: [], included_ids: [], counts };
+  const review: EligibilityPage = {
+    total: 0,
+    offset: 0,
+    items: [],
+    included_ids: [],
+    counts,
+  };
   vi.mocked(api.load).mockResolvedValue(consumer);
   vi.mocked(api.eligibilityPage).mockResolvedValue(review);
   const pending = deferred<DatasetSummary>();
@@ -161,35 +242,38 @@ it("manually requests the review shortfall on the same dataset and returns to re
   render(<App />);
   fireEvent.click(screen.getByText("Search test"));
   await screen.findByText("consumer");
-  fireEvent.click(screen.getByRole("button", { name: "Review eligibility →" }));
-  await screen.findByRole("button", { name: "Collect additional candidates" });
+  fireEvent.click(screen.getByRole("button", { name: "Continue to Review & label →" }));
+  await screen.findByRole("button", { name: "Get more posts" });
   expect(api.collectCandidates).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Collect additional candidates" }));
+  fireEvent.click(screen.getByRole("button", { name: "Get more posts" }));
   expect(api.collectCandidates).toHaveBeenCalledWith("consumer", 650, expect.any(AbortSignal));
-  expect(screen.queryByRole("heading", { name: "Review consumer reactions" })).toBeNull();
-  expect(screen.getByRole("button", { name: /Label/ }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("heading", { name: "Review & label" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: /2Review & label/ }).hasAttribute("disabled")).toBe(
+    true,
+  );
   vi.mocked(api.eligibilityPage).mockResolvedValue({
     ...review,
     counts: { ...counts, pending_eligibility: 150 },
   });
   await act(async () => pending.resolve({ ...consumer, candidate_target: 650, record_count: 650 }));
-  await screen.findByText(/150 eligibility reviews/);
-  expect(screen.getByRole("heading", { name: "Review consumer reactions" })).toBeTruthy();
-  expect((screen.getByLabelText("Additional candidate quota") as HTMLInputElement).value).toBe(
-    "150",
-  );
+  await screen.findByText(/150 saved posts still need review/);
+  expect(screen.getByRole("heading", { name: "Review & label" })).toBeTruthy();
+  expect(screen.queryByLabelText("Posts to request")).toBeNull();
   expect(api.load).toHaveBeenCalledTimes(1);
   expect(api.collectCandidates).toHaveBeenCalledTimes(1);
   vi.mocked(api.dataset).mockResolvedValue(consumer);
+  fireEvent.click(screen.getByRole("button", { name: "Continue to Clean →" }));
+  expect(screen.getByRole("heading", { name: "Clean dataset" })).toBeTruthy();
+  vi.mocked(api.preprocess).mockResolvedValue(processed("consumer"));
+  fireEvent.click(screen.getByText("Process"));
+  await waitFor(() => expect(screen.getByTestId("result").textContent).toBe("consumer"));
   fireEvent.click(screen.getByRole("button", { name: "Continue to Export →" }));
   await waitFor(() =>
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Export" })),
   );
-  fireEvent.click(screen.getByRole("button", { name: "← Back to Label" }));
+  fireEvent.click(screen.getByRole("button", { name: /Review & labelKeep/ }));
   await waitFor(() =>
-    expect(document.activeElement).toBe(
-      screen.getByRole("heading", { name: "Review consumer reactions" }),
-    ),
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Review & label" })),
   );
 });
 
@@ -288,12 +372,18 @@ it("blocks Label and Export navigation while an existing result is being rerun",
   render(<App />);
   await enterAnalyze();
   await waitFor(() => expect(screen.getByTestId("result").textContent).toBe("old"));
-  expect(screen.getByRole("button", { name: /Label/ }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("button", { name: /LabelComprehend/ }).hasAttribute("disabled")).toBe(
+    false,
+  );
   fireEvent.click(screen.getByText("Rerun"));
-  expect(screen.getByRole("button", { name: /Label/ }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: /LabelComprehend/ }).hasAttribute("disabled")).toBe(
+    true,
+  );
   expect(screen.getByRole("button", { name: /Export/ }).hasAttribute("disabled")).toBe(true);
   await act(async () => rerun.resolve(processed("rerun")));
-  expect(screen.getByRole("button", { name: /Label/ }).hasAttribute("disabled")).toBe(false);
+  expect(screen.getByRole("button", { name: /LabelComprehend/ }).hasAttribute("disabled")).toBe(
+    false,
+  );
 });
 
 it("cancelled collection cannot restore a dataset or increment spend", async () => {

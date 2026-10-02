@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, AUTH_REQUIRED, isAbort } from "../api/client";
 import { toError } from "../hooks/useAsync";
 import { Notice } from "./ui/Notice";
+import { AppSkeleton } from "./ui/Skeleton";
 
 /** An operator signs in once; only the temporary session survives in browser memory. */
 export function OperatorAccess({ children }: { children: ReactNode }) {
@@ -35,6 +36,8 @@ export function OperatorAccess({ children }: { children: ReactNode }) {
     catch (e) { setError(toError(e)); }
     finally { setBusy(false); }
   };
+
+  if (!ready && !required && !error) return <AppSkeleton />;
 
   return <>
     {ready && <div inert={required}>{children}</div>}

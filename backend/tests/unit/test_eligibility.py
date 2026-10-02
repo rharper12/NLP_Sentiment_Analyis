@@ -193,3 +193,74 @@ def test_unchanged_confirmations_and_overrides_are_independent():
     assert original.original.records[0].eligibility == "pending"
     with pytest.raises(ValidationError, match="eligibility first"):
         apply_manual_labels(updated, [ManualLabel(id="one", label="positive")])
+
+
+def test_combined_review_keeps_both_decisions_and_preserves_automated_provenance():
+    original = bundle(
+        [record("I dislike this", comprehend_label="positive", comprehend_confidence=0.9)]
+    )
+    updated = apply_decisions(
+        original, [EligibilityItem(id="one", decision="include", label="negative")]
+    )
+    saved = updated.original.records[0]
+    assert saved.eligibility_reviewed and saved.sentiment_reviewed
+    assert saved.label == "negative" and saved.label_source == "manual"
+    assert saved.label_confidence is None and saved.sentiment_reviewed_at is not None
+    assert saved.comprehend_label == "positive" and saved.comprehend_confidence == 0.9
+    assert counts(updated).reviewed_final == 1
+    assert not original.original.records[0].eligibility_reviewed
+    excluded = apply_decisions(
+        updated, [EligibilityItem(id="one", decision="exclude", reason="off_topic")]
+    )
+    assert counts(excluded).reviewed_final == 0
+    assert excluded.original.records[0].text == original.original.records[0].text
+    restored = apply_decisions(
+        excluded, [EligibilityItem(id="one", decision="include", label="negative")]
+    )
+    assert counts(restored).reviewed_final == 1
+    assert len(restored.original.records[0].eligibility_history) == 3
+
+
+def test_combined_review_does_not_select_by_sentiment_or_lose_labels_on_author_holds():
+    original = bundle(
+        [
+            record("first", author_id="same"),
+            record("second", author_id="same").model_copy(update={"id": "two"}),
+        ],
+        cap=1,
+    )
+    updated = apply_decisions(
+        original,
+        [
+            EligibilityItem(id="two", decision="include", label="positive"),
+            EligibilityItem(id="one", decision="include", label="negative"),
+        ],
+    )
+    assert included_ids(updated) == {"one"}
+    assert counts(updated).author_cap_held == 1 and counts(updated).reviewed_final == 1
+    released = apply_decisions(
+        updated, [EligibilityItem(id="one", decision="exclude", reason="off_topic")]
+    )
+    assert included_ids(released) == {"two"}
+    assert counts(released).reviewed_final == 1 and counts(released).pending_sentiment == 0
+
+
+@pytest.mark.parametrize("decision", ["exclude", "pending"])
+def test_non_inclusions_cannot_receive_a_label(decision):
+    from pydantic import ValidationError as ModelValidationError
+
+    with pytest.raises(ModelValidationError, match="Only included"):
+        EligibilityItem(id="one", decision=decision, reason="off_topic", label="negative")
+
+
+def test_duplicate_review_ids_are_rejected_without_mutating_original():
+    original = bundle([record("first")])
+    with pytest.raises(ValidationError, match="duplicate record"):
+        apply_decisions(
+            original,
+            [
+                EligibilityItem(id="one", decision="include", label="negative"),
+                EligibilityItem(id="one", decision="exclude", reason="off_topic"),
+            ],
+        )
+    assert not original.original.records[0].eligibility_history

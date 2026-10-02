@@ -146,6 +146,18 @@ class Record(BaseModel):
     sentiment_reviewed: bool = Field(default_factory=bool)
     sentiment_reviewed_at: datetime | None = None
 
+    def with_manual_label(self, label: SentimentLabel) -> Record:
+        """Confirm a human label while retaining the original automated suggestion."""
+        return self.model_copy(
+            update={
+                "label": label,
+                "label_source": "manual",
+                "label_confidence": None,
+                "sentiment_reviewed": True,
+                "sentiment_reviewed_at": datetime.now(UTC),
+            }
+        )
+
     def words(self) -> list[str]:
         """Return tokens if present, otherwise a whitespace split. Used for statistics."""
         return self.tokens if self.tokens is not None else self.text.split()
@@ -303,6 +315,9 @@ class CollectionProgress(BaseModel):
     # Missing historical accounting is unknown, never silently reported as zero.
     billed_reads: int | None = None
     committed_cost_usd: Decimal | None = None
+    # Saved rows added per user request; old collections have no recoverable batch history.
+    first_batch_saved: int | None = None
+    last_batch_saved: int | None = None
     complete: bool = False
     stop_reason: str | None = None
     retry_at: float = 0

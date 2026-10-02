@@ -14,7 +14,6 @@ import math
 import random
 from collections import Counter
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
@@ -270,18 +269,7 @@ def apply_manual_labels(bundle: DatasetBundle, items: list[ManualLabel]) -> Data
     if bundle.original.consumer_policy and set(by_id) - included_ids(bundle):
         raise ValidationError("Review eligibility first; only sampled inclusions need sentiment")
     updated = [
-        r.model_copy(
-            update={
-                "label": by_id[r.id],
-                "label_source": "manual",
-                "label_confidence": None,
-                "sentiment_reviewed": True,
-                "sentiment_reviewed_at": datetime.now(UTC),
-            }
-        )
-        if r.id in by_id
-        else r
-        for r in bundle.original.records
+        r.with_manual_label(by_id[r.id]) if r.id in by_id else r for r in bundle.original.records
     ]
     logger.info("manual_labels_applied", records=len(by_id))
     return _with_records(bundle, updated)

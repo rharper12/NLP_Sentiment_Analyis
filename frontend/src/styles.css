@@ -38,7 +38,7 @@
 :root {
   --t-bg: #eef2f9; --t-surface: #ffffff; --t-surface-2: #e9eef7;
   --t-ink: #14203a; --t-muted: #566178; --t-rule: #d3dbe8; --t-control: #73819a;
-  --t-accent: #1f5fe0; --t-accent-ink: #ffffff; --t-accent-soft: #e2ebfb;
+  --t-accent: #1b55c9; --t-accent-ink: #ffffff; --t-accent-soft: #e2ebfb;
   --t-removed: #b42318; --t-introduced: #167344;
   --t-warn-bg: #fff6e0; --t-warn-ink: #7a4b00; --t-error-bg: #fdecec; --t-error-ink: #8a1c1c;
   /* Opaque glass-colored surfaces bound contrast even over arbitrary content. */
@@ -108,6 +108,10 @@
   /* Grid cells clip overflow; draw their actionable control focus inside its boundary. */
   .record-diff-action:focus-visible { outline-offset: -3px; }
   .skeleton { @apply inline-block rounded bg-surface-2 align-middle; background-image: linear-gradient(90deg, var(--t-surface-2) 0%, var(--t-rule) 50%, var(--t-surface-2) 100%); background-size: 200% 100%; }
+  .collection-progress { appearance: none; border: 0; overflow: hidden; border-radius: 999px; background: var(--t-surface-2); }
+  .collection-progress::-webkit-progress-bar { background: var(--t-surface-2); }
+  .collection-progress::-webkit-progress-value { background: var(--t-accent); border-radius: 999px; }
+  .collection-progress::-moz-progress-bar { background: var(--t-accent); border-radius: 999px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

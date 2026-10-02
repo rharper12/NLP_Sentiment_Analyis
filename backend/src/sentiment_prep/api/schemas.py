@@ -119,6 +119,8 @@ class DatasetSummary(BaseModel):
     truncated_reason: str | None
     billed_reads: int | None = None
     committed_cost_usd: float | None = None
+    first_batch_saved: int | None = None
+    last_batch_saved: int | None = None
     partial: bool = False
     resume_request_id: str | None = None
     retry_at: float | None = None

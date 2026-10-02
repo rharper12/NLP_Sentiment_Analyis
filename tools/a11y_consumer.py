@@ -6,6 +6,7 @@ decisions, while collection adds one synthetic candidate without contacting a pr
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -15,10 +16,11 @@ from urllib.parse import parse_qs, urlparse
 from playwright.async_api import Page, Route, expect
 from sentiment_prep import eligibility
 from sentiment_prep.api.collection import summarize
-from sentiment_prep.api.routes import eligibility_page
+from sentiment_prep.api.routes import eligibility_page, list_steps
+from sentiment_prep.api.schemas import PreprocessRequest, PreprocessResponse
+from sentiment_prep.api.service import run_preprocessing
+from sentiment_prep.config import Settings
 from sentiment_prep.eligibility import EligibilityItem
-from sentiment_prep.labeling import service as labeling
-from sentiment_prep.labeling.service import ManualLabel
 from sentiment_prep.models import (
     ConsumerPolicy,
     Dataset,
@@ -26,6 +28,7 @@ from sentiment_prep.models import (
     Record,
     ScreeningSuggestion,
 )
+from sentiment_prep.presentation import public_report
 from sentiment_prep.storage.repository import InMemoryRepository
 
 Audit = Callable[[str], Awaitable[None]]
@@ -38,6 +41,8 @@ class ConsumerFixture:
         self.origin = urlparse(ui).netloc
         self.repo = InMemoryRepository()
         self.additional_requests = 0
+        self.initial_requests = 0
+        self.collection_gate = asyncio.Event()
         self.unexpected: list[str] = []
         self.repo.save(
             DatasetBundle(
@@ -111,7 +116,7 @@ class ConsumerFixture:
                 "local_datasets_available": False,
             }
         elif path == "/steps":
-            data = []
+            data = [step.model_dump(mode="json") for step in list_steps()]
         elif path == "/spend":
             data = {
                 "today_reads": 0,
@@ -125,14 +130,44 @@ class ConsumerFixture:
                 "x_configured": True,
             }
         elif path in {"/dataset/load", "/dataset/consumer-a11y"}:
+            if path == "/dataset/load":
+                self.initial_requests += 1
             data = self.summary()
+        elif path == "/dataset/consumer-a11y/preprocess":
+            with self.repo.edit("consumer-a11y") as edit:
+                updated, before, after = run_preprocessing(
+                    edit.bundle,
+                    PreprocessRequest.model_validate(request.post_data_json),
+                    Settings(_env_file=None, comprehend_enabled=False, pricing_enabled=False),
+                    None,
+                )
+                edit.save(updated)
+            assert updated.processed is not None and updated.report is not None
+            data = PreprocessResponse(
+                dataset_id=updated.dataset_id,
+                applied_steps=updated.applied_steps,
+                record_count=len(updated.processed.records),
+                metrics_before=before,
+                metrics_after=after,
+                report=public_report(updated.report, diagnostics=False),
+                preview=updated.processed.records,
+            ).model_dump(mode="json")
         elif path == "/dataset/consumer-a11y/records":
-            records = self.repo.get("consumer-a11y").original.records
+            bundle = self.repo.get("consumer-a11y")
+            records = bundle.original.records
+            processed = (
+                {r.id: r.model_dump(mode="json") for r in bundle.processed.records}
+                if bundle.processed
+                else {}
+            )
             data = {
                 "total": len(records),
                 "offset": 0,
                 "items": [
-                    {"original": record.model_dump(mode="json"), "processed": None}
+                    {
+                        "original": record.model_dump(mode="json"),
+                        "processed": processed.get(record.id),
+                    }
                     for record in records
                 ],
             }
@@ -140,6 +175,7 @@ class ConsumerFixture:
             assert request.post_data_json == {"candidate_target": 21, "confirm_cost": True}
             self.additional_requests += 1
             assert self.additional_requests == 1, "A shortfall must never start an automatic batch"
+            await self.collection_gate.wait()
             with self.repo.edit("consumer-a11y") as edit:
                 bundle = edit.bundle
                 bundle.original.records.append(
@@ -174,11 +210,6 @@ class ConsumerFixture:
                     limit=1,
                     status=query.get("status", ["all"])[0],
                 ).model_dump(mode="json")
-        elif path == "/dataset/consumer-a11y/labels/manual":
-            items = [ManualLabel.model_validate(item) for item in request.post_data_json["items"]]
-            with self.repo.edit("consumer-a11y") as edit:
-                edit.save(labeling.apply_manual_labels(edit.bundle, items))
-            data = labeling.summary(self.repo.get("consumer-a11y")).model_dump(mode="json")
         else:
             self.unexpected.append(f"{request.method} {path}")
             await route.abort()
@@ -192,7 +223,7 @@ class ConsumerFixture:
 
 
 async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
-    """Request one candidate explicitly, confirm both reviews, and reach the export target."""
+    """Collect explicitly, review once per post, and export the completed target."""
     fixture = ConsumerFixture(ui)
     await page.route("**/*", fixture.respond)
     await page.goto(ui)
@@ -202,6 +233,9 @@ async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
     if theme == "dark":
         await page.get_by_role("button", name="Switch to dark mode").click()
     await page.get_by_label(re.compile("Collection option")).select_option("consumer")
+    await expect(
+        page.get_by_role("navigation", name="Progress").get_by_role("button").nth(1)
+    ).to_contain_text("Review & label")
     await expect(page.get_by_label("Topic", exact=True)).to_have_value("")
     await expect(page.get_by_label("From", exact=True)).to_have_value("")
     await expect(page.get_by_label("To", exact=True)).to_have_value("")
@@ -216,80 +250,85 @@ async def walk_consumer(page: Page, ui: str, theme: str, audit: Audit) -> None:
     await expect(timezone).to_have_value("UTC")
     await timezone.select_option("America/Chicago")
     await page.get_by_label("Final reviewed target", exact=True).fill("2")
-    await page.get_by_label(re.compile("Candidate target")).fill("20")
+    await page.get_by_label(re.compile("Posts to collect")).fill("20")
     await audit("consumer-collect")
+    assert fixture.initial_requests == 0
     await page.get_by_role("button", name="Search and collect", exact=True).click()
-    await page.get_by_role("button", name="Review eligibility →", exact=True).click()
-    queue = page.get_by_label(re.compile("Review queue"))
-    await page.get_by_label(re.compile("Eligibility decision")).select_option("exclude")
-    await page.get_by_label(re.compile("Eligibility reason")).select_option("off_topic")
-    await page.get_by_role("button", name="Save eligibility decision", exact=True).click()
+    await audit("consumer-collected")
+    assert fixture.initial_requests == 1
+    await expect(page.get_by_text("Needs review", exact=True)).to_have_count(0)
+    await expect(page.locator("blockquote")).to_have_count(0)
+    await page.get_by_role("button", name="Continue to Review & label →", exact=True).click()
+    heading = page.get_by_role("heading", name="Review & label", exact=True)
+    await expect(heading).to_be_focused()
+    progress = page.get_by_role("navigation", name="Progress", exact=True)
+    await expect(progress.get_by_role("button").nth(1)).to_contain_text("Review & label")
+    await expect(progress.get_by_role("button").nth(2)).to_contain_text("Clean")
+    await expect(page.get_by_text("You\u2019re caught up", exact=True)).to_be_visible()
+    queue = page.get_by_label("Show posts", exact=True)
+    await queue.select_option("include")
+    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
+    await page.get_by_role("radio", name="Exclude post", exact=False).focus()
+    await page.keyboard.press("Space")
+    save = page.get_by_role("button", name="Save and next →", exact=True)
+    await expect(save).to_be_disabled()
+    await expect(progress.get_by_role("button").first).to_be_disabled()
+    await page.get_by_label("Exclusion reason", exact=True).select_option("off_topic")
+    await audit("consumer-exclusion")
+    await save.focus()
+    await page.keyboard.press("Enter")
     await expect(page.get_by_text("0 of 2 final reviewed examples", exact=False)).to_be_visible()
     await queue.select_option("exclude")
     await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
-    await audit("consumer-saved-exclusion")
-    await page.get_by_label(re.compile("Eligibility decision")).select_option("include")
-    await page.get_by_role("button", name="Save eligibility decision", exact=True).click()
-    await queue.select_option("sentiment")
-    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
-    await page.get_by_role("button", name="positive (1)", exact=True).click()
+    await page.get_by_role("radio", name="Keep & label", exact=False).check()
+    await page.get_by_role("radio", name="positive", exact=True).check()
+    await save.click()
     await expect(page.get_by_text("1 of 2 final reviewed examples", exact=False)).to_be_visible()
-    await queue.select_option("pending")
-    await expect(page.get_by_label("Additional candidate quota")).to_have_value("1")
-    await expect(page.get_by_text("1 of 2 final reviewed examples", exact=False)).to_be_visible()
+    await queue.select_option("needs_review")
+    await expect(page.get_by_text("You\u2019re caught up", exact=True)).to_be_visible()
+    await expect(page.get_by_label("Posts to request")).to_have_value("1")
     await audit("consumer-shortfall")
-    request = page.get_by_role("button", name="Collect additional candidates", exact=True)
+    request = page.get_by_role("button", name="Get more posts", exact=True)
     await request.focus()
     await page.keyboard.press("Enter")
-    heading = page.get_by_role("heading", name="Review consumer reactions", exact=True)
-    await expect(heading).to_be_focused()
-    await queue.select_option("pending")
-    await expect(
-        page.get_by_text("1 eligibility reviews and 0 sentiment reviews", exact=False)
-    ).to_be_visible()
-    await audit("consumer-eligibility")
-    await page.get_by_label(re.compile("Eligibility decision")).select_option("exclude")
-    save = page.get_by_role("button", name="Save eligibility decision", exact=True)
-    await expect(save).to_be_disabled()
-    await audit("consumer-exclusion-required")
-    await page.get_by_label(re.compile("Eligibility decision")).select_option("include")
-    await save.focus()
-    await page.keyboard.press("Enter")
-    await expect(page.get_by_text("No records in this queue", exact=False)).to_be_visible()
-    await queue.select_option("sentiment")
-    await expect(page.locator("blockquote")).to_have_text("I like the coffee maker.")
-    await page.get_by_role("button", name="Next →", exact=True).click()
+    await expect(page.get_by_text("Loading your review queue…", exact=True)).to_be_visible()
+    await audit("consumer-loading")
+    fixture.collection_gate.set()
     await expect(page.locator("blockquote")).to_have_text(
         "I love the coffee maker, but the price puts me off."
     )
-    mixed = page.get_by_role("button", name="mixed (4)", exact=True)
-    await expect(mixed).to_be_enabled()
-    await mixed.focus()
-    await page.keyboard.press("4")
+    await expect(heading).to_be_visible()
+    await expect(page.get_by_text("1 saved post still needs review", exact=False)).to_be_visible()
+    await page.get_by_role("radio", name="Keep & label", exact=False).focus()
+    await page.keyboard.press("Space")
+    positive = page.get_by_role("radio", name="positive", exact=True)
+    await positive.focus()
+    await page.keyboard.press("Space")
+    for _ in range(3):
+        await page.keyboard.press("ArrowRight")
+    await expect(page.get_by_role("radio", name="mixed", exact=True)).to_be_checked()
+    await audit("consumer-combined-review")
+    await save.focus()
+    await page.keyboard.press("Enter")
     await expect(page.get_by_text("2 of 2 final reviewed examples", exact=False)).to_be_visible()
     await expect(request).to_have_count(0)
+    await expect(page.get_by_role("heading", name="Review progress", exact=True)).to_be_focused()
     await audit("consumer-target-reached")
-    await page.get_by_role("button", name="Continue to Export →", exact=True).focus()
-    await page.keyboard.press("Enter")
+    await page.get_by_role("button", name="Continue to Clean →", exact=True).click()
+    await expect(
+        page.get_by_role("heading", name="Clean and normalise", exact=True)
+    ).to_be_focused()
+    await page.get_by_role("button", name="Continue to Analyze →", exact=True).first.click()
+    await expect(page.get_by_role("heading", name="What changed", exact=True)).to_be_focused()
+    await page.get_by_role("button", name="Continue to Export →", exact=True).click()
     await expect(page.get_by_role("heading", name="Export", exact=True)).to_be_focused()
     await expect(
         page.get_by_role("button", name="Download Reviewed consumer Parquet", exact=True)
     ).to_be_enabled()
     await audit("consumer-export")
-    await (
-        page.get_by_role("navigation", name="Progress", exact=True)
-        .get_by_role("button", name=re.compile("Analyze"))
-        .focus()
-    )
-    await page.keyboard.press("Enter")
-    await expect(page.get_by_role("heading", name="What changed", exact=True)).to_be_focused()
-    await (
-        page.get_by_role("navigation", name="Progress", exact=True)
-        .get_by_role("button", name=re.compile("Collect"))
-        .focus()
-    )
-    await page.keyboard.press("Enter")
-    await expect(collect_heading).to_be_focused()
+    await progress.get_by_role("button", name=re.compile("Review & label")).click()
+    await expect(heading).to_be_focused()
+    await expect(page.get_by_text("You\u2019re caught up", exact=True)).to_be_visible()
     assert fixture.additional_requests == 1
     assert not fixture.unexpected, fixture.unexpected
     assert len(eligibility.reviewed_records(fixture.repo.get("consumer-a11y"))) == 2

@@ -40,3 +40,16 @@ it("keeps unconfigured local development accessible", async () => {
   expect(await screen.findByText("Local workflow")).toBeTruthy();
   expect(api.login).not.toHaveBeenCalled();
 });
+
+it("shows an accessible skeleton on reload until the connection check finishes", async () => {
+  let finish!: (value: Awaited<ReturnType<typeof api.health>>) => void;
+  vi.mocked(api.health).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  render(<OperatorAccess><p>Ready workflow</p></OperatorAccess>);
+  expect(screen.getByRole("status").textContent).toBe("Loading Sentiment Prep…");
+  expect(screen.getByRole("main").getAttribute("aria-busy")).toBe("true");
+  expect(screen.queryByText("Ready workflow")).toBeNull();
+  await act(async () => finish({ status: "ok", version: "test", diagnostics: true, x_configured: false, auth_required: false }));
+  expect(screen.getByText("Ready workflow")).toBeTruthy();
+  expect(screen.queryByText("Loading Sentiment Prep…")).toBeNull();
+  expect(api.login).not.toHaveBeenCalled();
+});

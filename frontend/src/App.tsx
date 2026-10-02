@@ -10,22 +10,23 @@ import type {
 } from "./api/types";
 import { DocumentTitle } from "./components/DocumentTitle";
 import { Header } from "./components/Header";
-import { STAGES, Stepper, type Stage } from "./components/Stepper";
+import { stagesFor, Stepper, type Stage } from "./components/Stepper";
 import { CleanStep } from "./components/stages/CleanStep";
 import { CollectStep } from "./components/stages/CollectStep";
 import { ExportStep } from "./components/stages/ExportStep";
 import { LabelStep } from "./components/stages/LabelStep";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
+import { SkeletonLines } from "./components/ui/Skeleton";
 import { useAsync } from "./hooks/useAsync";
 import { usePipelineConfig } from "./hooks/usePipelineConfig";
 import { useTheme } from "./hooks/useTheme";
 
 const HistoryDialog = lazy(() => import("./components/HistoryDialog"));
 const AnalyzeStep = lazy(() =>
-  import("./components/stages/AnalyzeStep").then((module) => ({ default: module.AnalyzeStep })),
+  import("./components/stages/AnalyzeStep").then((module) => ({
+    default: module.AnalyzeStep,
+  })),
 );
-
-const order = (s: Stage) => STAGES.findIndex((x) => x.id === s);
 
 /**
  * Own dataset and pipeline state across five stages. Consumer collections can go directly
@@ -58,17 +59,30 @@ export default function App() {
   } | null>(null);
   const [labelled, setLabelled] = useState(false);
   const [reviewActive, setReviewActive] = useState(false);
+  const [collecting, setCollecting] = useState(false);
+  const [consumerSelected, setConsumerSelected] = useState(false);
+  const [collectionMessage, setCollectionMessage] = useState("");
+  const collectionInFlight = useRef(false);
+  const consumer = !!dataset.data?.consumer_policy;
+  const consumerFlow = dataset.data ? consumer : consumerSelected;
+  const order = (s: Stage) => stagesFor(consumerFlow).findIndex((x) => x.id === s);
   const reached: Stage = dataset.loading
     ? "collect"
     : run.loading
       ? "analyze"
-      : labelled
-        ? "export"
-        : run.data || dataset.data?.consumer_policy
-          ? "label"
-          : dataset.data
+      : consumer
+        ? run.data
+          ? "export"
+          : labelled
             ? "clean"
-            : "collect";
+            : "label"
+        : labelled
+          ? "export"
+          : run.data
+            ? "label"
+            : dataset.data
+              ? "clean"
+              : "collect";
   const go = (s: Stage) => {
     if (!reviewActive && order(s) <= order(reached)) setStage(s);
   };
@@ -76,11 +90,30 @@ export default function App() {
   const collect = async (
     task: (signal: AbortSignal) => Promise<DatasetSummary>,
     openNextStage = false,
+    recoveryId?: string,
   ) => {
+    if (collectionInFlight.current) return null;
+    collectionInFlight.current = true;
+    setCollecting(true);
+    setCollectionMessage("");
+    const previous = dataset.data;
     run.reset();
     setLabelled(false);
     setRunVersion((v) => v + 1);
-    const result = await dataset.run(task);
+    let result = await dataset.run(task);
+    const interrupted = !result;
+    // An interrupted response can follow committed, paid pages. Read saved totals before
+    // offering another request; recovery never fetches from X.
+    if (!result && recoveryId) result = await dataset.run((signal) => api.dataset(recoveryId, signal));
+    collectionInFlight.current = false;
+    setCollecting(false);
+    if (result) {
+      const before = previous?.dataset_id === result.dataset_id ? previous.record_count : 0;
+      const added = Math.max(0, result.record_count - before);
+      setCollectionMessage(interrupted
+        ? `Request interrupted. Saved progress recovered: ${result.record_count.toLocaleString()} posts. Check collection status before resuming.`
+        : `${added ? `Added ${added.toLocaleString()} posts.` : "No new posts were added."} ${result.record_count.toLocaleString()} posts are saved in this dataset.`);
+    }
     if (result?.source_type === "x") {
       setSpendVersion((v) => v + 1);
       if (!result.partial) setXRequest(null);
@@ -103,12 +136,10 @@ export default function App() {
   const collectAdditional = async (target: number) => {
     const current = dataset.data;
     if (!current) return;
-    setStage("collect");
-    const result = await collect((signal) =>
+    await collect((signal) =>
       api.collectCandidates(current.dataset_id, target, signal),
+      false, current.dataset_id,
     );
-    // Each explicit batch returns to review; a shortfall never starts the next paid request.
-    if (result) setStage("label");
   };
 
   const runPipeline = async () => {
@@ -126,12 +157,18 @@ export default function App() {
     dataset.reset();
     setXRequest(null);
     setLabelled(false);
+    setCollectionMessage("");
+    setConsumerSelected(false);
     setStage("collect");
   };
 
   return (
     <div className="flex min-h-screen flex-col">
-      <DocumentTitle stage={stage} records={dataset.data?.record_count ?? null} />
+      <DocumentTitle
+        stage={stage}
+        records={dataset.data?.record_count ?? null}
+        consumer={consumerFlow}
+      />
       <Header
         diagnostics={health.data?.diagnostics ?? false}
         theme={theme}
@@ -139,28 +176,39 @@ export default function App() {
         onOpenHistory={() => setHistoryOpen(true)}
         spendVersion={spendVersion}
       />
-      <Stepper disabled={reviewActive} current={stage} reached={reached} onSelect={go} />
+      <Stepper
+        disabled={reviewActive || (consumer && dataset.loading)}
+        current={stage}
+        reached={reached}
+        onSelect={go}
+        consumer={consumerFlow}
+      />
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <ErrorBoundary>
-          <Suspense fallback={<p role="status">Loading {stage}…</p>}>
+          <Suspense fallback={<div className="glass-panel p-6"><p role="status" className="mb-5">Loading {stage}…</p><SkeletonLines lines={6} /></div>}>
             <StagePanel stage={stage}>
               {stage === "collect" && (
                 <CollectStep
                   busy={dataset.loading}
                   error={dataset.error}
                   dataset={dataset.data}
+                  collectionMessage={collectionMessage}
+                  onModeChange={setConsumerSelected}
                   costPerRead={health.data?.x_cost_per_read_usd}
                   localDatasetsAvailable={health.data?.local_datasets_available === true}
                   xConfigured={health.data?.x_configured ?? true}
                   onSearch={(q, n, window) => {
-                    const id = crypto.randomUUID();
+                    if (collectionInFlight.current) return;
+                    const sameRequest = xRequest?.query === q && xRequest.limit === n
+                      && JSON.stringify(xRequest.window) === JSON.stringify(window);
+                    const id = sameRequest ? xRequest.id : crypto.randomUUID();
                     if (window.preset === "consumer_reactions")
                       dispatch({
                         type: "options",
                         options: { ...config.options, keep_negations: true },
                       });
                     setXRequest({ id, query: q, limit: n, window });
-                    void collect((s) => api.load("x", n, q, window, s, id));
+                    void collect((s) => api.load("x", n, q, window, s, id), false, `x-${id}`);
                   }}
                   onResume={
                     dataset.data?.consumer_policy
@@ -175,7 +223,7 @@ export default function App() {
                                 xRequest.window,
                                 s,
                                 xRequest.id,
-                              ),
+                              ), false, `x-${xRequest.id}`,
                             )
                         : undefined
                   }
@@ -205,7 +253,8 @@ export default function App() {
                   onMove={(name, direction) => dispatch({ type: "move", name, direction })}
                   onOptions={(options) => dispatch({ type: "options", options })}
                   onRun={() => void runPipeline()}
-                  onBack={() => setStage("collect")}
+                  onBack={() => setStage(consumer ? "label" : "collect")}
+                  backLabel={consumer ? "Review & label" : "Collect"}
                 />
               )}
               {stage === "analyze" && dataset.data && (
@@ -222,7 +271,8 @@ export default function App() {
                   onCancel={run.cancel}
                   onRerun={() => void runPipeline()}
                   onBack={() => setStage("clean")}
-                  onContinue={() => setStage("label")}
+                  onContinue={() => setStage(consumer ? "export" : "label")}
+                  continueLabel={consumer ? "Export" : "Label"}
                 />
               )}
               {stage === "label" && dataset.data && (
@@ -230,23 +280,23 @@ export default function App() {
                   onReviewActiveChange={setReviewActive}
                   datasetId={dataset.data.dataset_id}
                   consumerDataset={dataset.data}
-                  collectionLoading={dataset.loading}
+                  collectionLoading={collecting}
+                  collectionError={dataset.error}
+                  collectionMessage={collectionMessage}
                   costPerRead={health.data?.x_cost_per_read_usd}
                   onAdditional={(target) => void collectAdditional(target)}
-                  onChanged={() => {
+                  onChanged={(updated) => {
                     run.reset();
                     setRunVersion((v) => v + 1);
-                    const current = dataset.data;
-                    if (current) void dataset.run((s) => api.dataset(current.dataset_id, s));
+                    void dataset.run(async () => updated);
                   }}
-                  onCollectMore={() => setStage("collect")}
                   diagnostics={health.data?.diagnostics ?? false}
                   comprehendEnabled={health.data?.comprehend_enabled ?? null}
                   checkpointLocation={health.data?.checkpoints ?? null}
-                  onBack={() => setStage("analyze")}
+                  onBack={() => setStage(consumer ? "collect" : "analyze")}
                   onContinue={() => {
                     setLabelled(true);
-                    setStage("export");
+                    setStage(consumer ? "clean" : "export");
                   }}
                 />
               )}
@@ -256,7 +306,7 @@ export default function App() {
                   dataset={dataset.data}
                   run={run.data}
                   diagnostics={health.data?.diagnostics ?? false}
-                  onBack={() => setStage("label")}
+                  onBack={() => setStage(consumer ? "analyze" : "label")}
                   onStartOver={startOver}
                 />
               )}

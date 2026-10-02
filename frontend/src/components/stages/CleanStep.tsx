@@ -14,6 +14,7 @@ interface Props {
   onOptions: (options: Partial<PipelineConfig["options"]>) => void;
   onRun: () => void;
   onBack: () => void;
+  backLabel?: string;
 }
 
 const GROUPS: { id: StepInfo["group"]; title: string; blurb: string }[] = [
@@ -23,7 +24,7 @@ const GROUPS: { id: StepInfo["group"]; title: string; blurb: string }[] = [
 ];
 
 /** Stage 2. Pick steps, see their trade-offs, then run. */
-export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, onRun, onBack }: Props) {
+export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, onRun, onBack, backLabel = "Collect" }: Props) {
   const byName = new Map(steps.map((s) => [s.name, s]));
   const active = config.order.filter((n) => config.enabled[n]);
   // A blank placeholder would leave the record empty and defeat the step, so the run is blocked
@@ -138,7 +139,7 @@ export function CleanStep({ steps, config, busy, onToggle, onMove, onOptions, on
             <button type="button" className="btn-primary" disabled={busy || !fillValid} onClick={onRun}>
               {busy ? "Running…" : "Continue to Analyze →"}
             </button>
-            <button type="button" className="btn-link self-start" onClick={onBack}>← Back to Collect</button>
+            <button type="button" className="btn-link self-start" onClick={onBack}>← Back to {backLabel}</button>
           </div>
           <p className="px-1 text-xs text-muted">Continuing runs your selected steps and opens Analyze. Each run starts from the original posts, so you can try combinations freely.</p>
         </aside>

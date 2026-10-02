@@ -24,16 +24,17 @@ interface Props {
   onContinue: () => void;
   consumerDataset?: DatasetSummary;
   collectionLoading?: boolean;
+  collectionError?: Error | null;
+  collectionMessage?: string;
   costPerRead?: number | null;
   onAdditional?: (candidateTarget: number) => void;
-  onChanged?: () => void;
-  onCollectMore?: () => void;
+  onChanged?: (dataset: DatasetSummary) => void;
 }
 
 type Phase = "method" | "labelling" | "review-choice" | "reviewing" | "summary";
 
 /**
- * Stage 4 combines optional Comprehend labels with manual review. Paid batches are saved
+ * General labeling combines optional Comprehend labels with manual review. Paid batches are saved
  * server-side. Manual decisions are queued in Reviewer and must finish saving before exit.
  */
 export function LabelStep(props: Props) {
@@ -45,13 +46,14 @@ export function LabelStep(props: Props) {
         policy={props.consumerDataset.consumer_policy}
         collection={props.consumerDataset}
         collectionLoading={props.collectionLoading}
+        collectionError={props.collectionError}
+        collectionMessage={props.collectionMessage}
         costPerRead={props.costPerRead}
         onAdditional={props.onAdditional}
         onChanged={props.onChanged}
         onReviewActiveChange={props.onReviewActiveChange}
         onBack={props.onBack}
         onContinue={props.onContinue}
-        onCollectMore={props.onCollectMore}
       />
     );
   // A different dataset owns a fresh review queue, progress state and request lifetime.

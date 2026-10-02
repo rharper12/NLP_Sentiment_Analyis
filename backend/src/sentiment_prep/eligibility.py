@@ -23,6 +23,7 @@ from sentiment_prep.models import (
     EligibilityReview,
     Record,
     ScreeningSuggestion,
+    SentimentLabel,
 )
 from sentiment_prep.storage.checkpoints import invalidate_checkpoints
 
@@ -191,7 +192,7 @@ def included_ids(bundle: DatasetBundle) -> set[str]:
 
 
 def reviewed_records(bundle: DatasetBundle) -> list[Record]:
-    """Training examples require both independent human reviews; confidence is optional."""
+    """Training examples require both human decisions; confidence is optional."""
     selected = included_ids(bundle)
     return [
         r
@@ -277,18 +278,21 @@ def counts(bundle: DatasetBundle) -> ConsumerCounts:
 
 
 class EligibilityItem(BaseModel):
-    """An explicit operator confirmation; overrides must explain the changed suggestion."""
+    """One review can confirm eligibility and sentiment in the same transaction."""
 
     id: str
     decision: EligibilityDecision
     reason: EligibilityReason | None = None
     note: str = Field(default="", max_length=2000)
+    label: SentimentLabel | None = None
 
     @model_validator(mode="after")
     def exclusion_reason(self) -> EligibilityItem:
         """An exclusion is incomplete without a stable reason."""
         if self.decision == "exclude" and self.reason is None:
             raise ValueError("Choose an exclusion reason")
+        if self.label is not None and self.decision != "include":
+            raise ValueError("Only included posts can receive a sentiment label")
         return self
 
 
@@ -308,6 +312,8 @@ def apply_decisions(bundle: DatasetBundle, items: list[EligibilityItem]) -> Data
     by_id = {r.id: r for r in updated.original.records}
     if any(item.id not in by_id for item in items):
         raise ValidationError("Review contains an unknown record ID")
+    if len({item.id for item in items}) != len(items):
+        raise ValidationError("Review contains duplicate record IDs")
     for item in items:
         record = by_id[item.id]
         if (
@@ -327,6 +333,11 @@ def apply_decisions(bundle: DatasetBundle, items: list[EligibilityItem]) -> Data
         record.eligibility_history.append(
             EligibilityReview(decision=item.decision, reason=item.reason, note=item.note.strip())
         )
+        if item.label is not None:
+            # Store the human judgment even for an author-limit hold. Selection remains
+            # independent of sentiment, and a later selection change needs no second review.
+            by_id[item.id] = record.with_manual_label(item.label)
+    updated.original.records = [by_id[r.id] for r in updated.original.records]
     invalidate_derived(updated)
     selected = included_ids(updated)
     updated.review_ids = [i for i in updated.review_ids if i in selected]

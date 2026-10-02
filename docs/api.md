@@ -113,14 +113,19 @@ rejections), `screened_candidates`, `pending_eligibility`, `human_inclusions`, `
 `reviewed_final`, `reviewed_target`, `shortfall`, and per-day candidate/included/final counts.
 Legacy `record_count`, `labelled_count`, and billing counters retain their meanings. Collection
 `partial` means resumable provider work; it does not imply reviewed-target completion.
+`first_batch_saved` and `last_batch_saved` count saved rows added by the first and latest
+collection requests, respectively. They are persisted with each page, survive read-only reloads,
+and exclude repeated IDs and rejected source rows. They are not provider reads or reviewed
+counts. Missing historical batch counts remain `null`; a request adding no rows reports zero.
 
 **POST `/dataset/{id}/candidates`** `{"candidate_target":200,"confirm_cost":true}` explicitly
 extends the absolute candidate target or resumes the same target. Repeating a target is idempotent;
 decreasing it is rejected. It reuses saved criteria, seen IDs, day cursors and cumulative job caps.
 Once `consumer_counts.shortfall` is zero, additional collection returns 400 without modifying
 the quota or contacting X. A later review correction that creates a shortfall permits it again.
-The UI defaults the next quota to the shortfall, capped by remaining collection capacity, and
-returns to review after each explicit batch. Paused batches resume the same absolute target.
+Collect's **Get more posts** resumes only the authorized collection goal. Review can extend it;
+the suggested quota subtracts pending reviews from the shortfall and respects remaining capacity.
+Each explicit request stays on the current step. Paused batches resume the same absolute target.
 No request follows automatically from an exclusion. Query/date/policy changes require a new context.
 `candidate_target` and `can_collect_more` describe collection capacity, not training completion.
 Ordinary budget pauses have no `retry_at`; genuine throttles do. Terminal provider 4xx errors
@@ -129,7 +134,7 @@ falls back to recent results. See the [pilot and policy guide](how-the-app-works
 
 **GET `/dataset/{id}/eligibility?offset=0&limit=100&status=all`** returns original records,
 `total`, `offset`, current `included_ids` and counts. Statuses: `all`, `pending`, `include`,
-`exclude`, `sentiment`. The last selects current author-capped inclusions, including completed
+`exclude`, `sentiment`, `needs_review`. The `sentiment` view selects current author-capped inclusions, including completed
 sentiment decisions for correction. Include/exclude queues mean human decisions, not suggestions.
 
 **PUT `/dataset/{id}/eligibility`**
@@ -138,7 +143,15 @@ persists explicit confirmations. Decisions are `include`, `exclude`, `pending`; 
 a stable reason. Overriding the automatic decision requires a note. Human history is retained;
 pending undoes review, and changing eligibility requires sentiment reconfirmation. Labels and
 machine scores remain recoverable. Both unchanged confirmations persist as completed review.
-Only current author-selected inclusions may use consumer manual/Comprehend sentiment routes.
+The eligibility PUT also accepts an optional `label` (positive/negative/neutral/mixed) with an
+`include` decision. It saves eligibility and human sentiment under one exclusive edit, so a failed
+validation cannot leave half a review. Labels on exclusions or pending decisions are rejected.
+`GET .../eligibility?status=needs_review` returns unresolved eligibility and selected inclusions
+without reviewed sentiment; completed posts leave that queue. Existing eligibility-only requests
+remain supported. Duplicate record IDs in a review request are rejected.
+
+Author-limit holds retain combined manual labels, while selection remains independent of sentiment.
+Only current author-selected inclusions may use the separate manual/Comprehend sentiment routes.
 The consumer UI uses manual sentiment; preprocessing does not automatically call cloud scoring.
 
 **POST `/dataset/upload`** multipart `file` (UTF-8 CSV with `text`, optional `label`/`id`),

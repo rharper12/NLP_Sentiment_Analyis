@@ -248,7 +248,7 @@ export function ExportStep({ dataset, run, diagnostics, onBack, onStartOver }: P
 
       <div className="flex flex-wrap justify-between gap-3">
         <button type="button" className="btn" onClick={onBack}>
-          ← Back to Label
+          ← Back to {dataset.consumer_policy ? "Analyze" : "Label"}
         </button>
         <button type="button" className="btn" onClick={onStartOver}>
           Start a new topic

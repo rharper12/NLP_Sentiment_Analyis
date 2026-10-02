@@ -19,3 +19,16 @@ it("prevents stage navigation while manual review owns unsaved decisions", () =>
   fireEvent.click(screen.getByRole("button", { name: /Export/ }));
   expect(select).toHaveBeenCalledWith("export");
 });
+
+it("shows consumer review as step two and unlocks later stages in that order", () => {
+  const select = vi.fn();
+  render(<Stepper consumer current="label" reached="label" onSelect={select} />);
+  const buttons = screen.getAllByRole("button");
+  expect(buttons.map((button) => button.textContent)).toEqual([
+    expect.stringContaining("Collect"), expect.stringContaining("2Review & label"),
+    expect.stringContaining("3Clean"), expect.stringContaining("4Analyze"),
+    expect.stringContaining("5Export"),
+  ]);
+  expect(buttons[1].getAttribute("aria-current")).toBe("step");
+  for (const button of buttons.slice(2)) expect(button.hasAttribute("disabled")).toBe(true);
+});

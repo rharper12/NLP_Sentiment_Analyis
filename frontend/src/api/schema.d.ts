@@ -867,6 +867,10 @@ export interface components {
             billed_reads?: number | null;
             /** Committed Cost Usd */
             committed_cost_usd?: number | null;
+            /** First Batch Saved */
+            first_batch_saved?: number | null;
+            /** Last Batch Saved */
+            last_batch_saved?: number | null;
             /**
              * Partial
              * @default false
@@ -912,7 +916,7 @@ export interface components {
         };
         /**
          * EligibilityItem
-         * @description An explicit operator confirmation; overrides must explain the changed suggestion.
+         * @description One review can confirm eligibility and sentiment in the same transaction.
          */
         EligibilityItem: {
             /** Id */
@@ -929,6 +933,8 @@ export interface components {
              * @default
              */
             note: string;
+            /** Label */
+            label?: ("positive" | "negative" | "neutral" | "mixed") | null;
         };
         /**
          * EligibilityPage
@@ -2244,7 +2250,7 @@ export interface operations {
             query?: {
                 offset?: number;
                 limit?: number;
-                status?: "all" | "pending" | "include" | "exclude" | "sentiment";
+                status?: "all" | "pending" | "include" | "exclude" | "sentiment" | "needs_review";
             };
             header?: {
                 "X-API-Key"?: string | null;
