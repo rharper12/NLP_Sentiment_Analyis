@@ -9,6 +9,7 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from sentiment_prep.errors import ValidationError
 from sentiment_prep.export.rows import ROW_COLUMNS, bundle_rows
 from sentiment_prep.models import DatasetBundle
 
@@ -22,6 +23,7 @@ IMPACT_COLUMNS = [
     "avg_tokens_after",
     "duration_ms",
 ]
+MAX_CELL_CHARACTERS = 32767
 
 
 def to_excel(bundle: DatasetBundle, *, diagnostics: bool = False) -> bytes:
@@ -59,7 +61,14 @@ def _write_sheet(sheet: Worksheet, columns: list[str], rows: list[list[object]])
     sheet.append(columns)
     for cell in sheet[1]:
         cell.font = Font(bold=True)
-    for row in rows:
+    for row_number, row in enumerate(rows, start=2):
+        for column, value in zip(columns, row, strict=True):
+            if isinstance(value, str) and len(value) > MAX_CELL_CHARACTERS:
+                raise ValidationError(
+                    f"Excel cannot store more than {MAX_CELL_CHARACTERS:,} characters per cell "
+                    f"({sheet.title}, row {row_number}, {column}). "
+                    "Download CSV or Parquet to preserve the complete text."
+                )
         sheet.append(row)
         for cell in sheet[sheet.max_row]:
             if isinstance(cell.value, str):

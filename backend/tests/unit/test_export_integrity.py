@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 from openpyxl import load_workbook
 
+from sentiment_prep.errors import ValidationError
 from sentiment_prep.export.csv_export import to_checkpoint_csv, to_csv
 from sentiment_prep.export.excel_export import to_excel
 from sentiment_prep.export.parquet_export import EXPORT_SCHEMA, csv_to_parquet, to_parquet
@@ -121,3 +122,23 @@ def test_legacy_numeric_looking_csv_checkpoint_still_uses_string_columns():
     assert table.to_pylist()[0]["id"] == "00123"
     assert table.to_pylist()[0]["original_text"] == "12345"
     assert table.to_pylist()[0]["label"] == "007"
+
+
+def test_excel_preserves_text_at_the_cell_limit():
+    text = "x" * 32767
+    workbook = load_workbook(
+        BytesIO(to_excel(make_bundle([Record(id="1", text=text, source_type="csv")])))
+    )
+    assert workbook["data"].cell(2, ROW_COLUMNS.index("original_text") + 1).value == text
+
+
+@pytest.mark.parametrize("field", ["text", "id", "label"])
+def test_excel_refuses_silent_truncation_but_lossless_formats_keep_the_value(field):
+    text = "x" * 32768
+    record = Record.model_validate({"id": "1", "text": "hello", "source_type": "csv", field: text})
+    bundle = make_bundle([record])
+    with pytest.raises(ValidationError, match=r"32,767.*row 2.*Download CSV or Parquet"):
+        to_excel(bundle)
+    column = "original_text" if field == "text" else field
+    assert next(csv.DictReader(StringIO(to_csv(bundle).decode("utf-8-sig"))))[column] == text
+    assert parquet_rows(to_parquet(bundle)).to_pylist()[0][column] == text

@@ -95,7 +95,7 @@ is current.
 
 ## Run locally
 
-Use Python 3.12 or newer, Node.js 22.12 or newer, npm, and Make on macOS or Linux. Windows users
+Use Python 3.12 or newer, Node.js 22.22.2+ (22.x), 24.15+ (24.x), or 26+, npm, and Make on macOS or Linux. Windows users
 can use WSL; local storage uses POSIX file locks.
 
 ```bash
@@ -176,7 +176,7 @@ labels take precedence, and the Comprehend prediction remains available alongsid
 | --- | --- |
 | Parquet | Typed dataset columns; preferred for subsequent analysis or model training. |
 | CSV | Dataset rows protected against spreadsheet formula execution. This protection can add a leading apostrophe; use Parquet when exact text matters. |
-| Excel | A data sheet and an impact sheet with preprocessing statistics. |
+| Excel | A data sheet and an impact sheet with preprocessing statistics. Cells over 32,767 characters are rejected; use CSV or Parquet to retain the complete text. |
 | Markdown report | Source details, selected steps, measured changes, and labelling summary. |
 | Original JSON | Original text and provenance without later annotations or processing state. Available from Collect. |
 

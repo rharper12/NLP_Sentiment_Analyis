@@ -21,7 +21,7 @@ import sys
 from typing import Any
 
 from a11y_consumer import walk_consumer
-from playwright.async_api import Page, async_playwright, expect
+from playwright.async_api import Page, Route, async_playwright, expect
 
 AXE = pathlib.Path(__file__).resolve().parents[1] / "frontend/node_modules/axe-core/axe.min.js"
 # Include WCAG 2.2 AA. Report unresolved checks separately; an empty violations list alone
@@ -307,7 +307,47 @@ async def walk_stages(page: Page, theme: str, findings: list[Finding], shots: bo
     rows = list(csv.DictReader(io.StringIO(content)))
     reviewed = [row for row in rows if row["label_source"] == "manual"]
     assert len(reviewed) == 6 and all(row["label"] == "positive" for row in reviewed)
+    await cloud_download(page, content)
     await audit("export-custom-name")
+
+
+async def cloud_download(page: Page, content: str) -> None:
+    """Exercise the real client against a cloud response and a mocked private S3 attachment."""
+    export_path = "**/dataset/*/export.csv*"
+    object_url = "https://downloads.example.test/_downloads/test/My-reviewed-posts.csv"
+
+    async def link(route: Route) -> None:
+        await route.fulfill(
+            content_type="application/vnd.sentiment-prep.download+json",
+            body=json.dumps(
+                {"url": object_url, "filename": "My reviewed posts.csv", "expires_in": 300}
+            ),
+        )
+
+    async def attachment(route: Route) -> None:
+        assert "authorization" not in route.request.headers
+        assert "referer" not in route.request.headers
+        await route.fulfill(
+            content_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="My reviewed posts.csv"'},
+            body=content.encode(),
+        )
+
+    await page.route(export_path, link)
+    await page.route(object_url, attachment)
+    previous_url = page.url
+    try:
+        async with page.expect_download() as pending:
+            await page.get_by_role("button", name="Download CSV", exact=True).click()
+        exported = await pending.value
+        assert exported.suggested_filename == "My reviewed posts.csv"
+        path = await exported.path()
+        assert path and await asyncio.to_thread(pathlib.Path(path).read_text) == content
+        assert page.url == previous_url, "The attachment must leave the review screen open"
+    finally:
+        await page.unroute(export_path, link)
+        await page.unroute(object_url, attachment)
+    print("Cloud download: private link, filename, complete bytes, and session isolation passed")
 
 
 async def main() -> int:

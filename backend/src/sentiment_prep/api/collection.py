@@ -14,6 +14,7 @@ from decimal import Decimal
 
 from sentiment_prep import eligibility
 from sentiment_prep.api import deps
+from sentiment_prep.api.pagination import bounded_page
 from sentiment_prep.api.schemas import AdditionalCandidatesRequest, DatasetSummary, LoadRequest
 from sentiment_prep.budget import can_start
 from sentiment_prep.config import Settings, get_settings
@@ -255,7 +256,7 @@ def summarize(bundle: DatasetBundle, *, local_dev: bool = False) -> DatasetSumma
         resume_request_id=bundle.dataset_id.removeprefix("x-") if bundle.collection else None,
         retry_at=bundle.collection.retry_at or None if bundle.collection else None,
         warnings=warnings,
-        preview=dataset.records[:PREVIEW_ROWS],
+        preview=bounded_page(dataset.records[:PREVIEW_ROWS]),
         consumer_policy=dataset.consumer_policy,
         consumer_counts=eligibility.counts(bundle) if dataset.consumer_policy else None,
         candidate_target=(

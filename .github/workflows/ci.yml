@@ -1,0 +1,103 @@
+name: Project checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: sentiment_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d sentiment_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://test:test@127.0.0.1:5432/sentiment_test
+      COMPREHEND_ENABLED: "false"
+      PRICING_ENABLED: "false"
+      AWS_EC2_METADATA_DISABLED: "true"
+      RUNTIME: local
+      VITE_API_URL: http://127.0.0.1:8000
+      CORS_ORIGINS: http://127.0.0.1:5173
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked dependencies and corpora
+        run: |
+          python -m venv .venv
+          make setup
+      - run: make check
+      - name: Build production frontend
+        run: npm --prefix frontend run build
+      - name: Check generated API types
+        run: |
+          .venv/bin/python -c 'import json; from sentiment_prep.api.app import app; print(json.dumps(app.openapi()))' > "$RUNNER_TEMP/openapi.json"
+          frontend/node_modules/.bin/openapi-typescript "$RUNNER_TEMP/openapi.json" -o "$RUNNER_TEMP/schema.d.ts"
+          diff -u frontend/src/api/schema.d.ts "$RUNNER_TEMP/schema.d.ts"
+      - name: Install browser
+        if: matrix.python == '3.12'
+        run: .venv/bin/python -m playwright install --with-deps chromium
+      - name: Audit real local workflow and consumer fixtures
+        if: matrix.python == '3.12'
+        env:
+          A11Y_UI_URL: http://127.0.0.1:5173
+          DATABASE_URL: sqlite:////tmp/sentiment-ci.sqlite3
+          CHECKPOINT_DIR: /tmp/sentiment-ci-checkpoints
+        run: |
+          .venv/bin/uvicorn sentiment_prep.api.app:app --host 127.0.0.1 --port 8000 > "$RUNNER_TEMP/api.log" 2>&1 &
+          api_pid=$!
+          (cd frontend && exec node node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port 5173 --strictPort) > "$RUNNER_TEMP/web.log" 2>&1 &
+          web_pid=$!
+          trap 'kill "$api_pid" "$web_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8000/health >/dev/null && curl --fail --silent http://127.0.0.1:5173 >/dev/null; then break; fi
+            sleep 1
+          done
+          make audit-a11y || { cat "$RUNNER_TEMP/api.log" "$RUNNER_TEMP/web.log"; exit 1; }
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SAM_CLI_TELEMETRY: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+      - run: make validate
+      - name: Build Lambda runtime with the production lock
+        run: docker build -f backend/Dockerfile -t sentiment-prep-ci .

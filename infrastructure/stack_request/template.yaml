@@ -77,6 +77,16 @@ Resources:
             Status: Enabled
             Prefix: _work/
             ExpirationInDays: 7
+          - Id: ExpireDownloads
+            Status: Enabled
+            Prefix: _downloads/
+            ExpirationInDays: 1
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 1
+          - Id: RemoveDownloadMarkers
+            Status: Enabled
+            Prefix: _downloads/
+            ExpiredObjectDeleteMarker: true
 
   DataBucketPolicy:
     Type: AWS::S3::BucketPolicy

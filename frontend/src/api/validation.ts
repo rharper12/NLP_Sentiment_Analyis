@@ -184,6 +184,12 @@ export const recordPageSchema: z.ZodType<RecordPage> = z.looseObject({
   items: z.array(recordPairSchema),
 });
 
+export const downloadLinkSchema = z.object({
+  url: z.url().refine((url) => /^https:\/\//i.test(url), "Download URL must use HTTPS"),
+  filename: z.string(),
+  expires_in: z.number().positive(),
+});
+
 export const labelEstimateSchema: z.ZodType<LabelEstimate> = z.looseObject({
   prefix_labels: z.number().int().nonnegative().default(0),
   truncated_records: z.number().int().nonnegative().default(0),

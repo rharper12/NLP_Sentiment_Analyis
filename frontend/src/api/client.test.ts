@@ -34,6 +34,21 @@ afterEach(() => {
 });
 
 describe("authenticated downloads", () => {
+  it("opens a cloud download directly without forwarding the API token or fetching S3", async () => {
+    const url = "https://bucket.s3.us-east-1.amazonaws.com/_downloads/id/export.csv?X-Amz-Signature=test";
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ url, filename: "export.csv", expires_in: 300 }), { headers: { "Content-Type": "application/vnd.sentiment-prep.download+json" } }));
+    await api.download("dataset", "csv");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(clicked).toEqual([{ name: "export.csv", href: url }]);
+    expect(create).not.toHaveBeenCalled();
+    expect(document.querySelector("a")).toBeNull();
+  });
+
+  it.each(["javascript:alert(1)", "http://insecure.test/file", "broken"])("rejects an invalid cloud URL: %s", async (url) => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ url, filename: "export.csv", expires_in: 300 }), { headers: { "Content-Type": "application/vnd.sentiment-prep.download+json" } }));
+    await expect(api.download("dataset", "csv")).rejects.toThrow("Unexpected response");
+    expect(clicked).toEqual([]);
+  });
   it("sends the local timezone and encodes a custom stem while keeping the CSV route", async () => {
     fetchMock.mockResolvedValueOnce(new Response("contents", { headers: { "Content-Disposition": 'attachment; filename="My results.csv"' } }));
     await api.download("dataset", "csv", undefined, "My results");
@@ -84,6 +99,22 @@ describe("authenticated downloads", () => {
       expect(new Headers(fetchMock.mock.calls[1][1]?.headers).has("Authorization")).toBe(false);
     }
   });
+});
+
+it("continues after short byte-limited record pages without dropping rows", async () => {
+  const item = (id: string) => ({ original: { id, text: id, source_type: "csv" }, processed: null });
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ total: 3, offset: 0, items: [item("1"), item("2")] })));
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ total: 3, offset: 2, items: [item("3")] })));
+  expect((await api.allRecords("dataset", 3)).map((r) => r.original.id)).toEqual(["1", "2", "3"]);
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    "/api/dataset/dataset/records?offset=0&limit=1000", "/api/dataset/dataset/records?offset=2&limit=1000",
+  ]);
+});
+
+it("rejects an empty records page before the reported end instead of looping", async () => {
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ total: 3, offset: 0, items: [] })));
+  await expect(api.allRecords("dataset", 3)).rejects.toThrow("Empty page");
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 it("restores a selected local file through the authenticated endpoint", async () => {

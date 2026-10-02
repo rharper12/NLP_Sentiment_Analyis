@@ -65,6 +65,41 @@ def test_stopwords_all_stopwords_yields_empty():
     assert out is not None and out.tokens == [] and out.text == ""
 
 
+@pytest.mark.parametrize(
+    "negation",
+    [
+        "aren't",
+        "couldn't",
+        "didn't",
+        "doesn't",
+        "don't",
+        "hadn't",
+        "hasn't",
+        "haven't",
+        "isn't",
+        "mightn't",
+        "mustn't",
+        "needn't",
+        "shan't",
+        "shouldn't",
+        "wasn't",
+        "weren't",
+        "won't",
+        "wouldn't",
+    ],
+)
+@pytest.mark.parametrize("tokenize", [False, True])
+def test_keep_negations_preserves_contractions_with_and_without_tokenization(negation, tokenize):
+    record = rec(f"I {negation.upper()} like this")
+    if tokenize:
+        record = TokenizeStep().transform(record)
+    kept = StopwordStep(keep_negations=True).transform(record)
+    expected = "N'T" if tokenize else negation.upper()
+    assert expected in kept.tokens
+    dropped = StopwordStep(keep_negations=False).transform(record)
+    assert expected not in dropped.tokens
+
+
 def test_lemmatize_collapses_plurals():
     out = LemmatizeStep().transform(rec("cats houses running"))
     assert out is not None and out.tokens[:2] == ["cat", "house"]

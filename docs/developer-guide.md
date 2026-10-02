@@ -24,8 +24,33 @@ Use `make lock LOCK_FLAGS=--upgrade` only for a deliberate update, then install 
 rerun validation. Do not hand-edit generated hashes.
 
 GitHub Actions runs `make check` and the production build on Python 3.12 and 3.14. A disposable
-PostgreSQL service exercises the otherwise optional concurrency test. The Python 3.12 job
+PostgreSQL service exercises concurrency, history migrations, and collection persistence. The Python 3.12 job
 also runs the browser audit against isolated local services with paid integrations disabled.
+The container job validates SAM and builds the Lambda image from the runtime lock.
+
+Use a supported Node version from `frontend/package.json` (Node 24.15+ on the 24.x line is
+recommended). Older Node 24 releases do not satisfy the locked browser-test dependencies.
+
+PostgreSQL initialization upgrades the legacy `dataset_run.dataset_id` column from
+`VARCHAR(32)` to `TEXT`, preserving rows and relationships. A transaction advisory lock
+serializes concurrent initializations; existing connection and statement timeouts apply.
+The database identity needs permission to alter its own table. A failed migration stops
+initialization before paid collection begins. SQLite needs no length migration.
+
+Record, review, and eligibility pages also have a serialized byte budget. API consumers must
+continue at `offset + len(items)` until `total`, even when a page contains fewer than `limit`
+records. Local downloads still return file bytes. Lambda export endpoints return
+`application/vnd.sentiment-prep.download+json` with `url`, `filename`, and `expires_in` instead.
+Navigate to that URL directly: S3 sends the attachment headers, and the API session token must
+not be forwarded. Links last at most five minutes. Private objects under `_downloads/` expire
+after one day; lifecycle rules also remove old versions and delete markers. Deploy the updated
+bucket lifecycle and frontend together with the API.
+
+The dependency refresh on 2026-10-02 fixes the reported urllib3 and brace-expansion advisories.
+NLTK 3.10.3 still has an [upstream model-path advisory](https://github.com/nltk/nltk/security/advisories/GHSA-8mgp-746c-j5xp)
+with no patched release. This app uses fixed bundled language resources and does not expose
+the affected model import/export path APIs. Recheck the advisory when refreshing the locks;
+do not treat an unfiltered Python dependency audit as clean until the upstream issue is fixed.
 
 Run `make stop` from another terminal in this checkout to stop its API and Vite servers,
 including leftover instances on fallback ports. It also handles jobs suspended with Ctrl-Z

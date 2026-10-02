@@ -200,7 +200,7 @@ export interface paths {
         };
         /**
          * Page through records
-         * @description Original records joined with their processed version (null if dropped).
+         * @description Join original/processed records; advance by returned length after a byte-limited page.
          */
         get: operations["get_records_dataset__dataset_id__records_get"];
         put?: never;
@@ -2714,13 +2714,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": unknown;
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
                 };
             };
             /** @description Client Error */
@@ -2760,12 +2768,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
+                };
             };
             /** @description Client Error */
             "4XX": {
@@ -2804,12 +2821,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
+                };
             };
             /** @description Client Error */
             "4XX": {
@@ -2848,12 +2874,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
+                };
             };
             /** @description Client Error */
             "4XX": {
@@ -2892,12 +2927,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
+                };
             };
             /** @description Client Error */
             "4XX": {
@@ -2936,12 +2980,21 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description File bytes locally; a temporary private download link in Lambda. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/vnd.sentiment-prep.download+json": {
+                        /** Url */
+                        url: string;
+                        /** Filename */
+                        filename: string;
+                        /** Expires In */
+                        expires_in: number;
+                    };
+                };
             };
             /** @description Client Error */
             "4XX": {

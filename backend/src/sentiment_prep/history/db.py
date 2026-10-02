@@ -2,7 +2,7 @@
 
 ``DATABASE_URL`` picks the backend: SQLite in ``./data`` locally, SQLite on ``/tmp`` in Lambda
 (ephemeral, reported by ``/health``), or Postgres when the operator supplies a URL. Tables are
-created on first use; there is no separate migration step because the schema is tiny and additive.
+created and upgraded on first use, before any paid collection can start.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.engine import make_url
 from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.exc import SQLAlchemyError
@@ -53,7 +53,7 @@ def get_engine() -> Engine:
             connection.execute("PRAGMA busy_timeout=5000")
 
     started = time.perf_counter()
-    Base.metadata.create_all(engine)
+    initialize_schema(engine)
     logger.info(
         "database_ready",
         backend=engine.dialect.name,
@@ -61,6 +61,29 @@ def get_engine() -> Engine:
         duration_ms=round((time.perf_counter() - started) * 1000, 1),
     )
     return engine
+
+
+def initialize_schema(engine: Engine) -> None:
+    """Create tables and widen legacy PostgreSQL IDs without changing existing data.
+
+    The transaction lock serializes cold starts, including the check/create sequence. Engine
+    statement/lock timeouts still apply: migration failure refuses paid work before X is called.
+    SQLite does not enforce VARCHAR lengths and needs no table rebuild.
+    """
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql("SELECT pg_advisory_xact_lock(2026100201)")
+        Base.metadata.create_all(connection)
+        if engine.dialect.name == "postgresql":
+            column = next(
+                c
+                for c in inspect(connection).get_columns("dataset_run")
+                if c["name"] == "dataset_id"
+            )
+            if getattr(column["type"], "length", None) is not None:
+                connection.exec_driver_sql(
+                    "ALTER TABLE dataset_run ALTER COLUMN dataset_id TYPE TEXT"
+                )
 
 
 def build_engine(url: str) -> Engine:

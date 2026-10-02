@@ -13,7 +13,9 @@ from sentiment_prep.models import Record
 from sentiment_prep.preprocessing.base import PreprocessStep
 from sentiment_prep.preprocessing.stopword_list import ENGLISH_STOPWORDS
 
-NEGATIONS = frozenset({"no", "not", "nor", "never", "n't", "don't", "isn't", "wasn't", "won't"})
+NEGATIONS = frozenset({"no", "not", "nor", "never", "n't"}) | frozenset(
+    word for word in ENGLISH_STOPWORDS if word.endswith("n't")
+)
 
 
 class StopwordStep(PreprocessStep):
@@ -22,7 +24,9 @@ class StopwordStep(PreprocessStep):
     name: ClassVar[str] = "stopwords"
 
     def __init__(self, keep_negations: bool = True) -> None:
-        self._stopwords = ENGLISH_STOPWORDS - NEGATIONS if keep_negations else ENGLISH_STOPWORDS
+        self._stopwords = (
+            ENGLISH_STOPWORDS - NEGATIONS if keep_negations else ENGLISH_STOPWORDS | NEGATIONS
+        )
 
     def transform(self, record: Record) -> Record | None:
         kept = [w for w in record.words() if w.lower() not in self._stopwords]

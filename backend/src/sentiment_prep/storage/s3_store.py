@@ -40,6 +40,23 @@ class S3Store:
         self._prefix = prefix.strip("/")
         self._client = client
 
+    def download_link(
+        self, content: bytes, media_type: str, filename: str, *, expires_in: int
+    ) -> str:
+        """Stage one immutable private export; the bucket expires this prefix after a day."""
+        key = f"_downloads/{uuid.uuid4().hex}/{filename}"
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=content,
+            ContentType=media_type,
+            ContentDisposition=f'attachment; filename="{filename}"',
+            CacheControl="no-store",
+        )
+        return self._client.generate_presigned_url(
+            "get_object", Params={"Bucket": self._bucket, "Key": key}, ExpiresIn=expires_in
+        )
+
     def save(
         self, bundle: DatasetBundle, *, diagnostics: bool = False, filename: str | None = None
     ) -> str:

@@ -20,6 +20,7 @@ import {
   localDatasetPageSchema,
   checkpointListSchema,
   datasetSummarySchema,
+  downloadLinkSchema,
   eligibilityPageSchema,
   healthSchema,
   historyRunSchema,
@@ -220,14 +221,18 @@ export const api = {
   allRecords: async (datasetId: string, total: number, signal?: AbortSignal) => {
     const PAGE = 1000; // server caps a page at 1000
     const items: RecordPage["items"] = [];
-    for (let offset = 0; offset < total; offset += PAGE) {
+    for (let offset = 0; offset < total;) {
       const page = await request(
         `/dataset/${datasetId}/records?offset=${offset}&limit=${PAGE}`,
         recordPageSchema,
         { signal },
       );
       items.push(...page.items);
-      if (page.items.length < PAGE) break;
+      total = page.total;
+      offset += page.items.length;
+      if (page.items.length === 0 && offset < total) {
+        throw new ApiContractError("records", "Empty page before the end of the dataset", null);
+      }
     }
     return items;
   },
@@ -276,6 +281,22 @@ export const api = {
     const filename = kind === "md" ? `${datasetId}-report.md` : `${datasetId}.${kind}`;
     const path = kind === "original.json" || kind === "reviewed.parquet" ? `/dataset/${datasetId}/${kind}` : kind === "md" ? `/dataset/${datasetId}/report.md` : `/dataset/${datasetId}/export.${kind}`;
     const response = await authorizedFetch(`${path}${customName === undefined ? "" : `?${new URLSearchParams({ filename: customName })}`}`, { signal });
+    if (response.headers.get("Content-Type")?.split(";")[0] === "application/vnd.sentiment-prep.download+json") {
+      const link = downloadLinkSchema.safeParse(await response.json());
+      if (!link.success) throw new ApiContractError(path, link.error.message, response.headers.get("X-Request-Id"));
+      const anchor = document.createElement("a");
+      try {
+        // Navigate directly: S3 supplies Content-Disposition, with no API token or CORS fetch.
+        anchor.href = link.data.url;
+        anchor.download = link.data.filename;
+        anchor.rel = "noreferrer";
+        document.body.appendChild(anchor);
+        anchor.click();
+      } finally {
+        anchor.remove();
+      }
+      return;
+    }
     const blob = await response.blob();
     const disposition = response.headers.get("Content-Disposition");
     const supplied = disposition?.match(/filename="([^"\r\n]+)"/i)?.[1];

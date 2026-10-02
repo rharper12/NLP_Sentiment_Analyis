@@ -90,3 +90,28 @@ def test_request_budget_and_postgres_packaging():
     dockerfile = (ROOT / "backend" / "Dockerfile").read_text()
     assert "lambda/python:3.12" in dockerfile
     assert "import psycopg" in dockerfile and "postgresql+psycopg" in dockerfile
+
+
+def test_setup_and_container_locks_exist_and_share_runtime_versions():
+    import re
+
+    locks = [
+        (ROOT / "backend" / name).read_text()
+        for name in ("requirements.txt", "requirements-dev.txt")
+    ]
+    runtime, development = [
+        dict(re.findall(r"^([\w-]+)==([^ ;\\]+)", lock, re.MULTILINE)) for lock in locks
+    ]
+    assert runtime and development and runtime.items() <= development.items()
+    for lock in locks:
+        for requirement in re.split(r"\n(?=[\w-]+==)", lock)[1:]:
+            assert "--hash=sha256:" in requirement
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    assert workflow["jobs"]["check"]["env"]["TEST_POSTGRES_URL"].startswith("postgresql+psycopg://")
+
+
+def test_temporary_downloads_expire_including_versioned_data():
+    rules = template()["Resources"]["DataBucket"]["Properties"]["LifecycleConfiguration"]["Rules"]
+    downloads = next(rule for rule in rules if rule["Id"] == "ExpireDownloads")
+    assert downloads["Prefix"] == "_downloads/" and downloads["ExpirationInDays"] == 1
+    assert downloads["NoncurrentVersionExpiration"]["NoncurrentDays"] == 1

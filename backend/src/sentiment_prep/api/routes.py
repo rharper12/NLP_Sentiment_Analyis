@@ -30,6 +30,8 @@ from sentiment_prep.api.collection import (
     store_dataset,
     summarize,
 )
+from sentiment_prep.api.downloads import DOWNLOAD_RESPONSES, download
+from sentiment_prep.api.pagination import bounded_page
 from sentiment_prep.api.schemas import (
     AdditionalCandidatesRequest,
     CheckpointList,
@@ -287,7 +289,7 @@ async def validate_csv(file: Annotated[UploadFile, File()]) -> CsvValidation:
         record_count=len(dataset.records),
         skipped_empty=dataset.filtered_out.get("empty_text", 0),
         labelled_count=sum(record.label is not None for record in dataset.records),
-        preview=dataset.records[:3],
+        preview=bounded_page(dataset.records[:3]),
     )
 
 
@@ -383,7 +385,7 @@ def get_records(
     limit: int = Query(100, ge=1, le=1000),
     search: str | None = Query(None, description="Case-insensitive substring on original text"),
 ) -> RecordPage:
-    """Original records joined with their processed version (null if dropped)."""
+    """Join original/processed records; advance by returned length after a byte-limited page."""
     bundle = repo.get(dataset_id)
     processed = {r.id: r for r in bundle.processed.records} if bundle.processed else {}
     originals = bundle.original.records
@@ -394,7 +396,7 @@ def get_records(
     return RecordPage(
         total=len(originals),
         offset=offset,
-        items=[RecordPair(original=r, processed=processed.get(r.id)) for r in page],
+        items=bounded_page(RecordPair(original=r, processed=processed.get(r.id)) for r in page),
     )
 
 
@@ -465,7 +467,7 @@ def preprocess(
         metrics_before=before,
         metrics_after=after,
         report=public_report(updated.report, diagnostics=settings.diagnostics_enabled),
-        preview=updated.processed.records[:PREVIEW_ROWS],
+        preview=bounded_page(updated.processed.records[:PREVIEW_ROWS]),
     )
     if settings.diagnostics_enabled:
         return response
@@ -519,7 +521,7 @@ def eligibility_page(
     return EligibilityPage(
         total=len(rows),
         offset=offset,
-        items=rows[offset : offset + limit],
+        items=bounded_page(rows[offset : offset + limit]),
         included_ids=sorted(selected),
         counts=eligibility.counts(bundle),
     )
@@ -667,7 +669,10 @@ def review_page(
     bundle = repo.get(dataset_id)
     total, items = labeling.review_page(bundle, offset, limit)
     return ReviewPage(
-        total=total, offset=offset, items=items, reviewed=labeling.summary(bundle).reviewed
+        total=total,
+        offset=offset,
+        items=bounded_page(items),
+        reviewed=labeling.summary(bundle).reviewed,
     )
 
 
@@ -754,14 +759,16 @@ def convert_checkpoint(
     "/dataset/{dataset_id}/original.json",
     tags=["export"],
     summary="Download original data for a new cleaning run",
+    responses=DOWNLOAD_RESPONSES,
 )
-def download_original(dataset_id: str, repo: RepoDep) -> Response:
+def download_original(dataset_id: str, repo: RepoDep, settings: SettingsDep) -> Response:
     """Portable original records/provenance, with no processing or paid-work state."""
     bundle = repo.get(dataset_id)
-    return _download(
+    return download(
         export_original(bundle.original),
         "application/json",
         f"{bundle_file_stem(bundle)}.json",
+        settings,
     )
 
 
@@ -770,11 +777,16 @@ def download_original(dataset_id: str, repo: RepoDep) -> Response:
     tags=["export"],
     summary="Download CSV",
     response_class=Response,
+    responses=DOWNLOAD_RESPONSES,
 )
-def export_csv(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
+def export_csv(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> Response:
     """One row per original record: text, processed text, tokens, labels and provenance."""
     bundle = repo.get(dataset_id)
-    return _download(to_csv(bundle), "text/csv", f"{filename or bundle_file_stem(bundle)}.csv")
+    return download(
+        to_csv(bundle), "text/csv", f"{filename or bundle_file_stem(bundle)}.csv", settings
+    )
 
 
 @router.get(
@@ -782,16 +794,18 @@ def export_csv(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -
     tags=["export"],
     summary="Download Excel",
     response_class=Response,
+    responses=DOWNLOAD_RESPONSES,
 )
 def export_excel(
     dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
 ) -> Response:
     """Two sheets: ``data`` and ``impact`` (per-step statistics)."""
     bundle = repo.get(dataset_id)
-    return _download(
+    return download(
         to_excel(bundle, diagnostics=settings.diagnostics_enabled),
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         f"{filename or bundle_file_stem(bundle)}.xlsx",
+        settings,
     )
 
 
@@ -800,25 +814,37 @@ def export_excel(
     tags=["export"],
     summary="Download Parquet",
     response_class=Response,
+    responses=DOWNLOAD_RESPONSES,
 )
-def export_parquet(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
+def export_parquet(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> Response:
     """Same rows as the CSV, typed and compressed. The format Task 2 should load."""
     bundle = repo.get(dataset_id)
-    return _download(
+    return download(
         to_parquet(bundle),
         "application/octet-stream",
         f"{filename or bundle_file_stem(bundle)}.parquet",
+        settings,
     )
 
 
-@router.get("/dataset/{dataset_id}/reviewed.parquet", tags=["export"], response_class=Response)
-def export_reviewed(dataset_id: str, repo: RepoDep, filename: FilenameQuery = None) -> Response:
+@router.get(
+    "/dataset/{dataset_id}/reviewed.parquet",
+    tags=["export"],
+    response_class=Response,
+    responses=DOWNLOAD_RESPONSES,
+)
+def export_reviewed(
+    dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
+) -> Response:
     """Fresh reviewed consumer rows plus embedded policy and completion metadata."""
     bundle = repo.get(dataset_id)
-    return _download(
+    return download(
         to_reviewed_parquet(bundle),
         "application/octet-stream",
         f"{filename or (bundle_file_stem(bundle)[:111] + '-reviewed')}.parquet",
+        settings,
     )
 
 
@@ -827,16 +853,18 @@ def export_reviewed(dataset_id: str, repo: RepoDep, filename: FilenameQuery = No
     tags=["export"],
     summary="Task 1 report (Markdown)",
     response_class=Response,
+    responses=DOWNLOAD_RESPONSES,
 )
 def export_report(
     dataset_id: str, repo: RepoDep, settings: SettingsDep, filename: FilenameQuery = None
 ) -> Response:
     """Markdown with provenance, measured impact, labelling, and per-step strengths/limitations."""
     bundle = repo.get(dataset_id)
-    return _download(
+    return download(
         render_report(bundle, diagnostics=settings.diagnostics_enabled).encode(),
         "text/markdown; charset=utf-8",
         f"{filename or bundle_file_stem(bundle)}.md",
+        settings,
     )
 
 
@@ -905,14 +933,3 @@ def recent_history(
     if settings.diagnostics_enabled:
         return records
     return JSONResponse(content=[record.model_dump(exclude={"duration_ms"}) for record in records])
-
-
-def _download(content: bytes, media_type: str, filename: str) -> Response:
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store",
-        },
-    )

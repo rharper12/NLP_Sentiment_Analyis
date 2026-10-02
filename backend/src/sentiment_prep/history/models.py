@@ -23,7 +23,7 @@ class DatasetRun(Base):
     __tablename__ = "dataset_run"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    dataset_id: Mapped[str] = mapped_column(Text, unique=True, index=True)
     source_type: Mapped[str] = mapped_column(String(16))
     query: Mapped[str] = mapped_column(Text, default="")
     record_count: Mapped[int] = mapped_column(Integer)
