@@ -15,6 +15,7 @@ from mangum import Mangum
 from sentiment_prep.api import deps
 from sentiment_prep.api.app import create_app
 from sentiment_prep.api.downloads import DOWNLOAD_LINK_MEDIA_TYPE
+from sentiment_prep.api.pagination import ANALYSIS_PREVIEW_WARNING
 from sentiment_prep.config import Settings, get_settings
 from sentiment_prep.storage.checkpoints import LocalCheckpointStore
 from sentiment_prep.storage.repository import InMemoryRepository
@@ -48,16 +49,20 @@ def large_dataset(tmp_path):
     return app, client, identifier
 
 
-def invoke(app, path, query=""):
+def invoke(app, path, query="", *, method="GET", payload=None):
     event = {
         "version": "2.0",
         "routeKey": "$default",
         "rawPath": path,
         "rawQueryString": query,
-        "headers": {"host": "localhost", "x-api-key": "test-key"},
+        "headers": {
+            "host": "localhost",
+            "x-api-key": "test-key",
+            "content-type": "application/json",
+        },
         "requestContext": {
             "http": {
-                "method": "GET",
+                "method": method,
                 "path": path,
                 "sourceIp": "127.0.0.1",
                 "protocol": "HTTP/1.1",
@@ -65,6 +70,7 @@ def invoke(app, path, query=""):
             "stage": "$default",
         },
         "isBase64Encoded": False,
+        "body": json.dumps(payload) if payload is not None else None,
     }
     try:
         previous_loop = asyncio.get_event_loop()
@@ -144,3 +150,104 @@ def test_excel_limit_is_an_actionable_api_error(tmp_path):
     response = client.get(f"/dataset/{identifier}/export.xlsx")
     assert response.status_code == 400
     assert "Download CSV or Parquet" in response.json()["error"]
+
+
+@pytest.mark.parametrize("diagnostics", [False, True])
+@pytest.mark.parametrize("long_text", [False, True])
+def test_complete_analysis_response_fits_lambda_without_changing_saved_text_or_counts(
+    tmp_path, diagnostics, long_text
+):
+    app = create_app()
+    repo = InMemoryRepository()
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    app.dependency_overrides[deps.get_checkpoint_store] = lambda: LocalCheckpointStore(tmp_path)
+    client = TestClient(app)
+    texts = [f"TOKEN{i:02d}" + "x" * (129990 if long_text else 3) for i in range(20)]
+    content = io.StringIO()
+    writer = csv.writer(content)
+    writer.writerow(["id", "text"])
+    writer.writerows(enumerate(texts))
+    raw = content.getvalue().encode()
+    assert len(raw) < 4 * 1024 * 1024
+    uploaded = client.post("/dataset/upload", files={"file": ("tokens.csv", raw)})
+    assert uploaded.status_code == 200 and uploaded.json()["record_count"] == 20
+    identifier = uploaded.json()["dataset_id"]
+
+    settings = Settings(
+        _env_file=None,
+        runtime="lambda",
+        api_key="test-key",
+        diagnostics=diagnostics,
+        comprehend_enabled=False,
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    _, result = invoke(
+        app, f"/dataset/{identifier}/preprocess", method="POST", payload={"steps": ["lowercase"]}
+    )
+    assert result["record_count"] == 20 and result["partial"] is False
+    for side in ("metrics_before", "metrics_after"):
+        assert (
+            result[side]["record_count"]
+            == result[side]["vocab_size"]
+            == result[side]["total_tokens"]
+            == 20
+        )
+        assert result[side]["avg_tokens"] == result[side]["type_token_ratio"] == 1
+        assert len(result[side]["top_terms"]) == (0 if long_text else 15)
+    step = result["report"]["steps"][0]
+    assert (
+        step["records_in"]
+        == step["records_out"]
+        == step["vocab_before"]
+        == step["vocab_after"]
+        == 20
+    )
+    assert ("duration_ms" in step) is diagnostics
+    assert len(step["sample_diffs"]) == (0 if long_text else 5)
+    assert len(result["preview"]) == (0 if long_text else 20)
+    assert (ANALYSIS_PREVIEW_WARNING in result["warnings"]) is long_text
+
+    bundle = repo.get(identifier)
+    assert [record.text for record in bundle.original.records] == texts
+    assert [record.text for record in bundle.processed.records] == [text.lower() for text in texts]
+    assert bundle.report.steps[0].sample_diffs == list(
+        zip(texts[:5], [text.lower() for text in texts[:5]], strict=True)
+    )
+    assert ANALYSIS_PREVIEW_WARNING not in bundle.report.warnings
+    # Records and exports remain complete after compacting only the HTTP analysis projection.
+    _, page = invoke(app, f"/dataset/{identifier}/records", "limit=1")
+    assert page["items"][0]["original"]["text"] == texts[0]
+    assert page["items"][0]["processed"]["text"] == texts[0].lower()
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, runtime="local")
+    exported = client.get(f"/dataset/{identifier}/export.csv")
+    rows = list(csv.DictReader(io.StringIO(exported.content.decode("utf-8-sig"))))
+    assert [row["original_text"] for row in rows] == texts
+    assert [row["processed_text"] for row in rows] == [text.lower() for text in texts]
+
+
+@pytest.mark.parametrize("character", ["\x01", "\x0b", "\x0e", "\x1f", "\ufffe", "\uffff"])
+def test_excel_invalid_character_returns_validation_error_and_keeps_lossless_exports(
+    tmp_path, character
+):
+    app = create_app()
+    repo = InMemoryRepository()
+    app.dependency_overrides[deps.get_repository] = lambda: repo
+    app.dependency_overrides[deps.get_checkpoint_store] = lambda: LocalCheckpointStore(tmp_path)
+    client = TestClient(app)
+    text = f"hello{character}world"
+    uploaded = client.post(
+        "/dataset/upload", files={"file": ("control.csv", f"text\n{text}\n".encode())}
+    )
+    assert uploaded.status_code == 200
+    identifier = uploaded.json()["dataset_id"]
+    response = client.get(f"/dataset/{identifier}/export.xlsx")
+    assert response.status_code == 400
+    message = response.json()["error"]
+    assert f"U+{ord(character):04X}" in message and "row 2, original_text" in message
+    assert "Download CSV or Parquet" in message and text not in message
+    csv_response = client.get(f"/dataset/{identifier}/export.csv")
+    assert csv_response.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(csv_response.content.decode("utf-8-sig"))))
+    assert rows[0]["original_text"] == text
+    assert client.get(f"/dataset/{identifier}/export.parquet").status_code == 200
+    assert repo.get(identifier).original.records[0].text == text

@@ -142,3 +142,29 @@ def test_excel_refuses_silent_truncation_but_lossless_formats_keep_the_value(fie
     column = "original_text" if field == "text" else field
     assert next(csv.DictReader(StringIO(to_csv(bundle).decode("utf-8-sig"))))[column] == text
     assert parquet_rows(to_parquet(bundle)).to_pylist()[0][column] == text
+
+
+@pytest.mark.parametrize("field", ["id", "label", "text"])
+@pytest.mark.parametrize(
+    "character", ["\x00", "\x01", "\x08", "\x0b", "\x0c", "\x0e", "\x1f", "\ufffe", "\uffff"]
+)
+def test_excel_checks_all_string_columns_for_invalid_xml_without_mutating_records(field, character):
+    text = f"hello{character}world"
+    bundle = make_bundle(
+        [Record.model_validate({"id": "1", "text": "hello", "source_type": "csv", field: text})]
+    )
+    with pytest.raises(ValidationError, match=f"U\\+{ord(character):04X}"):
+        to_excel(bundle)
+    assert getattr(bundle.original.records[0], field) == text
+    column = "original_text" if field == "text" else field
+    assert parquet_rows(to_parquet(bundle)).to_pylist()[0][column] == text
+
+
+@pytest.mark.parametrize(
+    "text", ["hello\tworld", "hello\nworld", "café 中文 🙂", "hello\x7fworld", "hello\x85world"]
+)
+def test_excel_keeps_valid_xml_whitespace_and_unicode(text):
+    workbook = load_workbook(
+        BytesIO(to_excel(make_bundle([Record(id="1", text=text, source_type="csv")])))
+    )
+    assert workbook["data"].cell(2, ROW_COLUMNS.index("original_text") + 1).value == text

@@ -46,6 +46,15 @@ not be forwarded. Links last at most five minutes. Private objects under `_downl
 after one day; lifecycle rules also remove old versions and delete markers. Deploy the updated
 bucket lifecycle and frontend together with the API.
 
+The entire preprocessing response is also checked against the byte budget. If it is too large,
+the API omits preview rows, top-term lists, and sample text differences and returns an explicit
+warning. All aggregate counts remain exact. The stored records, report, and exports retain the
+complete text; normal-sized analysis responses retain their preview details.
+
+Excel exports reject cells longer than 32,767 characters and characters that XML cannot store,
+with the row, column, and an instruction to use CSV or Parquet. Validation never strips or
+truncates the source data. Tabs, line breaks, and valid Unicode remain supported.
+
 The dependency refresh on 2026-10-02 fixes the reported urllib3 and brace-expansion advisories.
 NLTK 3.10.3 still has an [upstream model-path advisory](https://github.com/nltk/nltk/security/advisories/GHSA-8mgp-746c-j5xp)
 with no patched release. This app uses fixed bundled language resources and does not expose

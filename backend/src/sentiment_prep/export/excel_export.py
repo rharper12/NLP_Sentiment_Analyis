@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -24,6 +25,8 @@ IMPACT_COLUMNS = [
     "duration_ms",
 ]
 MAX_CELL_CHARACTERS = 32767
+# XML 1.0 permits tabs, line breaks, and ordinary Unicode, but not these code points.
+_INVALID_XML_CHARACTER = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 
 def to_excel(bundle: DatasetBundle, *, diagnostics: bool = False) -> bytes:
@@ -63,9 +66,17 @@ def _write_sheet(sheet: Worksheet, columns: list[str], rows: list[list[object]])
         cell.font = Font(bold=True)
     for row_number, row in enumerate(rows, start=2):
         for column, value in zip(columns, row, strict=True):
-            if isinstance(value, str) and len(value) > MAX_CELL_CHARACTERS:
+            if not isinstance(value, str):
+                continue
+            if len(value) > MAX_CELL_CHARACTERS:
                 raise ValidationError(
                     f"Excel cannot store more than {MAX_CELL_CHARACTERS:,} characters per cell "
+                    f"({sheet.title}, row {row_number}, {column}). "
+                    "Download CSV or Parquet to preserve the complete text."
+                )
+            if invalid := _INVALID_XML_CHARACTER.search(value):
+                raise ValidationError(
+                    f"Excel cannot store character U+{ord(invalid[0]):04X} "
                     f"({sheet.title}, row {row_number}, {column}). "
                     "Download CSV or Parquet to preserve the complete text."
                 )

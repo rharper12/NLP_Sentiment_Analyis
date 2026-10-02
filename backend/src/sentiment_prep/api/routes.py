@@ -31,7 +31,7 @@ from sentiment_prep.api.collection import (
     summarize,
 )
 from sentiment_prep.api.downloads import DOWNLOAD_RESPONSES, download
-from sentiment_prep.api.pagination import bounded_page
+from sentiment_prep.api.pagination import bounded_analysis, bounded_page
 from sentiment_prep.api.schemas import (
     AdditionalCandidatesRequest,
     CheckpointList,
@@ -456,18 +456,20 @@ def preprocess(
             history.record_run(updated)
     if updated.processed is None or updated.report is None:  # pragma: no cover - invariant
         raise AppError("preprocessing produced no result")
-    response = PreprocessResponse(
-        dataset_id=dataset_id,
-        applied_steps=updated.applied_steps,
-        partial=updated.analysis.partial,
-        warnings=checkpoint_warnings(
-            updated, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
-        ),
-        record_count=len(updated.processed.records),
-        metrics_before=before,
-        metrics_after=after,
-        report=public_report(updated.report, diagnostics=settings.diagnostics_enabled),
-        preview=bounded_page(updated.processed.records[:PREVIEW_ROWS]),
+    response = bounded_analysis(
+        PreprocessResponse(
+            dataset_id=dataset_id,
+            applied_steps=updated.applied_steps,
+            partial=updated.analysis.partial,
+            warnings=checkpoint_warnings(
+                updated, local_dev=settings.runtime == "local" and settings.diagnostics_enabled
+            ),
+            record_count=len(updated.processed.records),
+            metrics_before=before,
+            metrics_after=after,
+            report=public_report(updated.report, diagnostics=settings.diagnostics_enabled),
+            preview=updated.processed.records[:PREVIEW_ROWS],
+        )
     )
     if settings.diagnostics_enabled:
         return response
