@@ -44,10 +44,12 @@ batch, review it, and repeat while results and budget remain available. These ar
 samples; date coverage and representativeness must still be assessed.
 
 Consumer reactions uses your own topic and dates and follows **Collect → Review & label → Clean →
-Analyze → Export**. Read each original once: **Keep & label** with a sentiment, or **Exclude post**
-with a reason, then **Save and next**. New candidates join Needs review; saved decisions stay in
-place. Excluded originals remain recoverable. General search, CSV and sample datasets use the
-standard sentiment-labeling flow.
+Analyze → Export**. Choose whether to review each original and whether to label sentiment too.
+A sentiment button keeps, saves, and advances; **Exclude post** does the same without an
+explanation. **Review only** offers Keep and Exclude. Previous and Next revisit saved posts.
+Skipping leaves posts unreviewed and runs no automated labeling. The fully reviewed export
+still requires both a Keep decision and manual sentiment. General search, CSV and sample
+datasets use the standard sentiment-labeling flow.
 
 Collect shows total saved, added last request, and still to collect, with the first request's
 saved count retained across later requests. Older datasets without batch history show unknown

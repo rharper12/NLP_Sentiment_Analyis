@@ -2251,6 +2251,7 @@ export interface operations {
                 offset?: number;
                 limit?: number;
                 status?: "all" | "pending" | "include" | "exclude" | "sentiment" | "needs_review";
+                start_at?: ("first_unreviewed" | "first_unlabeled") | null;
             };
             header?: {
                 "X-API-Key"?: string | null;

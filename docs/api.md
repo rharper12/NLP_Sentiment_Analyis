@@ -136,11 +136,17 @@ falls back to recent results. See the [pilot and policy guide](how-the-app-works
 `total`, `offset`, current `included_ids` and counts. Statuses: `all`, `pending`, `include`,
 `exclude`, `sentiment`, `needs_review`. The `sentiment` view selects current author-capped inclusions, including completed
 sentiment decisions for correction. Include/exclude queues mean human decisions, not suggestions.
+With `status=all`, optional `start_at=first_unreviewed` seeks the first unresolved eligibility
+choice; `start_at=first_unlabeled` also includes kept posts awaiting manual sentiment. Both
+return an offset into the original ordering and the total candidate count. If finished, offset
+equals total and items is empty. Navigate subsequent pages by offset so saved and excluded posts
+remain revisitable. These read-only requests do not approve posts or call sentiment services.
 
 **PUT `/dataset/{id}/eligibility`**
-`{"items":[{"id":"123","decision":"include","reason":null,"note":"Personal opinion despite the link"}]}`
-persists explicit confirmations. Decisions are `include`, `exclude`, `pending`; exclusion requires
-a stable reason. Overriding the automatic decision requires a note. Human history is retained;
+`{"items":[{"id":"123","decision":"include","label":"positive"}]}`
+persists explicit confirmations. Decisions are `include`, `exclude`, `pending`. Reasons and notes
+are optional, including for screening overrides. Existing reasons, notes and human history
+remain readable;
 pending undoes review, and changing eligibility requires sentiment reconfirmation. Labels and
 machine scores remain recoverable. Both unchanged confirmations persist as completed review.
 The eligibility PUT also accepts an optional `label` (positive/negative/neutral/mixed) with an
@@ -152,7 +158,10 @@ remain supported. Duplicate record IDs in a review request are rejected.
 
 Author-limit holds retain combined manual labels, while selection remains independent of sentiment.
 Only current author-selected inclusions may use the separate manual/Comprehend sentiment routes.
-The consumer UI uses manual sentiment; preprocessing does not automatically call cloud scoring.
+The consumer UI offers review with or without manual sentiment, or skipping review without
+changing human-review flags. Preprocessing does not automatically call cloud scoring. A later
+explicit Comprehend request preserves manual labels and stores predictions separately; it may
+still score manually labeled posts for comparison, so they count in the cost estimate.
 
 **POST `/dataset/upload`** multipart `file` (UTF-8 CSV with `text`, optional `label`/`id`),
 limited to 4 MiB and 5,000 data rows. Validates the entire file, even with a smaller requested

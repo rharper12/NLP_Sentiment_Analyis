@@ -85,6 +85,7 @@ from sentiment_prep.models import (
     CheckpointState,
     Dataset,
     LabelSummary,
+    Record,
 )
 from sentiment_prep.preprocessing import DEFAULT_ORDER, STEP_GROUPS
 from sentiment_prep.presentation import public_report
@@ -485,23 +486,34 @@ def eligibility_page(
     offset: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=200),
     status: Literal["all", "pending", "include", "exclude", "sentiment", "needs_review"] = "all",
+    start_at: Literal["first_unreviewed", "first_unlabeled"] | None = None,
 ) -> EligibilityPage:
     """Inspect original candidates and recoverable exclusions without enrichment calls."""
     bundle = repo.get(dataset_id)
     selected = eligibility.included_ids(bundle)
     rows = bundle.original.records
+
+    def needs_review(record: Record, sentiment: bool) -> bool:
+        return (
+            not record.eligibility_reviewed
+            or record.eligibility == "pending"
+            or (sentiment and record.id in selected and not record.sentiment_reviewed)
+        )
+
+    if start_at is not None:
+        if status != "all":
+            raise ValidationError("Starting at an unfinished post requires the all-posts view")
+        # Seek once, then navigate stable original offsets so Previous can revisit saved posts.
+        offset = next(
+            (i for i, r in enumerate(rows) if needs_review(r, start_at == "first_unlabeled")),
+            len(rows),
+        )
     if status == "needs_review":
-        rows = [
-            r
-            for r in rows
-            if not r.eligibility_reviewed
-            or r.eligibility == "pending"
-            or (r.id in selected and not r.sentiment_reviewed)
-        ]
+        rows = [r for r in rows if needs_review(r, True)]
     elif status == "sentiment":
         rows = [r for r in rows if r.id in selected]
     elif status == "pending":
-        rows = [r for r in rows if not r.eligibility_reviewed or r.eligibility == "pending"]
+        rows = [r for r in rows if needs_review(r, False)]
     elif status != "all":
         rows = [r for r in rows if r.eligibility_reviewed and r.eligibility == status]
     return EligibilityPage(

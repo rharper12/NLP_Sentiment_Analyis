@@ -124,28 +124,30 @@ To run the pilot after authorizing its cost:
    counts. **Get more posts** finishes the same authorized goal. Search and cost details expand
    on demand; there are no tweet previews or review counters here. The search form collapses
    under **Start another collection**. Click **Continue to Review & label →** for step 2, before
-   cleaning. The **Needs review** view contains new candidates and earlier inclusions that still
-   need a human sentiment label. Read the original once, choose **Keep & label** and a sentiment,
-   or **Exclude post** and a reason, then **Save and next →**. Both decisions are saved in one
-   request. Screening overrides require an explanation; automated sentiment never decides
-   eligibility. Negative, positive, mixed and neutral reactions use the same inclusion rules.
-4. **Kept posts**, **Excluded posts** and **All posts** use the same review form for corrections.
-   Restoring an exclusion and choosing its label takes one save. Originals and eligibility history
-   remain available. Author-limit holds retain human labels if later selection changes. Expand
-   **Collection details & date coverage** to inspect sampling and the per-day table. Only kept,
-   fully reviewed posts within the author limit count toward the target.
-5. Failed saves retain your choices. Navigation and new collection requests are disabled while
-   edits are unsaved; save or **Discard changes** before leaving. Native radio groups support
-   Tab, arrow keys and Space. After a successful save, focus moves to the next review heading.
-   **Continue to Clean →** configures preprocessing, Analyze shows its effect, and then Export
-   offers **Reviewed consumer Parquet**. Neither cleaning nor analysis requires another labeling
-   pass. You can continue with a partial dataset, and consumer analysis uses no cloud scoring.
+   cleaning. Choose whether to review each post; skipping continues without approving any posts
+   or starting automated labeling. If reviewing, choose whether to label sentiment too.
+4. With sentiment enabled, choosing a sentiment keeps the post, saves both decisions in one
+   request, and advances. **Keep without a label** defers sentiment; **Exclude post** needs no
+   explanation. Review-only mode offers **Keep post** and **Exclude post**. **Previous** and
+   **Next** navigate the original ordering without saving, including excluded posts. On reopening,
+   review starts at the first unfinished choice for the selected mode. **Review settings** changes
+   the mode without losing saved decisions. Screening never substitutes for human review.
+5. Failed saves retain the attempted choice. Navigation and collection are locked until **Retry
+   save** succeeds or **Discard unsaved choice** is selected. Buttons support Tab and Enter/Space;
+   choosing sentiment only saves on activation, never on focus. Focus moves to the next heading
+   after loading. **Continue to Clean →** configures preprocessing, Analyze shows its effect, and
+   then Export offers **Reviewed consumer Parquet**. This export requires kept, manually labeled
+   posts within the author limit. Skipped review and machine labels do not count as human review.
+   Consumer analysis uses no cloud scoring. A separate explicit Comprehend request preserves
+   manual labels, but can score those posts for comparison and includes them in its estimate.
 6. If review leaves the target short, use **Get more posts** on the review screen.
    The quota subtracts pending reviews from the shortfall, within the 5,000-candidate limit. Finish
    existing pending reviews first to avoid unnecessary spending. Collection is always explicit;
-   the review screen stays open while loading, and new posts join the same pending queue. Saved
+   the review screen stays open while loading, and review resumes at an unfinished post. Saved
    decisions remain in place. Rejected collection requests display a recoverable error there.
-   Repeat manually while below the final target. An unfinished batch uses the same authorized
+   In review-only mode the quota uses kept posts within the author limit, without requiring
+   optional sentiment labels; this does not change the strict export counts. Repeat manually
+   while below the chosen target. An unfinished batch uses the same authorized
    target instead of increasing its quota. At the reviewed
    target, the button is replaced by a completion message and the API refuses further collection.
    A later review correction can reopen the option. This keeps dates, query,
@@ -287,4 +289,6 @@ available for correction. This applies [Nielsen Norman Group's usability heurist
 on visible state, recognition, recovery and focused presentation. The step indicator and focus
 behavior follow [W3C's multi-page form guidance](https://www.w3.org/WAI/tutorials/forms/multi-page/),
 and save feedback uses [status messages](https://www.w3.org/WAI/WCAG22/Understanding/status-messages.html).
+Sentiment choices are action buttons, with the save-and-advance behavior explained before use,
+consistent with [W3C's guidance on context changes](https://www.w3.org/WAI/WCAG22/Understanding/on-input.html).
 These references inform the design; automated checks do not replace assistive-technology and user testing.

@@ -33,9 +33,9 @@ export type CheckpointList = S["CheckpointList"];
 export type ConsumerCounts = S["ConsumerCounts"];
 export type ConsumerPolicy = S["ConsumerPolicy"];
 export type EligibilityPage = S["EligibilityPage"];
-export type EligibilityItem = S["EligibilityItem"];
-export type EligibilityDecision = EligibilityItem["decision"];
-export type EligibilityReason = NonNullable<EligibilityItem["reason"]>;
+// Requests may omit the note; the API supplies its empty default.
+export type EligibilityItem = Omit<S["EligibilityItem"], "note"> &
+  Partial<Pick<S["EligibilityItem"], "note">>;
 export type CollectionWindow = Partial<Pick<S["LoadRequest"], "start_date" | "end_date" | "timezone" | "preset" | "per_author_limit" | "reviewed_target">> & { start?: string; end?: string };
 
 export type LabelSource = NonNullable<PostRecord["label_source"]>;

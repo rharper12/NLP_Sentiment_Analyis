@@ -109,3 +109,17 @@ it("uses existing unreviewed posts before offering another paid batch", () => {
   fireEvent.click(screen.getByRole("button", { name: "Get more posts" }));
   expect(request).toHaveBeenCalledExactlyOnceWith(550);
 });
+
+
+it("counts kept posts independently of optional labels when suggesting another batch", () => {
+  const request = vi.fn();
+  const reviewedOnly = { ...counts, reviewed_final: 0, pending_sentiment: 350, shortfall: 500 };
+  const view = render(<AdditionalCandidates dataset={dataset} counts={reviewedOnly} goal="kept" busy={false} onRequest={request} />);
+  expect(screen.getByText("150 more kept posts needed")).toBeTruthy();
+  expect((screen.getByLabelText("Posts to request") as HTMLInputElement).value).toBe("150");
+  fireEvent.click(screen.getByRole("button", { name: "Get more posts" }));
+  expect(request).toHaveBeenCalledExactlyOnceWith(650);
+  view.rerender(<AdditionalCandidates dataset={dataset} counts={{ ...reviewedOnly, included: 500 }} goal="kept" busy={false} onRequest={request} />);
+  expect(screen.getByText("Kept-post target reached.")).toBeTruthy();
+  expect(screen.queryByRole("button")).toBeNull();
+});

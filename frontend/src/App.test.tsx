@@ -229,8 +229,8 @@ it("manually requests the review shortfall on the same dataset and returns to re
     },
   };
   const review: EligibilityPage = {
-    total: 0,
-    offset: 0,
+    total: 500,
+    offset: 500,
     items: [],
     included_ids: [],
     counts,
@@ -243,6 +243,8 @@ it("manually requests the review shortfall on the same dataset and returns to re
   fireEvent.click(screen.getByText("Search test"));
   await screen.findByText("consumer");
   fireEvent.click(screen.getByRole("button", { name: "Continue to Review & label →" }));
+  fireEvent.click(screen.getByRole("button", { name: "Yes, review posts" }));
+  fireEvent.click(screen.getByRole("button", { name: "Yes, review & label" }));
   await screen.findByRole("button", { name: "Get more posts" });
   expect(api.collectCandidates).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Get more posts" }));
@@ -253,10 +255,14 @@ it("manually requests the review shortfall on the same dataset and returns to re
   );
   vi.mocked(api.eligibilityPage).mockResolvedValue({
     ...review,
+    total: 650,
+    offset: 500,
+    items: [{ id: "new", text: "New candidate", source_type: "x" }],
     counts: { ...counts, pending_eligibility: 150 },
   });
   await act(async () => pending.resolve({ ...consumer, candidate_target: 650, record_count: 650 }));
-  await screen.findByText(/150 saved posts still need review/);
+  await screen.findByText("New candidate");
+  expect(screen.getByText("Post 501 of 650")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Review & label" })).toBeTruthy();
   expect(screen.queryByLabelText("Posts to request")).toBeNull();
   expect(api.load).toHaveBeenCalledTimes(1);

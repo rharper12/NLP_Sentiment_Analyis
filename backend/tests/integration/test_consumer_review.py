@@ -130,17 +130,7 @@ def test_reviewed_export_confirms_unchanged_choices_preserves_scores_and_rebuild
     assert saved.processed is None and saved.report is None and saved.analysis.signature == ""
     assert saved.checkpoint_status["processed:csv"].status == "stale"
     assert client.post(url + "/checkpoints/processed/parquet").status_code == 409
-    assert decide(client, "1", "exclude", reason="news_or_article").status_code == 400
-    assert (
-        decide(
-            client,
-            "1",
-            "exclude",
-            reason="news_or_article",
-            note="I initially missed the quoted headline",
-        ).status_code
-        == 200
-    )
+    assert decide(client, "1", "exclude").status_code == 200
     rows, metadata = export(client)
     assert [r["id"] for r in rows] == ["0"]
     assert metadata["status"] == "partial" and metadata["counts"]["shortfall"] == 1
@@ -200,3 +190,62 @@ def test_additional_collection_requires_explicit_cost_confirmation(review):
     response = client.post("/dataset/consumer/candidates", json={"candidate_target": 100})
     assert response.status_code == 400
     assert "Confirm the cost" in response.text
+
+
+def test_review_seek_resumes_without_losing_stable_navigation_or_approving_posts(review):
+    client, repo, _ = review
+    url = "/dataset/consumer/eligibility"
+    before = repo.get("consumer").model_dump(mode="json")
+    initial = client.get(url, params={"start_at": "first_unreviewed", "limit": 1}).json()
+    assert initial["total"] == 5 and initial["offset"] == 0
+    assert repo.get("consumer").model_dump(mode="json") == before
+    assert decide(client, "0", "include").status_code == 200
+    assert decide(client, "1", "exclude").status_code == 200
+    for start_at, expected in [("first_unreviewed", 2), ("first_unlabeled", 0)]:
+        page = client.get(url, params={"start_at": start_at, "limit": 1}).json()
+        assert page["offset"] == expected and page["total"] == 5
+        assert page["items"][0]["id"] == str(expected)
+    previous = client.get(url, params={"offset": 1, "limit": 1}).json()
+    assert previous["items"][0]["eligibility"] == "exclude"
+    assert decide(client, "1", "include", label="negative").status_code == 200
+    assert decide(client, "0", "include", label="positive").status_code == 200
+    for identifier in ("2", "3", "4"):
+        assert decide(client, identifier, "exclude").status_code == 200
+    for start_at in ("first_unreviewed", "first_unlabeled"):
+        end = client.get(url, params={"start_at": start_at, "limit": 1}).json()
+        assert end["offset"] == end["total"] == 5 and end["items"] == []
+    invalid = client.get(url, params={"start_at": "first_unreviewed", "status": "exclude"})
+    assert invalid.status_code == 400
+
+
+def test_skipping_review_can_clean_without_creating_human_labels(review):
+    client, repo, _ = review
+    result = client.post("/dataset/consumer/preprocess", json={"steps": ["lowercase"]})
+    assert result.status_code == 200
+    saved = repo.get("consumer")
+    assert saved.processed is not None
+    assert len(saved.processed.records) == 5
+    assert all(
+        not r.eligibility_reviewed and not r.sentiment_reviewed for r in saved.original.records
+    )
+    assert export(client)[0] == []
+
+
+def test_sentiment_seek_skips_author_holds_and_finds_them_after_capacity_is_released(review):
+    client, repo, _ = review
+    with repo.edit("consumer") as edit:
+        saved = edit.bundle
+        saved.original.consumer_policy.per_author_limit = 1
+        for row in saved.original.records[:2]:
+            row.author_id = "same-author"
+        edit.save(saved)
+    assert decide(client, "0", "include", label="positive").status_code == 200
+    assert decide(client, "1", "include").status_code == 200
+    for identifier in ("2", "3", "4"):
+        assert decide(client, identifier, "exclude").status_code == 200
+    url = "/dataset/consumer/eligibility?start_at=first_unlabeled&limit=1"
+    assert client.get(url).json()["offset"] == 5
+    assert decide(client, "0", "exclude").status_code == 200
+    page = client.get(url).json()
+    assert page["offset"] == 1 and page["included_ids"] == ["1"]
+    assert page["counts"]["pending_sentiment"] == 1

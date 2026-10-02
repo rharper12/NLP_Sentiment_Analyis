@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 
@@ -78,153 +84,202 @@ const dataset: DatasetSummary = {
   partial: false,
   preview: [],
 };
-const empty = { ...page, total: 0, items: [] };
+let rows: EligibilityPage["items"];
 
 beforeEach(() => {
-  vi.mocked(api.eligibilityPage).mockResolvedValue(page);
-  vi.mocked(api.reviewEligibility).mockResolvedValue(dataset);
+  rows = [...page.items, { ...page.items[0], id: "two", text: "Another post" }];
+  vi.mocked(api.eligibilityPage).mockImplementation(
+    async (_id, requested, _status, _signal, startAt) => {
+      const first = rows.findIndex(
+        (row) =>
+          !row.eligibility_reviewed ||
+          (startAt === "first_unlabeled" &&
+            row.eligibility === "include" &&
+            !row.sentiment_reviewed),
+      );
+      const offset = startAt ? (first < 0 ? rows.length : first) : requested;
+      return {
+        ...page,
+        total: rows.length,
+        offset,
+        items: rows.slice(offset, offset + 1),
+      };
+    },
+  );
+  vi.mocked(api.reviewEligibility).mockImplementation(
+    async (_id, decisions) => {
+      for (const choice of decisions) {
+        rows = rows.map((row) =>
+          row.id !== choice.id
+            ? row
+            : {
+                ...row,
+                eligibility: choice.decision,
+                eligibility_reviewed: true,
+                label: choice.label ?? row.label,
+                sentiment_reviewed: !!choice.label,
+              },
+        );
+      }
+      return dataset;
+    },
+  );
 });
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
 });
-async function start(extra: Partial<ComponentProps<typeof ConsumerReviewer>> = {}) {
-  const view = render(
-    <ConsumerReviewer
-      datasetId="consumer"
-      policy={policy}
-      onBack={vi.fn()}
-      onContinue={vi.fn()}
-      {...extra}
-    />,
+function setup(extra: Partial<ComponentProps<typeof ConsumerReviewer>> = {}) {
+  const props = {
+    datasetId: "consumer",
+    policy,
+    onBack: vi.fn(),
+    onContinue: vi.fn(),
+    ...extra,
+  };
+  return { ...render(<ConsumerReviewer {...props} />), props };
+}
+async function optIn(sentiment = true) {
+  fireEvent.click(screen.getByRole("button", { name: "Yes, review posts" }));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: sentiment ? "Yes, review & label" : "No, review only",
+    }),
   );
   await screen.findByText("I hate this coffee maker");
-  return view;
 }
-function keep() {
-  fireEvent.click(screen.getByRole("radio", { name: /Keep & label/ }));
-  fireEvent.click(screen.getByRole("radio", { name: "negative" }));
-}
-const saveButton = () => screen.getByRole("button", { name: "Save and next →" });
+const button = (name: string) => screen.getByRole("button", { name });
 
-it("refreshes accumulated totals and the queue after 439 saved posts become 530", async () => {
-  const initial = { ...dataset, consumer_policy: policy, record_count: 439, candidate_target: 530, partial: true };
-  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 439, counts: { ...counts, pending_eligibility: 439 } });
-  const props = { datasetId: "consumer", policy, onBack: vi.fn(), onContinue: vi.fn() };
-  const view = render(<ConsumerReviewer {...props} collection={initial} />);
-  await screen.findByText("1 of 439 in this view");
-  expect(screen.getByText("Total saved").nextElementSibling?.textContent === "439").toBeTruthy();
-  view.rerender(<ConsumerReviewer {...props} collection={initial} collectionLoading />);
-  expect(screen.getByLabelText("Loading review totals").getAttribute("aria-busy")).toBe("true");
-  expect(screen.queryByText("I hate this coffee maker")).toBeNull();
-  expect(screen.getByText("Total saved").nextElementSibling?.textContent === "439").toBeTruthy();
-  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 530, counts: { ...counts, pending_eligibility: 530 } });
-  view.rerender(<ConsumerReviewer {...props} collection={{ ...initial, record_count: 530, partial: false }} collectionMessage="Added 91 posts. 530 posts are saved in this dataset." />);
-  await screen.findByText("1 of 530 in this view");
-  expect(screen.getByText("Total saved").nextElementSibling?.textContent === "530").toBeTruthy();
-  expect(screen.queryByText("1 of 439 in this view")).toBeNull();
-  expect(screen.getByText("Added 91 posts. 530 posts are saved in this dataset.")).toBeTruthy();
+it("asks before reviewing and skips without approving, labeling or loading posts", () => {
+  const { props } = setup();
+  expect(
+    screen.getByRole("heading", {
+      name: "Would you like to review each post?",
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByLabelText("Show posts")).toBeNull();
+  fireEvent.click(button("Skip for now →"));
+  expect(props.onContinue).toHaveBeenCalledExactlyOnceWith();
+  expect(api.reviewEligibility).not.toHaveBeenCalled();
+  expect(api.manualLabels).not.toHaveBeenCalled();
+  expect(api.eligibilityPage).not.toHaveBeenCalled();
 });
 
-it("hides outdated review counts and paid actions when refreshing the queue fails", async () => {
-  const initial = { ...dataset, consumer_policy: policy, record_count: 439, candidate_target: 530, partial: true };
-  const props = { datasetId: "consumer", policy, onBack: vi.fn(), onContinue: vi.fn(), onAdditional: vi.fn() };
-  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 439 });
-  const view = render(<ConsumerReviewer {...props} collection={initial} />);
-  await screen.findByText("1 of 439 in this view");
-  view.rerender(<ConsumerReviewer {...props} collection={initial} collectionLoading />);
-  vi.mocked(api.eligibilityPage).mockRejectedValueOnce(new Error("Review refresh failed"));
-  view.rerender(<ConsumerReviewer {...props} collection={{ ...initial, record_count: 530 }} />);
-  await screen.findByText("Review refresh failed");
-  expect(screen.getByText("Total saved").nextElementSibling?.textContent === "530").toBeTruthy();
-  expect(screen.queryByText("1 of 439 in this view")).toBeNull();
-  expect(screen.queryByText("Get more posts")).toBeNull();
-  expect(screen.getByRole("button", { name: "Continue to Clean →" }).hasAttribute("disabled")).toBe(true);
-  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 530 });
-  fireEvent.click(screen.getByRole("button", { name: "Retry loading review" }));
-  await screen.findByText("1 of 530 in this view");
-  expect(props.onAdditional).not.toHaveBeenCalled();
-});
-
-it("keeps and labels in one request, advances the pending queue and hides automated sentiment", async () => {
-  await start();
+it("saves a sentiment in one request, advances, and revisits the saved card with Previous", async () => {
+  setup();
+  await optIn();
   expect(api.eligibilityPage).toHaveBeenCalledWith(
     "consumer",
     0,
-    "needs_review",
+    "all",
     expect.any(AbortSignal),
+    "first_unlabeled",
   );
+  expect(screen.queryByRole("textbox")).toBeNull();
   expect(screen.queryByText(/Original automated suggestion/)).toBeNull();
-  expect(saveButton().hasAttribute("disabled")).toBe(true);
-  fireEvent.click(screen.getByRole("radio", { name: /Keep & label/ }));
-  expect(saveButton().hasAttribute("disabled")).toBe(true);
-  fireEvent.click(screen.getByRole("radio", { name: "negative" }));
-  vi.mocked(api.eligibilityPage).mockResolvedValue(empty);
-  fireEvent.click(saveButton());
-  await screen.findByText("You’re caught up");
-  expect(api.reviewEligibility).toHaveBeenCalledWith("consumer", [
-    {
-      id: "one",
-      decision: "include",
-      reason: null,
-      note: "",
-      label: "negative",
-    },
+  fireEvent.click(button("negative"));
+  await screen.findByText("Another post");
+  expect(api.reviewEligibility).toHaveBeenCalledExactlyOnceWith("consumer", [
+    { id: "one", decision: "include", label: "negative" },
   ]);
   expect(api.manualLabels).not.toHaveBeenCalled();
-  expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Review progress" }));
-});
-
-it("requires an exclusion reason and override note, retaining edits on failure", async () => {
-  await start();
-  fireEvent.click(screen.getByRole("radio", { name: /Exclude post/ }));
-  expect(saveButton().hasAttribute("disabled")).toBe(true);
-  fireEvent.change(screen.getByLabelText("Exclusion reason"), {
-    target: { value: "news_or_article" },
-  });
-  expect(saveButton().hasAttribute("disabled")).toBe(true);
-  fireEvent.change(screen.getByLabelText(/Why override/), {
-    target: { value: "This was a headline quote" },
-  });
-  vi.mocked(api.reviewEligibility).mockRejectedValueOnce(new Error("offline"));
-  fireEvent.click(saveButton());
-  await screen.findByText(/Not saved/);
-  expect((screen.getByLabelText(/Why override/) as HTMLTextAreaElement).value).toBe(
-    "This was a headline quote",
+  expect(document.activeElement).toBe(
+    screen.getByRole("heading", { name: "Review this post" }),
   );
-  vi.mocked(api.eligibilityPage).mockResolvedValue(empty);
-  fireEvent.click(saveButton());
-  await screen.findByText("You’re caught up");
+  fireEvent.click(button("← Previous"));
+  await screen.findByText("I hate this coffee maker");
+  expect(button("negative").getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(button("neutral"));
+  await screen.findByText("Another post");
   expect(api.reviewEligibility).toHaveBeenLastCalledWith("consumer", [
-    {
-      id: "one",
-      decision: "exclude",
-      reason: "news_or_article",
-      note: "This was a headline quote",
-      label: null,
-    },
+    { id: "one", decision: "include", label: "neutral" },
   ]);
 });
 
-it("protects unsaved choices and allows discarding them without changing saved data", async () => {
-  const active = vi.fn();
-  await start({ onReviewActiveChange: active });
-  keep();
-  expect(active).toHaveBeenLastCalledWith(true);
-  expect(screen.getByLabelText("Show posts").hasAttribute("disabled")).toBe(true);
-  expect(screen.getByRole("button", { name: "Continue to Clean →" }).hasAttribute("disabled")).toBe(
-    true,
+it("supports review without labels and allows adding sentiment later", async () => {
+  setup();
+  await optIn(false);
+  expect(screen.queryByRole("button", { name: "positive" })).toBeNull();
+  expect(api.eligibilityPage).toHaveBeenLastCalledWith(
+    "consumer",
+    0,
+    "all",
+    expect.any(AbortSignal),
+    "first_unreviewed",
   );
-  const event = new Event("beforeunload", { cancelable: true });
-  window.dispatchEvent(event);
-  expect(event.defaultPrevented).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
-  expect(active).toHaveBeenLastCalledWith(false);
-  expect(api.reviewEligibility).not.toHaveBeenCalled();
-  expect(screen.getByLabelText("Show posts").hasAttribute("disabled")).toBe(false);
+  fireEvent.click(button("Keep post"));
+  await screen.findByText("Another post");
+  expect(api.reviewEligibility).toHaveBeenLastCalledWith("consumer", [
+    { id: "one", decision: "include" },
+  ]);
+  fireEvent.click(button("Review settings"));
+  fireEvent.click(button("Yes, review & label"));
+  await screen.findByText("I hate this coffee maker");
+  expect(button("Keep without a label")).toBeTruthy();
+  expect(api.manualLabels).not.toHaveBeenCalled();
 });
 
-it("prevents duplicate saves, navigation and collection while a save is in flight", async () => {
+it("excludes without a reason and restores the same post through stable navigation", async () => {
+  setup();
+  await optIn();
+  fireEvent.click(button("Exclude post"));
+  await screen.findByText("Another post");
+  expect(api.reviewEligibility).toHaveBeenLastCalledWith("consumer", [
+    { id: "one", decision: "exclude" },
+  ]);
+  fireEvent.click(button("← Previous"));
+  await screen.findByText("Saved: excluded.");
+  fireEvent.click(button("mixed"));
+  await screen.findByText("Another post");
+  expect(rows[0].eligibility).toBe("include");
+  expect(rows[0].label).toBe("mixed");
+});
+
+it("navigates without saving and resumes the first unfinished post after reaching the end", async () => {
+  setup();
+  await optIn();
+  fireEvent.click(button("Next →"));
+  await screen.findByText("Another post");
+  fireEvent.click(button("Next →"));
+  await screen.findByText("End of posts");
+  expect(api.reviewEligibility).not.toHaveBeenCalled();
+  fireEvent.click(button("Finish remaining reviews"));
+  await screen.findByText("I hate this coffee maker");
+  expect(button("← Previous").hasAttribute("disabled")).toBe(true);
+});
+
+it.each(["Retry save", "Discard unsaved choice"])(
+  "retains failed decisions until %s",
+  async (action) => {
+    const active = vi.fn();
+    setup({ onReviewActiveChange: active });
+    await optIn();
+    vi.mocked(api.reviewEligibility).mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    fireEvent.click(button("negative"));
+    await screen.findByText(/Not saved/);
+    expect(button("negative").getAttribute("aria-pressed")).toBe("true");
+    expect(active).toHaveBeenLastCalledWith(true);
+    expect(button("Next →").hasAttribute("disabled")).toBe(true);
+    expect(button("Continue to Clean →").hasAttribute("disabled")).toBe(true);
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    fireEvent.click(button(action));
+    if (action === "Retry save") {
+      await screen.findByText("Another post");
+      expect(api.reviewEligibility).toHaveBeenCalledTimes(2);
+    } else {
+      expect(screen.getByText("I hate this coffee maker")).toBeTruthy();
+      expect(api.reviewEligibility).toHaveBeenCalledTimes(1);
+      expect(rows[0].sentiment_reviewed).toBeFalsy();
+    }
+    expect(active).toHaveBeenLastCalledWith(false);
+  },
+);
+
+it("prevents duplicate saves, navigation, and paid collection during a save", async () => {
   let resolve!: (value: DatasetSummary) => void;
   vi.mocked(api.reviewEligibility).mockReturnValue(
     new Promise((done) => {
@@ -232,129 +287,83 @@ it("prevents duplicate saves, navigation and collection while a save is in fligh
     }),
   );
   const request = vi.fn();
-  await start({
+  setup({
     collection: {
       ...dataset,
       consumer_policy: policy,
+      partial: true,
       candidate_target: 20,
-      can_collect_more: true,
     },
     onAdditional: request,
   });
-  keep();
-  fireEvent.click(saveButton());
-  expect(screen.getByRole("button", { name: "Continue to Clean →" }).hasAttribute("disabled")).toBe(
-    true,
-  );
-  const additional = screen.getByRole("button", {
-    name: "Get more posts",
-  });
-  expect(additional.hasAttribute("disabled")).toBe(true);
-  fireEvent.click(additional);
-  fireEvent.click(saveButton());
-  expect(request).not.toHaveBeenCalled();
+  await optIn();
+  fireEvent.click(button("negative"));
+  fireEvent.click(button("negative"));
   expect(api.reviewEligibility).toHaveBeenCalledTimes(1);
-  vi.mocked(api.eligibilityPage).mockResolvedValue(empty);
+  expect(button("Continue to Clean →").hasAttribute("disabled")).toBe(true);
+  expect(button("Get more posts").hasAttribute("disabled")).toBe(true);
+  fireEvent.click(button("Get more posts"));
+  expect(request).not.toHaveBeenCalled();
   await act(async () => resolve(dataset));
-  await screen.findByText("You’re caught up");
-});
-
-it("restores an excluded post with a label in the same review form", async () => {
-  vi.mocked(api.eligibilityPage)
-    .mockResolvedValueOnce(empty)
-    .mockResolvedValue({
-      ...page,
-      items: [
-        {
-          ...page.items[0],
-          eligibility: "exclude",
-          eligibility_reviewed: true,
-          eligibility_reason: "off_topic",
-        },
-      ],
-    });
-  render(
-    <ConsumerReviewer datasetId="consumer" policy={policy} onBack={vi.fn()} onContinue={vi.fn()} />,
-  );
-  await screen.findByText("You’re caught up");
-  fireEvent.change(screen.getByLabelText("Show posts"), {
-    target: { value: "exclude" },
-  });
-  await screen.findByText("I hate this coffee maker");
-  keep();
-  vi.mocked(api.eligibilityPage).mockResolvedValue(empty);
-  fireEvent.click(saveButton());
-  await waitFor(() =>
-    expect(api.reviewEligibility).toHaveBeenCalledWith("consumer", [
-      {
-        id: "one",
-        decision: "include",
-        reason: null,
-        note: "",
-        label: "negative",
-      },
-    ]),
-  );
-});
-
-it("does not skip a post when saving the last item shrinks a filtered queue", async () => {
-  let rows = [page.items[0], { ...page.items[0], id: "two", text: "Another post" }];
-  vi.mocked(api.eligibilityPage).mockImplementation(async (_id, offset) => ({
-    ...page,
-    total: rows.length,
-    offset,
-    items: rows.slice(offset, offset + 1),
-  }));
-  vi.mocked(api.reviewEligibility).mockImplementation(async (_id, items) => {
-    rows = rows.filter((row) => row.id !== items[0].id);
-    return dataset;
-  });
-  await start();
-  fireEvent.click(screen.getByRole("button", { name: "Next without saving →" }));
   await screen.findByText("Another post");
-  keep();
-  fireEvent.click(saveButton());
-  await screen.findByText("I hate this coffee maker");
-  expect(api.eligibilityPage).toHaveBeenLastCalledWith(
-    "consumer",
-    0,
-    "needs_review",
-    expect.any(AbortSignal),
-  );
 });
 
-it("opens new candidates in Needs review even when collecting from a saved-post view", async () => {
-  const props = {
-    datasetId: "consumer",
-    policy,
-    onBack: vi.fn(),
-    onContinue: vi.fn(),
-    collection: dataset,
+it("refreshes 439 saved posts to 530 and hides stale cards during collection", async () => {
+  const initial = {
+    ...dataset,
+    consumer_policy: policy,
+    record_count: 439,
+    candidate_target: 530,
+    partial: true,
   };
-  const view = render(<ConsumerReviewer {...props} />);
-  await screen.findByText("I hate this coffee maker");
-  fireEvent.change(screen.getByLabelText("Show posts"), { target: { value: "include" } });
-  await waitFor(() =>
-    expect(api.eligibilityPage).toHaveBeenLastCalledWith(
-      "consumer",
-      0,
-      "include",
-      expect.any(AbortSignal),
-    ),
+  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 439 });
+  const view = setup({ collection: initial });
+  await optIn();
+  expect(screen.getByText("Post 1 of 439")).toBeTruthy();
+  view.rerender(<ConsumerReviewer {...view.props} collectionLoading />);
+  expect(screen.queryByText("I hate this coffee maker")).toBeNull();
+  expect(screen.getByText("Loading your review queue…")).toBeTruthy();
+  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 530 });
+  view.rerender(
+    <ConsumerReviewer
+      {...view.props}
+      collection={{ ...initial, record_count: 530 }}
+    />,
   );
-  view.rerender(<ConsumerReviewer {...props} collection={{ ...dataset, record_count: 2 }} />);
-  await waitFor(() =>
-    expect(api.eligibilityPage).toHaveBeenLastCalledWith(
-      "consumer",
-      0,
-      "needs_review",
-      expect.any(AbortSignal),
-    ),
-  );
-  expect((screen.getByLabelText("Show posts") as HTMLSelectElement).value).toBe("needs_review");
+  await screen.findByText("Post 1 of 530");
+  expect(screen.queryByText("Post 1 of 439")).toBeNull();
 });
 
-it("ignores a late save response after this review has unmounted", async () => {
+it("allows retry or leaving after a failed load, without stale totals or paid actions", async () => {
+  const initial = {
+    ...dataset,
+    consumer_policy: policy,
+    record_count: 439,
+    candidate_target: 530,
+    partial: true,
+  };
+  const view = setup({ collection: initial, onAdditional: vi.fn() });
+  await optIn();
+  vi.mocked(api.eligibilityPage).mockRejectedValueOnce(
+    new Error("Review refresh failed"),
+  );
+  view.rerender(
+    <ConsumerReviewer
+      {...view.props}
+      collection={{ ...initial, record_count: 530 }}
+    />,
+  );
+  await screen.findByText("Review refresh failed");
+  expect(screen.queryByText("I hate this coffee maker")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Get more posts" })).toBeNull();
+  expect(button("Continue to Clean →").hasAttribute("disabled")).toBe(true);
+  expect(button("← Back to Collect").hasAttribute("disabled")).toBe(false);
+  vi.mocked(api.eligibilityPage).mockResolvedValue({ ...page, total: 530 });
+  fireEvent.click(button("Retry loading review"));
+  await screen.findByText("Post 1 of 530");
+});
+
+it("ignores a late save response after unmount", async () => {
   let resolve!: (value: DatasetSummary) => void;
   vi.mocked(api.reviewEligibility).mockReturnValue(
     new Promise((done) => {
@@ -362,43 +371,10 @@ it("ignores a late save response after this review has unmounted", async () => {
     }),
   );
   const changed = vi.fn();
-  const view = await start({ onChanged: changed });
-  keep();
-  fireEvent.click(saveButton());
+  const view = setup({ onChanged: changed });
+  await optIn();
+  fireEvent.click(button("negative"));
   view.unmount();
   await act(async () => resolve(dataset));
   expect(changed).not.toHaveBeenCalled();
 });
-
-it.each(["all", "include"])(
-  "advances after saving a matching decision in the %s view",
-  async (status) => {
-    const rows = [page.items[0], { ...page.items[0], id: "two", text: "Another saved post" }];
-    vi.mocked(api.eligibilityPage).mockImplementation(async (_id, offset) => ({
-      ...page,
-      total: 2,
-      offset,
-      items: rows.slice(offset, offset + 1),
-    }));
-    await start();
-    fireEvent.change(screen.getByLabelText("Show posts"), { target: { value: status } });
-    await waitFor(() =>
-      expect(api.eligibilityPage).toHaveBeenLastCalledWith(
-        "consumer",
-        0,
-        status,
-        expect.any(AbortSignal),
-      ),
-    );
-    await screen.findByText("I hate this coffee maker");
-    keep();
-    fireEvent.click(saveButton());
-    await screen.findByText("Another saved post");
-    expect(api.eligibilityPage).toHaveBeenLastCalledWith(
-      "consumer",
-      1,
-      status,
-      expect.any(AbortSignal),
-    );
-  },
-);

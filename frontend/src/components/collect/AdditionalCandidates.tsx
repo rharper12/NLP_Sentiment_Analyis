@@ -7,6 +7,7 @@ interface Props {
   dataset: DatasetSummary;
   counts?: ConsumerCounts;
   stage?: "collect" | "review";
+  goal?: "kept" | "labeled";
   busy: boolean;
   costPerRead?: number | null;
   onRequest: (candidateTarget: number) => void;
@@ -17,6 +18,7 @@ export function AdditionalCandidates({
   dataset,
   counts = dataset.consumer_counts ?? undefined,
   stage = "review",
+  goal = "labeled",
   busy,
   costPerRead,
   onRequest,
@@ -29,21 +31,24 @@ export function AdditionalCandidates({
   const target = dataset.candidate_target ?? dataset.record_count;
   const base = Math.max(target, dataset.record_count);
   const capacity = Math.max(0, 5000 - base);
-  const pending = counts.pending_eligibility + counts.pending_sentiment;
+  const shortfall = goal === "kept"
+    ? Math.max(0, counts.reviewed_target - counts.included)
+    : counts.shortfall;
+  const pending = counts.pending_eligibility + (goal === "labeled" ? counts.pending_sentiment : 0);
   // A completed batch or changed shortfall gets a fresh default, while edits survive rerenders.
-  const basis = `${dataset.dataset_id}-${target}-${counts.shortfall}-${pending}`;
+  const basis = `${dataset.dataset_id}-${target}-${goal}-${shortfall}-${pending}`;
   const amount = choice?.basis === basis
     ? choice.amount
-    : Math.min(Math.max(1, counts.shortfall - pending), capacity);
+    : Math.min(Math.max(1, shortfall - pending), capacity);
   const resume = dataset.partial;
   const invalid = !resume && (!Number.isInteger(amount) || amount < 1 || amount > capacity);
   const estimateReads = resume ? Math.max(0, target - dataset.record_count) : amount;
 
   // Collect only finishes the authorized goal. Replacement batches belong to review.
-  if (stage === "collect" && (!resume || counts.shortfall === 0)) return null;
+  if (stage === "collect" && (!resume || shortfall === 0)) return null;
   let unavailable: string | null = null;
-  if (counts.shortfall === 0) unavailable = "Reviewed target reached.";
-  else if (!resume && pending >= counts.shortfall)
+  if (shortfall === 0) unavailable = goal === "kept" ? "Kept-post target reached." : "Reviewed target reached.";
+  else if (!resume && pending >= shortfall)
     unavailable = `${pending.toLocaleString()} saved ${pending === 1 ? "post still needs" : "posts still need"} review. Get more if exclusions leave you short.`;
   else if (!resume && !dataset.can_collect_more)
     unavailable = "No more posts are available for this saved search. You can continue with a partial dataset.";
@@ -53,11 +58,15 @@ export function AdditionalCandidates({
   return (
     <section
       className={stage === "collect" ? "flex flex-col gap-3" : "glass-panel flex flex-col gap-3 p-4"}
-      aria-label={stage === "collect" ? "Get more posts" : "Complete reviewed target"}
+      aria-label={stage === "collect"
+        ? "Get more posts"
+        : goal === "kept" ? "Complete kept-post target" : "Complete reviewed target"}
     >
       {unavailable ? <p role="status" className="text-sm">{unavailable}</p> : <>
         {stage === "review" && <>
-          <h3 className="font-semibold">{counts.shortfall.toLocaleString()} more reviewed posts needed</h3>
+          <h3 className="font-semibold">
+            {shortfall.toLocaleString()} more {goal === "kept" ? "kept" : "reviewed"} posts needed
+          </h3>
           {!!pending && (
             <p className="text-sm text-muted">
               {pending.toLocaleString()} saved {pending === 1 ? "post still needs" : "posts still need"} review.

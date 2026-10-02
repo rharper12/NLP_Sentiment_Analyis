@@ -7,16 +7,12 @@ import {
   type DatasetSummary,
   type EligibilityItem,
   type EligibilityPage,
-  type EligibilityReason,
   type PostRecord,
-  type SentimentLabel,
 } from "../../api/types";
 import { toError, useAsync } from "../../hooks/useAsync";
 import { AdditionalCandidates } from "../collect/AdditionalCandidates";
-import { CollectionStatus } from "../collect/CollectionStatus";
-import { Skeleton, SkeletonLines } from "../ui/Skeleton";
+import { SkeletonLines } from "../ui/Skeleton";
 import { Notice } from "../ui/Notice";
-import { ConsumerSummary } from "./ConsumerSummary";
 
 interface Props {
   datasetId: string;
@@ -33,17 +29,10 @@ interface Props {
   onAdditional?: (candidateTarget: number) => void;
 }
 
-const REASONS: [EligibilityReason, string][] = [
-  ["news_or_article", "News or article distribution"],
-  ["giveaway_or_promotion", "Giveaway or promotion"],
-  ["technical_developer_content", "Technical implementation content"],
-  ["duplicate_or_repeated_template", "Duplicate or repeated template"],
-  ["off_topic", "Off topic"],
-  ["insufficient_context", "Insufficient context"],
-  ["not_english", "Not English"],
-];
+type Mode = "eligibility" | "sentiment";
+type Phase = "choice" | "labels" | "cards";
 
-/** One original post, one save: eligibility and human sentiment travel together. */
+/** Explicit actions save one original post; stable offsets make every decision revisitable. */
 export function ConsumerReviewer({
   datasetId,
   policy,
@@ -59,26 +48,30 @@ export function ConsumerReviewer({
   onAdditional,
 }: Props) {
   const page = useAsync<EligibilityPage>();
-  const queueLabel = useId();
-  const { run: loadPage, cancel } = page;
-  const [status, setStatus] = useState("needs_review");
-  const [offset, setOffset] = useState(0);
+  const { run: loadPage, cancel, reset } = page;
+  const [phase, setPhase] = useState<Phase>("choice");
+  const [mode, setMode] = useState<Mode>("sentiment");
+  const [offset, setOffset] = useState<number | null>(null);
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const inFlight = useRef(false);
-  const mounted = useRef(true);
+  const [failedDecision, setFailedDecision] = useState<EligibilityItem | null>(
+    null,
+  );
   const [saveStatus, setSaveStatus] = useState("");
   const [error, setError] = useState<Error | null>(null);
+  const [loadedCount, setLoadedCount] = useState<number | undefined>();
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
+  const previousPhase = useRef(phase);
   const loadedOnce = useRef(false);
+  const sentimentId = useId();
+  const exclusionHintId = useId();
   const count = collection?.record_count;
   const [previousCount, setPreviousCount] = useState(count);
-  // Reset the view before rendering a newly collected batch, while keeping saved decisions.
   if (previousCount !== count) {
     setPreviousCount(count);
-    setStatus("needs_review");
-    setOffset(0);
+    setOffset(null);
   }
 
   useEffect(() => {
@@ -89,64 +82,117 @@ export function ConsumerReviewer({
   }, []);
 
   useEffect(() => {
-    if (collectionLoading) return cancel;
-    void loadPage((signal) => api.eligibilityPage(datasetId, offset, status, signal)).then(
-      (loaded) => {
-        if (loaded && offset > 0 && offset >= loaded.total)
-          setOffset(Math.max(0, loaded.total - 1));
-      },
-    );
+    if (phase !== "cards" || collectionLoading) return cancel;
+    const startAt =
+      offset === null
+        ? mode === "sentiment"
+          ? "first_unlabeled"
+          : "first_unreviewed"
+        : undefined;
+    void loadPage((signal) =>
+      api.eligibilityPage(datasetId, offset ?? 0, "all", signal, startAt),
+    ).then((loaded) => {
+      if (loaded && mounted.current) setLoadedCount(count);
+    });
     return cancel;
-  }, [datasetId, offset, status, count, revision, collectionLoading, loadPage, cancel]);
+  }, [
+    datasetId,
+    phase,
+    mode,
+    offset,
+    count,
+    revision,
+    collectionLoading,
+    loadPage,
+    cancel,
+  ]);
+
   useEffect(() => {
-    if (!page.loading && page.data) {
+    if (phase !== previousPhase.current) {
+      previousPhase.current = phase;
+      heading.current?.focus();
+    } else if (!page.loading && page.data) {
       if (loadedOnce.current) heading.current?.focus();
       loadedOnce.current = true;
     }
-  }, [page.loading, page.data]);
+  }, [phase, page.loading, page.data]);
+
+  const unsettled = saving || failedDecision !== null;
   useEffect(() => {
-    onReviewActiveChange?.(dirty || saving);
+    onReviewActiveChange?.(unsettled);
     return () => onReviewActiveChange?.(false);
-  }, [dirty, saving, onReviewActiveChange]);
+  }, [unsettled, onReviewActiveChange]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (dirty || inFlight.current) {
+      if (unsettled || inFlight.current) {
         event.preventDefault();
         event.returnValue = "";
       }
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, [unsettled]);
 
-  const busy = saving || page.loading || collectionLoading;
-  const locked = busy || dirty;
-  const item = page.error ? undefined : page.data?.items[0];
+  const refreshing =
+    phase === "cards" &&
+    !page.error &&
+    (page.loading ||
+      collectionLoading ||
+      loadedCount !== count ||
+      !page.data ||
+      (offset !== null && page.data.offset !== offset));
+  const busy = saving || refreshing || collectionLoading;
+  const locked = busy || failedDecision !== null;
+  const current = page.data?.offset ?? 0;
+  const item = page.error || refreshing ? undefined : page.data?.items[0];
+  const counts = page.data?.counts;
+  const remaining = counts
+    ? counts.pending_eligibility +
+      (mode === "sentiment" ? counts.pending_sentiment : 0)
+    : 0;
+
+  const start = (nextMode: Mode) => {
+    reset();
+    setMode(nextMode);
+    setOffset(null);
+    setSaveStatus("");
+    setError(null);
+    setPhase("cards");
+  };
+  const move = (nextOffset: number | null) => {
+    if (locked) return;
+    setOffset(nextOffset);
+    setRevision((value) => value + 1);
+    setSaveStatus("");
+    setError(null);
+  };
   const save = async (decision: EligibilityItem) => {
-    if (inFlight.current || busy) return;
+    if (inFlight.current || busy || !item) return;
     inFlight.current = true;
     setSaving(true);
+    setFailedDecision(null);
     setError(null);
-    setSaveStatus("Saving your review…");
+    setSaveStatus("Saving…");
     try {
       const updated = await api.reviewEligibility(datasetId, [decision]);
       if (!mounted.current) return;
-      setDirty(false);
       setSaveStatus(
-        decision.decision === "include"
-          ? "Kept and labeled. Review saved."
-          : "Excluded. Review saved; you can restore it from Excluded posts.",
+        decision.decision === "exclude"
+          ? "Excluded. Saved."
+          : decision.label
+            ? `Kept as ${decision.label}. Saved.`
+            : "Kept. Saved.",
       );
       onChanged?.(updated);
-      // A pending queue shrinks after a save, so its next post occupies the same offset.
-      // Saved-post views retain matching decisions, so advance those explicitly.
-      const staysInView = status === "all" || status === decision.decision;
-      if (staysInView && offset + 1 < (page.data?.total ?? 0)) setOffset(offset + 1);
-      else setRevision((value) => value + 1);
+      setOffset(current + 1);
+      setRevision((value) => value + 1);
     } catch (cause) {
       if (!mounted.current) return;
+      setFailedDecision(decision);
       setError(toError(cause));
-      setSaveStatus("Not saved. Your choices are still here. Retry Save and next.");
+      setSaveStatus(
+        "Not saved. Retry or discard this choice before moving on.",
+      );
     } finally {
       inFlight.current = false;
       if (mounted.current) setSaving(false);
@@ -154,398 +200,401 @@ export function ConsumerReviewer({
   };
 
   return (
-    <section className="mx-auto flex max-w-4xl flex-col gap-5">
+    <section className="mx-auto flex max-w-3xl flex-col gap-5">
       <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-accent">
-          Build your reviewed dataset
-        </p>
-        <h2 className="text-3xl font-semibold tracking-tight">Review &amp; label</h2>
-        <p className="mt-2 max-w-2xl text-muted">
-          Read each post once. Keep it and choose its sentiment, or exclude it with a reason. Each
-          save moves you to the next review.
-        </p>
+        <h2 className="text-3xl font-semibold tracking-tight">
+          Review &amp; label
+        </h2>
         {collection?.query && (
-          <p className="mt-3 break-words text-sm">
-            <span className="text-muted">Your topic</span> · {collection.query}
+          <p className="mt-2 break-words text-sm text-muted">
+            {collection.query}
           </p>
         )}
       </div>
-      {collection && <CollectionStatus dataset={collection} busy={collectionLoading} message={collectionMessage} />}
-      {page.error ? <p className="text-sm text-muted">Review totals could not be refreshed. Retry loading the review to see current counts.</p> : page.data && !page.loading && !collectionLoading ? (
-        <ConsumerSummary counts={page.data.counts} timezone={policy.timezone ?? "UTC"} />
-      ) : <div className="rounded-xl border border-rule p-5" role="group" aria-label="Loading review totals" aria-busy="true"><Skeleton className="w-2/3" /><div className="mt-4 grid grid-cols-3 gap-3"><Skeleton className="h-12" /><Skeleton className="h-12" /><Skeleton className="h-12" /></div></div>}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          <span id={queueLabel}>Show posts</span>
-          <select
-            aria-labelledby={queueLabel}
-            className="field min-h-11"
-            value={status}
-            disabled={locked}
-            onChange={(event) => {
-              setStatus(event.target.value);
-              setOffset(0);
-              setSaveStatus("");
-            }}
-          >
-            <option value="needs_review">Needs review</option>
-            <option value="all">All posts</option>
-            <option value="include">Kept posts</option>
-            <option value="exclude">Excluded posts — restore or correct</option>
-          </select>
-        </label>
-        <p role="status" aria-live="polite" className="max-w-md text-sm text-muted">
-          {collectionLoading
-            ? "Collecting more posts…"
-            : saveStatus ||
-              (page.loading ? "Loading posts…" : "Save each review before moving on.")}
-        </p>
-      </div>
-      <Notice error={error ?? page.error ?? collectionError} warnings={collection?.warnings} />
-      {page.error && (
-        <button
-          type="button"
-          className="btn self-start"
-          onClick={() => setRevision((value) => value + 1)}
-        >
-          Retry loading review
-        </button>
-      )}
-      <div className="glass-panel overflow-hidden" aria-busy={busy}>
-        <div className="flex items-center justify-between gap-3 border-b border-rule px-5 py-4 sm:px-7">
-          <h3 ref={heading} tabIndex={-1} className="font-semibold">
-            {item ? "Review this post" : "Review progress"}
+      <Notice
+        error={error ?? page.error ?? collectionError}
+        warnings={collection?.warnings}
+      />
+      {phase !== "cards" ? (
+        <div className="glass-panel flex flex-col gap-4 p-5 sm:p-7">
+          <h3 ref={heading} tabIndex={-1} className="text-xl font-semibold">
+            {phase === "choice"
+              ? "Would you like to review each post?"
+              : "Also label sentiment as you review?"}
           </h3>
-          <span className="tnum text-sm text-muted">
-            {page.error ? "Review queue unavailable" : page.loading || collectionLoading ? "Updating review queue…" : page.data?.total
-              ? `${Math.min(offset + 1, page.data.total)} of ${page.data.total} in this view`
-              : "No posts in this view"}
-          </span>
-        </div>
-        <div className="flex flex-col gap-5 p-5 sm:p-7">
-          {item && !page.loading && !collectionLoading && !page.error ? (
-            <>
-              <blockquote className="whitespace-pre-wrap break-words border-l-4 border-accent pl-5 text-lg leading-relaxed">
-                {item.text}
-              </blockquote>
-              <details className="text-sm text-muted">
-                <summary className="cursor-pointer">
-                  Post details &amp; screening suggestion
-                </summary>
-                <div className="mt-3 flex flex-col gap-2 break-words">
-                  <p>
-                    Record {item.id} · Author {item.author_id ?? "unavailable"}
-                  </p>
-                  <p>
-                    {item.created_at
-                      ? new Date(item.created_at).toLocaleString(undefined, {
-                          timeZone: policy.timezone,
-                        })
-                      : "Timestamp unavailable"}{" "}
-                    ({policy.timezone})
-                  </p>
-                  <p>
-                    Screening suggestion: {item.screening?.decision ?? "pending"}. Confirm relevance
-                    against your topic; all sentiments are eligible.
-                  </p>
-                  <ul className="list-disc pl-5">
-                    {item.screening?.evidence?.map((evidence) => (
-                      <li key={evidence}>{evidence}</li>
-                    ))}
-                  </ul>
-                  {item.screening?.duplicate_of && (
-                    <p>
-                      Possible duplicate of {item.screening.duplicate_of}. Originals are retained.
-                    </p>
-                  )}
-                  {item.conversation_id && <p>Conversation: {item.conversation_id}</p>}
-                  {!!item.references?.length && (
-                    <p>
-                      References:{" "}
-                      {item.references
-                        .map((reference) => `${reference.type}: ${reference.id}`)
-                        .join("; ")}
-                      . Related posts have not been fetched.
-                    </p>
-                  )}
-                  {!!item.urls?.length && (
-                    <ul>
-                      {item.urls.map((url, index) => (
-                        <li className="break-all" key={index}>
-                          {url.expanded_url ?? url.url}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {!!item.eligibility_history?.length && (
-                    <details>
-                      <summary>Previous decisions</summary>
-                      <ul>
-                        {item.eligibility_history.map((review, index) => (
-                          <li key={index}>
-                            {review.reviewed_at}: {review.decision} · {review.reason} ·{" "}
-                            {review.note}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </div>
-              </details>
-              {item.eligibility_reviewed && (
-                <p className="text-sm text-muted">
-                  Saved:{" "}
-                  {item.eligibility === "include"
-                    ? `kept${item.sentiment_reviewed ? ` · ${item.label}` : " · sentiment needed"}`
-                    : "excluded"}
-                  {item.eligibility === "include" && !page.data?.included_ids.includes(item.id)
-                    ? " · held by author limit"
-                    : ""}
-                  .
-                </p>
-              )}
-              <ReviewForm
-                key={`${item.id}-${revision}`}
-                item={item}
-                busy={busy}
-                onDirtyChange={setDirty}
-                onSave={(decision) => void save(decision)}
-              />
-            </>
-          ) : !page.loading && !collectionLoading && !page.error ? (
-            <div className="py-6 text-center">
-              <p className="text-xl font-semibold">
-                {status === "needs_review" ? "You’re caught up" : "No posts in this view"}
-              </p>
-              <p className="mt-2 text-sm text-muted">
-                {status === "needs_review"
-                  ? "Your reviews are saved. Continue to Clean, or collect more posts if you’re short of your target."
-                  : "Choose another view to review or correct a saved decision."}
-              </p>
-            </div>
-          ) : (
-            <div className="py-6"><p role="status" className="mb-5 text-sm text-muted">{page.error ? "The review could not be loaded. Retry to continue." : "Loading your review queue…"}</p>{!page.error && <><SkeletonLines lines={4} /><div className="mt-6 grid grid-cols-2 gap-3"><Skeleton className="h-20" /><Skeleton className="h-20" /></div></>}</div>
-          )}
-          <div className="flex justify-between gap-3 border-t border-rule pt-4">
+          <p className="text-sm text-muted">
+            {phase === "choice"
+              ? "Keep the posts that fit your topic and exclude the rest."
+              : "Label the posts you keep, or focus only on whether they belong."}
+          </p>
+          <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              className="btn"
-              disabled={locked || offset === 0}
-              onClick={() => {
-                setOffset(offset - 1);
-                setSaveStatus("");
-              }}
+              className="btn-primary min-h-11"
+              disabled={collectionLoading}
+              onClick={() =>
+                phase === "choice" ? setPhase("labels") : start("sentiment")
+              }
             >
-              ← Previous
+              {phase === "choice" ? "Yes, review posts" : "Yes, review & label"}
             </button>
             <button
               type="button"
-              className="btn"
-              disabled={locked || offset + 1 >= (page.data?.total ?? 0)}
-              onClick={() => {
-                setOffset(offset + 1);
-                setSaveStatus("");
-              }}
+              className="btn min-h-11"
+              disabled={collectionLoading}
+              onClick={() =>
+                phase === "choice" ? onContinue() : start("eligibility")
+              }
             >
-              Next without saving →
+              {phase === "choice" ? "Skip for now →" : "No, review only"}
             </button>
           </div>
+          <p className="text-xs text-muted">
+            {phase === "choice"
+              ? "Skipping leaves posts unreviewed and starts no automated labeling."
+              : "Existing labels stay saved. You can add or change sentiment later."}
+          </p>
+          {phase === "labels" && (
+            <button
+              type="button"
+              className="btn self-start"
+              onClick={() => setPhase("choice")}
+            >
+              ← Back
+            </button>
+          )}
         </div>
-      </div>
-      {collection && page.data && !page.error && onAdditional && (
-        <AdditionalCandidates
-          dataset={collection}
-          counts={page.data.counts}
-          busy={locked || !!page.error}
-          costPerRead={costPerRead}
-          onRequest={onAdditional}
-        />
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+            {!refreshing && !page.error && counts ? (
+              <p className="tnum text-muted">
+                <strong className="text-ink">
+                  {counts.human_inclusions + counts.human_exclusions}
+                </strong>{" "}
+                of {page.data?.total} reviewed
+                {" · "}
+                {counts.included} kept · {counts.human_exclusions}{" "}
+                excluded
+                {counts.author_cap_held > 0 && ` · ${counts.author_cap_held} over author limit`}
+              </p>
+            ) : (
+              <p className="text-muted">
+                {page.error
+                  ? "Review progress unavailable"
+                  : "Loading review progress…"}
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn"
+              disabled={locked}
+              onClick={() => setPhase("labels")}
+            >
+              Review settings
+            </button>
+          </div>
+          <p role="status" className="sr-only">
+            {collectionLoading
+              ? "Collecting more posts…"
+              : saveStatus || collectionMessage}
+          </p>
+          {page.error && (
+            <button
+              type="button"
+              className="btn self-start"
+              onClick={() => setRevision((value) => value + 1)}
+            >
+              Retry loading review
+            </button>
+          )}
+          <div className="glass-panel overflow-hidden" aria-busy={busy}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rule px-5 py-4 sm:px-7">
+              <h3 ref={heading} tabIndex={-1} className="font-semibold">
+                {item
+                  ? "Review this post"
+                  : refreshing
+                    ? "Loading post…"
+                    : "Review progress"}
+              </h3>
+              {!refreshing && !page.error && page.data && (
+                <span className="tnum text-sm text-muted">
+                  {item
+                    ? `Post ${current + 1} of ${page.data.total}`
+                    : `${page.data.total} posts`}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-col gap-5 p-5 sm:p-7">
+              {item ? (
+                <>
+                  <blockquote className="whitespace-pre-wrap break-words border-l-4 border-accent pl-5 text-lg leading-relaxed">
+                    {item.text}
+                  </blockquote>
+                  <PostDetails item={item} timezone={policy.timezone} />
+                  {item.eligibility_reviewed && (
+                    <p className="text-sm text-muted">
+                      Saved:{" "}
+                      {item.eligibility === "exclude"
+                        ? "excluded"
+                        : `kept${item.sentiment_reviewed ? ` · ${item.label}` : ""}`}
+                      .
+                      {item.eligibility === "include" &&
+                        !page.data?.included_ids.includes(item.id) &&
+                        " Held by author limit."}
+                    </p>
+                  )}
+                  {mode === "sentiment" && (
+                    <div role="group" aria-labelledby={sentimentId}>
+                      <p id={sentimentId} className="mb-2 text-sm font-medium">
+                        Keep this post and label its sentiment
+                      </p>
+                      <p className="mb-3 text-xs text-muted">
+                        Choosing a sentiment saves and opens the next post.
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {SENTIMENT_LABELS.map((label) => (
+                          <button
+                            type="button"
+                            key={label}
+                          className="selectable min-h-12 px-3 py-3 font-medium capitalize disabled:pointer-events-none disabled:opacity-45"
+                            aria-pressed={
+                              (failedDecision?.label ??
+                                (item.sentiment_reviewed
+                                  ? item.label
+                                  : null)) === label
+                            }
+                            disabled={busy}
+                            onClick={() =>
+                              void save({
+                                id: item.id,
+                                decision: "include",
+                                label,
+                              })
+                            }
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      className={
+                        mode === "eligibility"
+                          ? "btn-primary min-h-11"
+                          : "btn min-h-11"
+                      }
+                      disabled={busy}
+                      onClick={() =>
+                        void save({ id: item.id, decision: "include" })
+                      }
+                    >
+                      {mode === "sentiment" && !item.sentiment_reviewed
+                        ? "Keep without a label"
+                        : "Keep post"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn min-h-11"
+                      aria-describedby={exclusionHintId}
+                      disabled={busy}
+                      onClick={() =>
+                        void save({ id: item.id, decision: "exclude" })
+                      }
+                    >
+                      Exclude post
+                    </button>
+                  </div>
+                  <p id={exclusionHintId} className="text-xs text-muted">
+                    No reason required. {mode === "eligibility" ? "Keep or Exclude" : "Exclude"}{" "}
+                    saves and opens the next post.
+                  </p>
+                  {failedDecision && (
+                    <div className="flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={busy}
+                        onClick={() => void save(failedDecision)}
+                      >
+                        Retry save
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={busy}
+                        onClick={() => {
+                          setFailedDecision(null);
+                          setError(null);
+                          setSaveStatus("Unsaved choice discarded.");
+                        }}
+                      >
+                        Discard unsaved choice
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : refreshing ? (
+                <>
+                  <p role="status" className="text-sm text-muted">
+                    Loading your review queue…
+                  </p>
+                  <SkeletonLines lines={4} />
+                </>
+              ) : page.error ? (
+                <p>The post could not be loaded. Retry to continue.</p>
+              ) : (
+                <div className="py-4">
+                  <p className="text-xl font-semibold">
+                    {remaining ? "End of posts" : "Review complete"}
+                  </p>
+                  <p className="mt-2 text-sm text-muted">
+                    Your saved decisions stay in place. You can go back to make
+                    changes or continue to Clean.
+                  </p>
+                  {remaining > 0 && (
+                    <button
+                      type="button"
+                      className="btn mt-4"
+                      onClick={() => move(null)}
+                    >
+                      {mode === "sentiment"
+                        ? "Finish remaining reviews"
+                        : "Review remaining posts"}
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="flex justify-between gap-3 border-t border-rule pt-4">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={locked || !!page.error || current === 0}
+                  onClick={() => move(Math.max(0, current - 1))}
+                >
+                  ← Previous
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={
+                    locked || !!page.error || current >= (page.data?.total ?? 0)
+                  }
+                  onClick={() => move(current + 1)}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          </div>
+          {collection &&
+            counts &&
+            !refreshing &&
+            !page.error &&
+            onAdditional &&
+            (!item || collection.partial) && (
+              <AdditionalCandidates
+                dataset={collection}
+                counts={counts}
+                goal={mode === "eligibility" ? "kept" : "labeled"}
+                busy={locked}
+                costPerRead={costPerRead}
+                onRequest={onAdditional}
+              />
+            )}
+          <details className="text-sm text-muted">
+            <summary className="cursor-pointer">
+              Labels &amp; export eligibility
+            </summary>
+            <p className="mt-2">
+              Manual labels take priority over later Comprehend predictions.
+              Reviewing does not start Comprehend. The fully reviewed export
+              requires both a confirmed Keep decision and a manual sentiment
+              label, within the author limit.
+            </p>
+          </details>
+        </>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <button type="button" className="btn" disabled={locked} onClick={onBack}>
-          ← Back to Collect
-        </button>
         <button
           type="button"
-          className="btn-primary"
-          disabled={locked || !page.data || !!page.error}
-          onClick={onContinue}
+          className="btn"
+          disabled={locked}
+          onClick={onBack}
         >
-          Continue to Clean →
+          ← Back to Collect
         </button>
+        {phase === "cards" && (
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={locked || !!page.error || !page.data}
+            onClick={onContinue}
+          >
+            Continue to Clean →
+          </button>
+        )}
       </div>
-      <p className="text-xs text-muted">
-        Excluded posts stay recoverable. Only kept, fully reviewed posts within the author limit
-        count toward your target. You can continue with a partial dataset.
-      </p>
     </section>
   );
 }
 
-function ReviewForm({
+function PostDetails({
   item,
-  busy,
-  onDirtyChange,
-  onSave,
+  timezone,
 }: {
   item: PostRecord;
-  busy: boolean;
-  onDirtyChange: (dirty: boolean) => void;
-  onSave: (decision: EligibilityItem) => void;
+  timezone: string;
 }) {
-  const initialDecision =
-    item.eligibility_reviewed && item.eligibility !== "pending" ? item.eligibility : "";
-  const initialLabel = item.sentiment_reviewed ? (item.label as SentimentLabel) : "";
-  const [decision, setDecision] = useState(initialDecision);
-  const [label, setLabel] = useState<SentimentLabel | "">(initialLabel);
-  const [reason, setReason] = useState<EligibilityReason | "">(item.eligibility_reason ?? "");
-  const [note, setNote] = useState(item.eligibility_note ?? "");
-  const id = useId();
-  const override = !!decision && item.screening && decision !== item.screening.decision;
-  const dirty =
-    decision !== initialDecision ||
-    label !== initialLabel ||
-    reason !== (item.eligibility_reason ?? "") ||
-    note !== (item.eligibility_note ?? "");
-  useEffect(() => {
-    onDirtyChange(dirty);
-  }, [dirty, onDirtyChange]);
-  useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
-  const valid =
-    !!decision && (decision === "include" ? !!label : !!reason) && (!override || !!note.trim());
   return (
-    <form
-      className="flex flex-col gap-5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!busy && valid)
-          onSave({
-            id: item.id,
-            decision: decision as "include" | "exclude",
-            reason: decision === "exclude" ? (reason as EligibilityReason) : null,
-            note,
-            label: decision === "include" ? (label as SentimentLabel) : null,
-          });
-      }}
-    >
-      <fieldset disabled={busy}>
-        <legend className="mb-2 text-sm font-semibold">
-          Does this post belong in your dataset?
-        </legend>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {(
-            [
-              ["include", "Keep & label", "A relevant consumer reaction"],
-              ["exclude", "Exclude post", "Leave it out of the reviewed export"],
-            ] as const
-          ).map(([value, title, description]) => (
-            <label
-              key={value}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 ${decision === value ? "border-accent bg-accent-soft" : "border-rule"}`}
-            >
-              <input
-                type="radio"
-                className="mt-1 size-4 shrink-0 accent-accent"
-                name={`${id}-decision`}
-                value={value}
-                checked={decision === value}
-                onChange={() => setDecision(value)}
-              />
-              <span className="font-medium">
-                {title}
-                <span className="mt-1 block text-xs font-normal text-muted">{description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
-      {decision === "include" && (
-        <fieldset disabled={busy}>
-          <legend className="mb-2 text-sm font-semibold">
-            What sentiment does the post express?
-          </legend>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {SENTIMENT_LABELS.map((value) => (
-              <label
-                key={value}
-                className={`flex min-h-12 cursor-pointer items-center gap-2 rounded-xl border p-3 capitalize ${label === value ? "border-accent bg-accent-soft" : "border-rule"}`}
-              >
-                <input
-                  type="radio"
-                  className="size-4 accent-accent"
-                  name={`${id}-label`}
-                  checked={label === value}
-                  onChange={() => setLabel(value)}
-                />
-                {value}
-              </label>
-            ))}
-          </div>
-          <p className="mt-2 text-xs text-muted">
-            Positive and negative opinions are equally eligible. Mixed means both positive and
-            negative sentiment.
+    <details className="text-sm text-muted">
+      <summary className="cursor-pointer">Post details</summary>
+      <div className="mt-3 flex flex-col gap-2 break-words">
+        <p>
+          Record {item.id} · Author {item.author_id ?? "unavailable"}
+        </p>
+        <p>
+          {item.created_at
+            ? new Date(item.created_at).toLocaleString(undefined, {
+                timeZone: timezone,
+              })
+            : "Timestamp unavailable"}{" "}
+          ({timezone})
+        </p>
+        {item.screening && (
+          <p>
+            Screening suggestion: {item.screening.decision}. Your decision takes
+            priority.
           </p>
-        </fieldset>
-      )}
-      {decision === "exclude" && (
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          <span id={`${id}-reason-label`}>Exclusion reason</span>
-          <select
-            aria-labelledby={`${id}-reason-label`}
-            className="field min-h-11"
-            disabled={busy}
-            required
-            value={reason}
-            onChange={(event) => setReason(event.target.value as EligibilityReason | "")}
-          >
-            <option value="">Choose a reason</option>
-            {REASONS.map(([value, title]) => (
-              <option key={value} value={value}>
-                {title}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {decision && (
-        <label className="flex flex-col gap-1 text-sm font-medium">
-          {override
-            ? "Why override the screening suggestion? (required)"
-            : "Review note (optional)"}
-          <textarea
-            className="field"
-            rows={2}
-            disabled={busy}
-            required={!!override}
-            maxLength={2000}
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
-        </label>
-      )}
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className="btn-primary min-h-11" disabled={busy || !valid}>
-          Save and next →
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            className="btn min-h-11"
-            disabled={busy}
-            onClick={() => {
-              setDecision(initialDecision);
-              setLabel(initialLabel);
-              setReason(item.eligibility_reason ?? "");
-              setNote(item.eligibility_note ?? "");
-            }}
-          >
-            Discard changes
-          </button>
         )}
-        <span className="text-xs text-muted">
-          {dirty ? "Unsaved changes" : "Choose a decision to continue"}
-        </span>
+        {!!item.screening?.evidence?.length && (
+          <ul className="list-disc pl-5">
+            {item.screening.evidence.map((evidence) => (
+              <li key={evidence}>{evidence}</li>
+            ))}
+          </ul>
+        )}
+        {item.screening?.duplicate_of && (
+          <p>Possible duplicate of {item.screening.duplicate_of}.</p>
+        )}
+        {!!item.eligibility_history?.length && (
+          <details>
+            <summary className="cursor-pointer">Previous decisions</summary>
+            <ul className="mt-2">
+              {item.eligibility_history.map((review, index) => (
+                <li key={index}>
+                  {review.reviewed_at}: {review.decision}
+                  {review.reason && ` · ${review.reason}`}
+                  {review.note && ` · ${review.note}`}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
-    </form>
+    </details>
   );
 }

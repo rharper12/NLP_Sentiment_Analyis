@@ -46,8 +46,9 @@ the tested background, surface, secondary surface, glass and selected surfaces:
 These calculations and automated checks do not constitute a full manual WCAG audit.
 
 `tools/a11y_audit.py` drives all five stages and the consumer collection/review/export loop.
-The consumer checks cover both themes at desktop, 390px, and 320px widths, including required
-exclusion fields, explicit additional collection, completed targets, and stage-heading focus.
+The consumer checks cover both themes at desktop, 390px, and 320px widths, including optional
+review and labeling, reasonless exclusions, saved-post corrections, explicit additional collection,
+completed targets, keyboard activation, and stage-heading focus.
 The audit uses WCAG 2.0/2.1 A/AA and 2.2 AA tags, plus native record-diff keyboard/focus tests.
 It exits non-zero on violations and prints unresolved checks for manual evaluation.
 Run it before shipping and whenever a token changes, using isolated services and temporary

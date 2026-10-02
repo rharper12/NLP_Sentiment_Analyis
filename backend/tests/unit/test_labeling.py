@@ -9,7 +9,7 @@ from sentiment_prep.errors import ValidationError
 from sentiment_prep.export.parquet_export import csv_to_parquet
 from sentiment_prep.labeling import service as labeling
 from sentiment_prep.labeling.service import ManualLabel
-from sentiment_prep.models import DatasetBundle
+from sentiment_prep.models import ConsumerPolicy, DatasetBundle
 from sentiment_prep.pricing.comprehend_price import PriceQuote, current_rate, fetch_rate
 from sentiment_prep.storage.checkpoints import LocalCheckpointStore, checkpoint_bundle
 from tests.conftest import FakeComprehend, FakePricing, make_dataset
@@ -276,3 +276,34 @@ def test_agreement_uses_all_unique_manual_machine_pairs_across_review_selections
     assert summary(only_manual).comparable_records == 0
     assert summary(only_manual).manual_vs_comprehend_agreement is None
     assert "agreement:" not in render_report(only_manual)
+
+
+def test_comprehend_after_partial_manual_review_preserves_human_labels_and_exclusions():
+    from sentiment_prep.eligibility import EligibilityItem, apply_decisions, reviewed_records
+
+    original = bundle(["I loved it", "terrible stuff", "plain text here"])
+    original.original.consumer_policy = ConsumerPolicy(
+        start_date=dt.date(2026, 9, 9), end_date=dt.date(2026, 9, 10)
+    )
+    reviewed = apply_decisions(
+        original,
+        [
+            EligibilityItem(id="r0", decision="include", label="mixed"),
+            EligibilityItem(id="r1", decision="include"),
+            EligibilityItem(id="r2", decision="exclude"),
+        ],
+    )
+    assert labeling.estimate(reviewed, SETTINGS, RATE).records_to_send == 2
+    updated, progress = labeling.label_with_comprehend(
+        reviewed, FakeComprehend(), SETTINGS, max_records=10
+    )
+    manual, automated, excluded = updated.original.records
+    assert progress.labelled_in_call == 2 and progress.done
+    assert manual.label == "mixed" and manual.label_source == "manual"
+    assert manual.sentiment_reviewed and manual.label_confidence is None
+    assert manual.comprehend_label == "positive" and manual.comprehend_confidence == 0.85
+    assert automated.label == "negative" and automated.label_source == "comprehend"
+    assert not automated.sentiment_reviewed
+    assert excluded.comprehend_label is None and excluded.label is None
+    assert [r.id for r in reviewed_records(updated)] == ["r0"]
+    assert labeling.estimate(updated, SETTINGS, RATE).records_to_send == 0

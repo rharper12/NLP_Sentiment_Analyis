@@ -173,21 +173,9 @@ def test_unchanged_confirmations_and_overrides_are_independent():
     assert updated.original.records[0].label_confidence is None
     assert counts(updated).days[0].reviewed_final == 1
     assert counts(updated).days[1].candidates == 0
-    with pytest.raises(ValidationError, match="Explain"):
-        apply_decisions(
-            updated, [EligibilityItem(id="one", decision="exclude", reason="news_or_article")]
-        )
-    updated = apply_decisions(
-        updated,
-        [
-            EligibilityItem(
-                id="one",
-                decision="exclude",
-                reason="news_or_article",
-                note="Quoted headline, not a personal opinion",
-            )
-        ],
-    )
+    updated = apply_decisions(updated, [EligibilityItem(id="one", decision="exclude")])
+    assert updated.original.records[0].eligibility_note == ""
+    assert updated.original.records[0].eligibility_reason is None
     assert not reviewed_records(updated)
     assert len(updated.original.records[0].eligibility_history) == 2
     assert original.original.records[0].eligibility == "pending"

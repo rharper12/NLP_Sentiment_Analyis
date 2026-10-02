@@ -287,10 +287,8 @@ class EligibilityItem(BaseModel):
     label: SentimentLabel | None = None
 
     @model_validator(mode="after")
-    def exclusion_reason(self) -> EligibilityItem:
-        """An exclusion is incomplete without a stable reason."""
-        if self.decision == "exclude" and self.reason is None:
-            raise ValueError("Choose an exclusion reason")
+    def decision_matches_label(self) -> EligibilityItem:
+        """Only a kept post can receive a sentiment in the same decision."""
         if self.label is not None and self.decision != "include":
             raise ValueError("Only included posts can receive a sentiment label")
         return self
@@ -316,13 +314,6 @@ def apply_decisions(bundle: DatasetBundle, items: list[EligibilityItem]) -> Data
         raise ValidationError("Review contains duplicate record IDs")
     for item in items:
         record = by_id[item.id]
-        if (
-            record.screening
-            and item.decision != "pending"
-            and item.decision != record.screening.decision
-            and not item.note.strip()
-        ):
-            raise ValidationError("Explain why you are overriding the screening suggestion")
         if record.eligibility != item.decision:
             record.sentiment_reviewed = False
             record.sentiment_reviewed_at = None

@@ -169,8 +169,19 @@ export const api = {
   collectCandidates: (datasetId: string, target: number, signal?: AbortSignal) =>
     request(`/dataset/${datasetId}/candidates`, datasetSummarySchema, json({ candidate_target: target, confirm_cost: true }, signal)),
 
-  eligibilityPage: (datasetId: string, offset: number, status = "all", signal?: AbortSignal) =>
-    request(`/dataset/${datasetId}/eligibility?${new URLSearchParams({ offset: String(offset), limit: "1", status })}`, eligibilityPageSchema, { signal }),
+  eligibilityPage: (
+    datasetId: string,
+    offset: number,
+    status = "all",
+    signal?: AbortSignal,
+    startAt?: "first_unreviewed" | "first_unlabeled",
+  ) => request(
+    `/dataset/${datasetId}/eligibility?${new URLSearchParams({
+      offset: String(offset), limit: "1", status, ...(startAt ? { start_at: startAt } : {}),
+    })}`,
+    eligibilityPageSchema,
+    { signal },
+  ),
 
   reviewEligibility: (datasetId: string, items: EligibilityItem[], signal?: AbortSignal) =>
     request(`/dataset/${datasetId}/eligibility`, datasetSummarySchema, { ...json({ items }, signal), method: "PUT" }),
